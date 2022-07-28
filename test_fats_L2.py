@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Created on Wed Jul 13 12:00:21 2022
+Created on Thu Jul 28 18:41:14 2022
 
-##@author: jamyl
+@author: jamyl
 """
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 import numpy as np
-import cv2
+#import cv2
 import matplotlib.pyplot as plt
 import matplotlib
 from time import time
@@ -16,19 +16,8 @@ from time import time
 from torch import Tensor
 from typing import Tuple, List, Optional, Dict
 
-# %%
 
 
-def timer(func):
-    def run(*args, **kwargs):
-        t1 = time()
-        result = func(*args, **kwargs)
-        print("execution time : ", time()-t1)
-        return result
-    return run
-
-
-# @torch.jit.script
 class Layer():
     def __init__(self, index: int, array,
                  parameters: Dict[str, List[int]],
@@ -294,154 +283,58 @@ def l2_fast_align(comp_layer: Layer, ref_layer: Layer) -> Tensor:
     return alignment
 
 
-# @torch.jit.script
-class Image():
-    def __init__(self, array):
-        self.rgb_array = array
-        self.bnw_array = torch.mean(array, dim=0, keepdim=True)
-        self.shape = (array.shape[1], array.shape[2])
-        self.pyramid: List[Layer] = []
-
-    def build_pyramid(self,
-                      downscale_factors: List[int],
-                      parameters: Dict[str, List[List[int]]]):
-
-        layer_array = self.bnw_array
-        for layer_index, downscale_factor in enumerate(downscale_factors):
-            layer_array = F.avg_pool2d(layer_array, downscale_factor)
-            layer_parameters = {
-                "tile shape": parameters['tile shapes'][layer_index],
-                "search region": parameters['search regions'][layer_index]
-
-            }
-            layer = Layer(layer_index,
-                          layer_array,
-                          layer_parameters,
-                          downscale_factors[layer_index],
-                          torch.zeros([2, 1, 1]))
-            self.pyramid.append(layer)
+#%%
+parameters = {'tile shape':[2,2],
+              'search region':[-4,4]
+              }
+downscale_factor=1
+prev_alignment = torch.zeros([2, 1, 1])
 
 
-def plot_alignment(compared_image: Image, ref_image: Image):
-    def complex_array_to_rgb(X, theme='dark', rmax=None):
-        '''Takes an array of complex number and converts it to an array of [r, g, b],
-        where phase gives hue and saturaton/value are given by the absolute value.
-        Especially for use with imshow for complex plots.'''
-        absmax = rmax or np.abs(X).max()
-        Y = np.zeros(X.shape + (3,), dtype='float')
-        Y[..., 0] = np.angle(X) / (2 * np.pi) % 1
-        if theme == 'light':
-            Y[..., 1] = np.clip(np.abs(X) / absmax, 0, 1)
-            Y[..., 2] = 1
-        elif theme == 'dark':
-            Y[..., 1] = 1
-            Y[..., 2] = np.clip(np.abs(X) / absmax, 0, 1)
-        Y = matplotlib.colors.hsv_to_rgb(Y)
-        return Y
+ref_array = torch.Tensor([[0, 0, 1, 1, 2, 2],
+                          [0, 0, 1, 1, 2, 2],
+                          [3, 3, 4, 4, 5, 5],
+                          [3, 3, 4, 4, 5, 5],
+                          [6, 6, 7, 7, 8, 8],
+                          [6, 6, 7, 7, 8, 8]])[None]
 
-    layers = compared_image.pyramid
-    n_layers = len(layers)
-    plt.figure()
-    plt.subplot(1, 2, 1)
-    plt.imshow(np.array(compared_image.bnw_array[0, :, :]).astype(np.int32),
-               cmap=plt.get_cmap('gray'))
-    plt.title("compared")
+comp_array = ref_array.roll((2,2), (0,1))
+ref_layer = Layer(index = 0,
+                  array = ref_array,
+                  parameters= parameters,
+                  downscale_factor=downscale_factor,
+                  prev_alignment=prev_alignment)
 
-    plt.subplot(1, 2, 2)
-    plt.imshow(np.array(ref_image.bnw_array[0, :, :]).astype(np.int32),
-               cmap=plt.get_cmap('gray'))
-    plt.title("reference")
+comp_layer = Layer(index = 1,
+                  array = comp_array,
+                  parameters= parameters,
+                  downscale_factor=downscale_factor,
+                  prev_alignment=prev_alignment)
 
-    plt.figure()
-    for i, layer in enumerate(layers):
-        plt.subplot(1, n_layers, i+1)
-        plt.imshow(complex_array_to_rgb(
-            layer.alignment[0, :, :] + 1j*layer.alignment[1, :, :],
-            theme="light", rmax=5))
+plt.figure('ref')
+plt.imshow(np.array(ref_array[0]))
+plt.title("ref")
+plt.figure('comp')
+plt.imshow(np.array(comp_array[0]))
+plt.title("comp")
 
-    # legend
-    X = np.linspace(-50, 50, 100)
-    X = np.stack((X,)*100, axis=1)
-    Y = np.rot90(X)
-    Z = (X+1j*Y)/10
-    plt.figure("legend")
-    plt.imshow(complex_array_to_rgb(
-        Z,
-        theme="light", rmax=5))
+print(l1_brute_force_align(comp_layer, ref_layer))
 
 
-# @torch.jit.script
-class ImageBurst():
-    def __init__(self, reference_image: Image,
-                 images: List[Image],
-                 downscale_factors: List[int],
-                 parameters: Dict[str, List[List[int]]]):
-        self.reference_image = reference_image
-        self.images = images
-        self.downscale_factors = downscale_factors
-        self.parameters = parameters
-        self.burst_size = len(images)
-        self.shape = (images[0].shape[0], images[0].shape[1])
-
-    def build_pyramids(self):
-        self.reference_image.build_pyramid(
-            self.downscale_factors,
-            self.parameters)
-        for image in self.images:
-            image.build_pyramid(self.downscale_factors,
-                                self.parameters)
-
-    def estimate_images_alignments(self):
-        for image in self.images:
-            self.estimate_image_alignment(image)
-
-    def estimate_image_alignment(self, image: Image):
-        prev_alignment: Tensor = torch.zeros([2, 1, 1])
-        for layer_index in torch.flip(torch.arange(len(image.pyramid)), [0]):
-            image.pyramid[layer_index].prev_alignment = prev_alignment
-            alignment = l2_fast_align(image.pyramid[layer_index],
-                                      self.reference_image.pyramid[layer_index])
-            prev_alignment = alignment
-            image.pyramid[layer_index].alignment = alignment
 
 
-# %% importing data
-frames = []
-cap = cv2.VideoCapture('Book_case1.avi')
-ret, frame = cap.read()
-while ret:
-    frame = Tensor(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-    frame = frame.permute(2, 0, 1)
-
-    frames.append(Image(frame))
-    ret, frame = cap.read()
 
 
-downscale_factors = [1, 2, 2, 4]
-# first level : min L1 by bruteforce
-# 3,2,4 level : fast L2
-parameters = {
-    'tile shapes': [[16, 16], [16, 16], [16, 16], [8, 8]],
-    'search regions': [[-1, 1], [-4, 4], [-4, 4], [-4, 4]]}
-
-frames[1] = Image(frames[0].rgb_array)
-
-# %% calculation
-burst = ImageBurst(reference_image=frames[0],
-                   images=frames[1:15],
-                   downscale_factors=downscale_factors,
-                   parameters=parameters)
 
 
-# @timer
-def execu():
-    burst.build_pyramids()
-    burst.estimate_images_alignments()
 
 
-execu()
-# %% plot
 
-compared_image = burst.images[0]
-ref_image = burst.reference_image
-plot_alignment(compared_image, ref_image)
+
+
+
+
+
+
+
+
