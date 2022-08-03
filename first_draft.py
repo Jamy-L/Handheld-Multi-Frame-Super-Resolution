@@ -28,7 +28,7 @@ def timer(func):
     return run
 
 
-# @torch.jit.script
+@torch.jit.script
 class Layer():
     def __init__(self, index: int, array,
                  parameters: Dict[str, List[int]],
@@ -144,7 +144,7 @@ class Layer():
         self.tile_idy = self.tile_idy.clamp_(0, self.layer_h-1)
 
 
-# @torch.jit.script
+@torch.jit.script
 def l1_brute_force_align(comp_layer: Layer, ref_layer: Layer) -> Tensor:
 
     search_dist_min, search_dist_max = comp_layer.search_region
@@ -212,7 +212,7 @@ def l1_brute_force_align(comp_layer: Layer, ref_layer: Layer) -> Tensor:
     return alignment
 
 
-# @torch.jit.script
+@torch.jit.script
 def l2_fast_align(comp_layer: Layer, ref_layer: Layer) -> Tensor:
     # TODO D2 is fast computed, but the minimisation remains slow
     search_dist_min, search_dist_max = comp_layer.search_region
@@ -294,7 +294,7 @@ def l2_fast_align(comp_layer: Layer, ref_layer: Layer) -> Tensor:
     return alignment
 
 
-# @torch.jit.script
+@torch.jit.script
 class Image():
     def __init__(self, array):
         self.rgb_array = array
@@ -370,7 +370,7 @@ def plot_alignment(compared_image: Image, ref_image: Image):
         theme="light", rmax=5))
 
 
-# @torch.jit.script
+@torch.jit.script
 class ImageBurst():
     def __init__(self, reference_image: Image,
                  images: List[Image],
@@ -399,7 +399,7 @@ class ImageBurst():
         prev_alignment: Tensor = torch.zeros([2, 1, 1])
         for layer_index in torch.flip(torch.arange(len(image.pyramid)), [0]):
             image.pyramid[layer_index].prev_alignment = prev_alignment
-            alignment = l2_fast_align(image.pyramid[layer_index],
+            alignment = l1_brute_force_align(image.pyramid[layer_index],
                                       self.reference_image.pyramid[layer_index])
             prev_alignment = alignment
             image.pyramid[layer_index].alignment = alignment
@@ -433,7 +433,7 @@ burst = ImageBurst(reference_image=frames[0],
                    parameters=parameters)
 
 
-# @timer
+@timer
 def execu():
     burst.build_pyramids()
     burst.estimate_images_alignments()
@@ -442,6 +442,6 @@ def execu():
 execu()
 # %% plot
 
-compared_image = burst.images[0]
+compared_image = burst.images[1]
 ref_image = burst.reference_image
 plot_alignment(compared_image, ref_image)
