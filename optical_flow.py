@@ -47,7 +47,7 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params)
 
     if verbose:
         current_time = time()
-        print(" - Estimating Lucas-Kanade's optical flow")
+        print("Estimating Lucas-Kanade's optical flow")
 
     # Estimating gradients with cv2 sobel filters
     # Data format is very important. default 8uint is bad, because we use negative
@@ -96,7 +96,8 @@ def lucas_kanade_optical_flow_iteration(ref_img_tiles, gradx, grady, comp_img, a
     params : Dict
         parameters
     iter_index : int
-        The iteration index (for printing evolution when verbose >2)
+        The iteration index (for printing evolution when verbose >2,
+                             and for clearing memory)
 
     Returns
     -------
@@ -146,7 +147,22 @@ def lucas_kanade_optical_flow_iteration(ref_img_tiles, gradx, grady, comp_img, a
 
     # solving systems
     solution = np.linalg.solve(ATA, ATB)
+
     if verbose:
         current_time = getTime(
             current_time, ' \t- System solved')
-    return cp.asnumpy(solution.transpose(3, 0, 1, 2))
+
+    return_value = cp.asnumpy(solution.transpose(3, 0, 1, 2))
+    # iteration specific tensors
+    del ATB
+    del solution
+    del aligned_comp_tiles
+    # general tensor
+    if iter_index == params['tuning']['kanadeIter'] - 1:
+        del ATA
+        del cref_img_tiles
+        del cgradx
+        del cgrady
+        del crossed
+        cp._default_memory_pool.free_all_blocks()
+    return return_value
