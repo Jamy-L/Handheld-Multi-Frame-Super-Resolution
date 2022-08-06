@@ -153,3 +153,4 @@ cython_debug/
 hdrplus_python/Original/payload_N000.png
 *.png
 *.npy
+*.jpg
