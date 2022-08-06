@@ -1,34 +1,39 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Sun Jul 31 21:16:53 2022
-
-@author: jamyl
-"""
-
-from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, prange, int8
+from __future__ import division
+from numba import cuda, float32
 import numpy as np
-from time import time
-import cupy as cp
+import math
+
+# Controls threads per block and shared memory usage.
+# The computation will be done on blocks of TPBxTPB elements.
+TPB = 16
 
 
-@guvectorize(['(float64[:,:,:], float64[:,:], float64[:,:])'],
-             '(l, m, n), (l, m) -> (l, m)')  # target="cuda")
-def solve(A, B, C):
-    l, m, n = A.shape
-    for i in range(l):
-        C[l] = np.linalg.solve(A[i], B[i])
+@cuda.jit
+def test(A, B):
+    x, y = cuda.grid(2)
+    for i in range(-1, 2):
+        for j in range(-1, 2):
+            if 0 <= y + i < B.shape[0] and 0 <= x + j < B.shape[1]:
+                cuda.atomic.add(B, (y + i, x+j), 1)
+                cuda.atomic.add(A, (y + i, x+j), 1)
 
 
-A = np.random.random((5000000, 2, 2))
-B = np.random.random((5000000, 2))
+A = np.zeros((100, 100))
 
-t1 = time()
-Ac = cp.array(A)
-Bc = cp.array(B)
-cp.linalg.solve(Ac, Bc)
-print(time() - t1)
+B = np.zeros((100, 100))
+
+A_global_mem = cuda.to_device(A)
+B_global_mem = cuda.to_device(B)
 
 
-t1 = time()
-C = solve(A, B)
-print(time()-t1)
+# Configure the blocks
+threadsperblock = (TPB, TPB)
+blockspergrid_x = int(math.ceil(A.shape[0] / threadsperblock[0]))
+blockspergrid = int(math.ceil(A.shape[0] / threadsperblock[0]))
+
+# Start the kernel
+test[blockspergrid, threadsperblock](A_global_mem, B_global_mem)
+A = A_global_mem.copy_to_host()
+B = B_global_mem.copy_to_host()
+
+print(np.sum(A != B))

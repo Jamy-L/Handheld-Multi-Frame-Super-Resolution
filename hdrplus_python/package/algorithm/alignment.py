@@ -27,6 +27,7 @@ you can benefit from the following license terms attached to this file.
 
 # imports
 import time
+import cv2
 import numpy as np
 import os
 import shutil
@@ -117,6 +118,10 @@ def alignBurst(burstPath, rawPathList, images, refIdx, params, options):
         unpadVectorsRight = paddingRight // (tileSize // 2)
         unpaddedMotionVectors = motionVectors[:, unpadVectorsTop:-
                                               unpadVectorsBottom, unpadVectorsLeft:-unpadVectorsRight]
+
+        filename = options['outputFolder'] + '/unpaddedMotionVectors'
+        np.save(filename, unpaddedMotionVectors)
+
         alternateRaws = [raw for i, raw in enumerate(
             rawPathList) if i != refIdx]
         for i, raw in enumerate(alternateRaws):
@@ -231,7 +236,7 @@ def alignHdrplus(referenceImage, alternateImages, params, options):
                 alignments
             )
             filename = options['outputFolder'] + '/alignments/' +\
-                                    'img_{}_alignment_level_{}'.format(i, lv)
+                'img_{}_alignment_level_{}'.format(i+1, lv)
             np.save(filename, alignments)
         if verbose:
             currentTime = getTime(currentTime, ' --- Align pyramid')
