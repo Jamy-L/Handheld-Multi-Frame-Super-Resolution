@@ -18,9 +18,9 @@ def compute_rgb(neighborhood_idy, neighborhood_idx,
 
     if ((neighborhood_idy-2 + subtile_center_idy) % 2 == 0 and
             (neighborhood_idx-2 + subtile_center_idx) % 2 == 0):  # Bayer 00
-        if neighborhood[neighborhood_idy, neighborhood_idx] != np.inf:  # r
-            rgb[0] += neighborhood[neighborhood_idy, neighborhood_idx]
-            acc[0] += 1
+        if neighborhood[neighborhood_idy, neighborhood_idx] != np.inf:  # b
+            rgb[2] += neighborhood[neighborhood_idy, neighborhood_idx]
+            acc[2] += 1
 
         if neighborhood[neighborhood_idy-1, neighborhood_idx] != np.inf:  # g top
             rgb[1] += neighborhood[neighborhood_idy-1, neighborhood_idx]
@@ -35,85 +35,6 @@ def compute_rgb(neighborhood_idy, neighborhood_idx,
             rgb[1] += neighborhood[neighborhood_idy, neighborhood_idx + 1]
             acc[1] += 1
 
-        if neighborhood[neighborhood_idy-1, neighborhood_idx-1] != np.inf:  # b top left
-            rgb[2] += neighborhood[neighborhood_idy-1, neighborhood_idx-1]
-            acc[2] += 1
-        if neighborhood[neighborhood_idy-1, neighborhood_idx+1] != np.inf:  # b top right
-            rgb[2] += neighborhood[neighborhood_idy-1, neighborhood_idx+1]
-            acc[2] += 1
-        if neighborhood[neighborhood_idy+1, neighborhood_idx-1] != np.inf:  # b bottom left
-            rgb[2] += neighborhood[neighborhood_idy+1, neighborhood_idx-1]
-            acc[2] += 1
-        if neighborhood[neighborhood_idy+1, neighborhood_idx+1] != np.inf:  # b bottom right
-            rgb[2] += neighborhood[neighborhood_idy+1, neighborhood_idx+1]
-            acc[2] += 1
-
-    if ((neighborhood_idy-2 + subtile_center_idy) % 2 == 0 and
-            (neighborhood_idx-2 + subtile_center_idx) % 2 == 1):  # Bayer 01
-        if neighborhood[neighborhood_idy, neighborhood_idx-1] != np.inf:  # r left
-            rgb[0] += neighborhood[neighborhood_idy, neighborhood_idx-1]
-            acc[0] += 1
-        if neighborhood[neighborhood_idy, neighborhood_idx+1] != np.inf:  # r right
-            rgb[0] += neighborhood[neighborhood_idy, neighborhood_idx+1]
-            acc[0] += 1
-
-        if neighborhood[neighborhood_idy, neighborhood_idx] != np.inf:  # g
-            rgb[1] += neighborhood[neighborhood_idy, neighborhood_idx]
-            acc[1] += 1
-        if neighborhood[neighborhood_idy-1, neighborhood_idx-1] != np.inf:  # g top left
-            rgb[1] += neighborhood[neighborhood_idy-1, neighborhood_idx-1]
-            acc[1] += 1
-        if neighborhood[neighborhood_idy-1, neighborhood_idx+1] != np.inf:  # g top right
-            rgb[1] += neighborhood[neighborhood_idy-1, neighborhood_idx+1]
-            acc[1] += 1
-        if neighborhood[neighborhood_idy+1, neighborhood_idx-1] != np.inf:  # g bottom left
-            rgb[1] += neighborhood[neighborhood_idy+1, neighborhood_idx-1]
-            acc[1] += 1
-        if neighborhood[neighborhood_idy+1, neighborhood_idx+1] != np.inf:  # g bottom right
-            rgb[1] += neighborhood[neighborhood_idy+1, neighborhood_idx+1]
-            acc[1] += 1
-
-        if neighborhood[neighborhood_idy-1, neighborhood_idx] != np.inf:  # b top
-            rgb[2] += neighborhood[neighborhood_idy-1, neighborhood_idx]
-            acc[2] += 1
-        if neighborhood[neighborhood_idy+1, neighborhood_idx] != np.inf:  # b bottom
-            rgb[2] += neighborhood[neighborhood_idy+1, neighborhood_idx]
-            acc[2] += 1
-
-    if ((neighborhood_idy-2 + subtile_center_idy) % 2 == 1 and
-            (neighborhood_idx-2 + subtile_center_idx) % 2 == 0):  # Bayer 10
-        if neighborhood[neighborhood_idy-1, neighborhood_idx] != np.inf:  # r top
-            rgb[0] += neighborhood[neighborhood_idy-1, neighborhood_idx]
-            acc[0] += 1
-        if neighborhood[neighborhood_idy+1, neighborhood_idx] != np.inf:  # r bottom
-            rgb[0] += neighborhood[neighborhood_idy+1, neighborhood_idx]
-            acc[0] += 1
-
-        if neighborhood[neighborhood_idy, neighborhood_idx] != np.inf:  # g
-            rgb[1] += neighborhood[neighborhood_idy, neighborhood_idx]
-            acc[1] += 1
-        if neighborhood[neighborhood_idy-1, neighborhood_idx-1] != np.inf:  # g top left
-            rgb[1] += neighborhood[neighborhood_idy-1, neighborhood_idx-1]
-            acc[1] += 1
-        if neighborhood[neighborhood_idy-1, neighborhood_idx+1] != np.inf:  # g top right
-            rgb[1] += neighborhood[neighborhood_idy-1, neighborhood_idx+1]
-            acc[1] += 1
-        if neighborhood[neighborhood_idy+1, neighborhood_idx-1] != np.inf:  # g bottom left
-            rgb[1] += neighborhood[neighborhood_idy+1, neighborhood_idx-1]
-            acc[1] += 1
-        if neighborhood[neighborhood_idy+1, neighborhood_idx+1] != np.inf:  # g bottom right
-            rgb[1] += neighborhood[neighborhood_idy+1, neighborhood_idx+1]
-            acc[1] += 1
-
-        if neighborhood[neighborhood_idy, neighborhood_idx-1] != np.inf:  # b left
-            rgb[2] += neighborhood[neighborhood_idy, neighborhood_idx-1]
-            acc[2] += 1
-        if neighborhood[neighborhood_idy, neighborhood_idx+1] != np.inf:  # b right
-            rgb[2] += neighborhood[neighborhood_idy, neighborhood_idx+1]
-            acc[2] += 1
-
-    if ((neighborhood_idy-2 + subtile_center_idy) % 2 == 1 and
-            (neighborhood_idx-2 + subtile_center_idx) % 2 == 1):  # Bayer 11
         if neighborhood[neighborhood_idy-1, neighborhood_idx-1] != np.inf:  # r top left
             rgb[0] += neighborhood[neighborhood_idy-1, neighborhood_idx-1]
             acc[0] += 1
@@ -127,6 +48,85 @@ def compute_rgb(neighborhood_idy, neighborhood_idx,
             rgb[0] += neighborhood[neighborhood_idy+1, neighborhood_idx+1]
             acc[0] += 1
 
+    if ((neighborhood_idy-2 + subtile_center_idy) % 2 == 0 and
+            (neighborhood_idx-2 + subtile_center_idx) % 2 == 1):  # Bayer 01
+        if neighborhood[neighborhood_idy, neighborhood_idx-1] != np.inf:  # b left
+            rgb[2] += neighborhood[neighborhood_idy, neighborhood_idx-1]
+            acc[2] += 1
+        if neighborhood[neighborhood_idy, neighborhood_idx+1] != np.inf:  # b right
+            rgb[2] += neighborhood[neighborhood_idy, neighborhood_idx+1]
+            acc[2] += 1
+
+        if neighborhood[neighborhood_idy, neighborhood_idx] != np.inf:  # g
+            rgb[1] += neighborhood[neighborhood_idy, neighborhood_idx]
+            acc[1] += 1
+        if neighborhood[neighborhood_idy-1, neighborhood_idx-1] != np.inf:  # g top left
+            rgb[1] += neighborhood[neighborhood_idy-1, neighborhood_idx-1]
+            acc[1] += 1
+        if neighborhood[neighborhood_idy-1, neighborhood_idx+1] != np.inf:  # g top right
+            rgb[1] += neighborhood[neighborhood_idy-1, neighborhood_idx+1]
+            acc[1] += 1
+        if neighborhood[neighborhood_idy+1, neighborhood_idx-1] != np.inf:  # g bottom left
+            rgb[1] += neighborhood[neighborhood_idy+1, neighborhood_idx-1]
+            acc[1] += 1
+        if neighborhood[neighborhood_idy+1, neighborhood_idx+1] != np.inf:  # g bottom right
+            rgb[1] += neighborhood[neighborhood_idy+1, neighborhood_idx+1]
+            acc[1] += 1
+
+        if neighborhood[neighborhood_idy-1, neighborhood_idx] != np.inf:  # r top
+            rgb[0] += neighborhood[neighborhood_idy-1, neighborhood_idx]
+            acc[0] += 1
+        if neighborhood[neighborhood_idy+1, neighborhood_idx] != np.inf:  # r bottom
+            rgb[0] += neighborhood[neighborhood_idy+1, neighborhood_idx]
+            acc[0] += 1
+
+    if ((neighborhood_idy-2 + subtile_center_idy) % 2 == 1 and
+            (neighborhood_idx-2 + subtile_center_idx) % 2 == 0):  # Bayer 10
+        if neighborhood[neighborhood_idy-1, neighborhood_idx] != np.inf:  # b top
+            rgb[2] += neighborhood[neighborhood_idy-1, neighborhood_idx]
+            acc[2] += 1
+        if neighborhood[neighborhood_idy+1, neighborhood_idx] != np.inf:  # b bottom
+            rgb[2] += neighborhood[neighborhood_idy+1, neighborhood_idx]
+            acc[2] += 1
+
+        if neighborhood[neighborhood_idy, neighborhood_idx] != np.inf:  # g
+            rgb[1] += neighborhood[neighborhood_idy, neighborhood_idx]
+            acc[1] += 1
+        if neighborhood[neighborhood_idy-1, neighborhood_idx-1] != np.inf:  # g top left
+            rgb[1] += neighborhood[neighborhood_idy-1, neighborhood_idx-1]
+            acc[1] += 1
+        if neighborhood[neighborhood_idy-1, neighborhood_idx+1] != np.inf:  # g top right
+            rgb[1] += neighborhood[neighborhood_idy-1, neighborhood_idx+1]
+            acc[1] += 1
+        if neighborhood[neighborhood_idy+1, neighborhood_idx-1] != np.inf:  # g bottom left
+            rgb[1] += neighborhood[neighborhood_idy+1, neighborhood_idx-1]
+            acc[1] += 1
+        if neighborhood[neighborhood_idy+1, neighborhood_idx+1] != np.inf:  # g bottom right
+            rgb[1] += neighborhood[neighborhood_idy+1, neighborhood_idx+1]
+            acc[1] += 1
+
+        if neighborhood[neighborhood_idy, neighborhood_idx-1] != np.inf:  # r left
+            rgb[0] += neighborhood[neighborhood_idy, neighborhood_idx-1]
+            acc[0] += 1
+        if neighborhood[neighborhood_idy, neighborhood_idx+1] != np.inf:  # r right
+            rgb[0] += neighborhood[neighborhood_idy, neighborhood_idx+1]
+            acc[0] += 1
+
+    if ((neighborhood_idy-2 + subtile_center_idy) % 2 == 1 and
+            (neighborhood_idx-2 + subtile_center_idx) % 2 == 1):  # Bayer 11
+        if neighborhood[neighborhood_idy-1, neighborhood_idx-1] != np.inf:  # b top left
+            rgb[2] += neighborhood[neighborhood_idy-1, neighborhood_idx-1]
+            acc[2] += 1
+        if neighborhood[neighborhood_idy-1, neighborhood_idx+1] != np.inf:  # b top right
+            rgb[2] += neighborhood[neighborhood_idy-1, neighborhood_idx+1]
+            acc[2] += 1
+        if neighborhood[neighborhood_idy+1, neighborhood_idx-1] != np.inf:  # b bottom left
+            rgb[2] += neighborhood[neighborhood_idy+1, neighborhood_idx-1]
+            acc[2] += 1
+        if neighborhood[neighborhood_idy+1, neighborhood_idx+1] != np.inf:  # b bottom right
+            rgb[2] += neighborhood[neighborhood_idy+1, neighborhood_idx+1]
+            acc[2] += 1
+
         if neighborhood[neighborhood_idy-1, neighborhood_idx] != np.inf:  # g top
             rgb[1] += neighborhood[neighborhood_idy-1, neighborhood_idx]
             acc[1] += 1
@@ -140,6 +140,6 @@ def compute_rgb(neighborhood_idy, neighborhood_idx,
             rgb[1] += neighborhood[neighborhood_idy, neighborhood_idx + 1]
             acc[1] += 1
 
-    if neighborhood[neighborhood_idy, neighborhood_idx] != np.inf:  # b
-        rgb[2] += neighborhood[neighborhood_idy, neighborhood_idx]
-        acc[2] += 1
+    if neighborhood[neighborhood_idy, neighborhood_idx] != np.inf:  # r
+        rgb[0] += neighborhood[neighborhood_idy, neighborhood_idx]
+        acc[0] += 1
