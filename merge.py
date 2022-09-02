@@ -71,7 +71,8 @@ def merge(ref_img, comp_imgs, alignments, options, params):
     # specifying the block size
     # 1 block per output pixel, 9 threads per block
     threadsperblock = (3, 3)
-    blockspergrid = output_size
+    # we need to swap the shape to have idx horiztonal
+    blockspergrid = (output_size[1], output_size[0])
 
     if VERBOSE > 2:
         current_time = getTime(
@@ -199,16 +200,16 @@ def merge(ref_img, comp_imgs, alignments, options, params):
         int
 
         """
-        if patch_pixel_idx%2 == 1 and patch_pixel_idx%2 == 1: #R
+        if patch_pixel_idx%2 == 1 and patch_pixel_idy%2 == 1: #R
             return 0
         
-        elif patch_pixel_idx%2 == 1 and patch_pixel_idx%2 == 0: #G
+        elif patch_pixel_idx%2 == 1 and patch_pixel_idy%2 == 0: #G
             return 1
 
-        elif patch_pixel_idx%2 == 0 and patch_pixel_idx%2 == 1: #G
+        elif patch_pixel_idx%2 == 0 and patch_pixel_idy%2 == 1: #G
             return 1
         
-        elif patch_pixel_idx%2 == 0 and patch_pixel_idx%2 ==0 :#B
+        elif patch_pixel_idx%2 == 0 and patch_pixel_idy%2 ==0 :#B
             return 2
         
     
@@ -250,21 +251,22 @@ def merge(ref_img, comp_imgs, alignments, options, params):
         output_size_y, output_size_x, _ = output_img.shape
         input_size_y, input_size_x = ref_img.shape
         
-        # We pick one single thread to do certain calculations
+        acc = cuda.shared.array(3, dtype=float64)
+        val = cuda.shared.array(3, dtype=float64)
+        
+        # We pick one single thread to do certain operations
         if tx == 0 and ty == 0:
             coarse_ref_sub_x = cuda.shared.array(1, dtype=float64)
             coarse_ref_sub_x[0] = output_pixel_idx / SCALE
             
             coarse_ref_sub_y = cuda.shared.array(1, dtype=float64)
             coarse_ref_sub_y[0] = output_pixel_idy / SCALE
+
             
-            # TODO everythin must be on 0
-            acc = cuda.shared.array(3, dtype=float64)
             acc[0] = 1
             acc[1] = 1
             acc[2] = 1
 
-            val = cuda.shared.array(3, dtype=float64)
             val[0] = 1
             val[1] = 1
             val[2] = 1
@@ -278,14 +280,12 @@ def merge(ref_img, comp_imgs, alignments, options, params):
         for image_index in range(N_IMAGES + 1):
             if tx == 0 and ty == 0:
                 if image_index == 0:  # ref image
-                    pass
                     # no optical flow
                     patch_center_x[0] = uint16(round(coarse_ref_sub_x[0]))
                     patch_center_y[0] = uint16(round(coarse_ref_sub_y[0]))
 
                 else:
                     local_optical_flow = cuda.shared.array(2, dtype=float64)
-                    
                     get_closest_flow(coarse_ref_sub_x[0],
                                       coarse_ref_sub_y[0],
                                       alignments[image_index - 1],
@@ -295,7 +295,7 @@ def merge(ref_img, comp_imgs, alignments, options, params):
                     patch_center_x[0] = uint16(round(coarse_ref_sub_x[0] + local_optical_flow[0]))
                     patch_center_y[0] = uint16(round(coarse_ref_sub_y[0] + local_optical_flow[1]))
 
-                # TODO compute R and kernel
+                # TODO compute R and kernel with another thread
                 cov = None
                 R = 1
 
@@ -313,9 +313,10 @@ def merge(ref_img, comp_imgs, alignments, options, params):
                 else:
                     c = comp_imgs[image_index - 1, patch_pixel_idy, patch_pixel_idx]
                     
-
+                # checking if pixel is r, g or b
                 channel = get_channel(patch_pixel_idx, patch_pixel_idy)
     
+                # applyinf invert transformation and upscaling
                 fine_sub_pos_x = SCALE * (patch_pixel_idx - local_optical_flow[0])
                 fine_sub_pos_y = SCALE * (patch_pixel_idy - local_optical_flow[1])
                 
@@ -325,21 +326,18 @@ def merge(ref_img, comp_imgs, alignments, options, params):
                     (fine_sub_pos_y - output_pixel_idy) * (fine_sub_pos_y - output_pixel_idy))
     
                 w = ker(dist, cov)
-                
-                # TODO BRoken
-                if 0 <= tx <= 0 and 0 <= ty <= 0:
-                    #acc[1] = 1
-                    cuda.atomic.add(val, 0, 0)
-                    cuda.atomic.add(acc, 0, 0)
+
+
+                cuda.atomic.add(val, channel, c*w*R)
+                cuda.atomic.add(acc, channel, w*R)
             
-        # # We need to wait that every 9 pixel from every image
-        # # has accumulated
-        # cuda.syncthreads()
-        
-        # if tx == 0 and ty == 0:
-        #     output_img[output_pixel_idy, output_pixel_idx, 0] = val[0]/acc[0]
-        #     output_img[output_pixel_idy, output_pixel_idx, 1] = val[1]/acc[1]
-        #     output_img[output_pixel_idy, output_pixel_idx, 2] = val[2]/acc[2]
+            # We need to wait that every 9 pixel from every image
+            # has accumulated
+            cuda.syncthreads()
+        if tx == 0 and ty == 0:
+            output_img[output_pixel_idy, output_pixel_idx, 0] = val[0]/acc[0]
+            output_img[output_pixel_idy, output_pixel_idx, 1] = val[1]/acc[1]
+            output_img[output_pixel_idy, output_pixel_idx, 2] = val[2]/acc[2]
 
 ######
 
@@ -360,7 +358,10 @@ def merge(ref_img, comp_imgs, alignments, options, params):
     # TODO 1023 is the max value in the example. Maybe we have to extract
     # metadata to have a more general framework
     # return merge_result/(1023*accumulator)
-    return output_img
+    return merge_result
+
+def gamma(image):
+    return image**(1/2.2)
 
 # %% test code, to remove in the final version
 
@@ -381,7 +382,7 @@ n_images, n_patch_y, n_patch_x, _ = pre_alignment.shape
 tile_size = 32
 native_im_size = ref_img.shape
 
-params = {'tuning': {'tileSizes': 32}, 'scale': 2}
+params = {'tuning': {'tileSizes': 32}, 'scale': 6}
 params['tuning']['kanadeIter'] = 3
 
 
