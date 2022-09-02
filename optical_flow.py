@@ -124,7 +124,7 @@ def lucas_kanade_optical_flow_iteration(ref_img_tiles, gradx, grady, comp_img, a
     aligned_comp_tiles = cp.empty(
         (n_images, n_patch_y, n_patch_x, tile_size, tile_size))
 
-    # this is suboptimal but getAlignedTiles is only defined 2d arrays
+    # this is suboptimal but getAlignedTiles is only defined for 2d arrays
     for i in range(n_images):
         aligned_comp_tiles[i] = cp.array(
             getAlignedTiles(comp_img[i], tile_size, alignment[i]))
@@ -238,62 +238,4 @@ def coarse_subpixel_id_flow(idx_sub, idy_sub, tile_optical_flow, tile_size):
                 tile_optical_flow[patch_idy_bottom, patch_idx_left] +
                 tile_optical_flow[patch_idy_bottom, patch_idx_right])/4
 
-    return flow
-
-# %% test code, to remove in the final version
-
-
-# ref_img = rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/results_test1/33TJ_20150606_224837_294/payload_N000.dng'
-#                        ).raw_image.copy()
-
-
-# comp_images = rawpy.imread(
-#     'C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N001.dng').raw_image.copy()[None]
-# for i in range(2, 10):
-#     comp_images = np.append(comp_images, rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N00{}.dng'.format(i)
-#                                                       ).raw_image.copy()[None], axis=0)
-
-# pre_alignment = np.load(
-#     'C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/results_test1/unpaddedMotionVectors.npy')
-# n_images, n_patch_y, n_patch_x, _ = pre_alignment.shape
-# tile_size = 32
-# native_im_size = ref_img.shape
-
-# params = {'tuning': {'tileSizes': 32}, 'scale': 2}
-# params['tuning']['kanadeIter'] = 3
-
-
-# final_alignments = lucas_kanade_optical_flow(
-#     ref_img, comp_images, pre_alignment, {"verbose": 3}, params)
-
-# flow = np.zeros((native_im_size[0], native_im_size[1], 2))
-
-# img = 7
-# for pixel_idy in tqdm(range(native_im_size[0])):
-#     for pixel_idx in range(native_im_size[1]):
-#         flow[pixel_idy, pixel_idx] = coarse_subpixel_id_flow(
-#             pixel_idx, pixel_idy, pre_alignment[img], tile_size)
-# %%
-
-
-def complex_array_to_rgb(X, theme='dark', rmax=None):
-    '''Takes an array of complex number and converts it to an array of [r, g, b],
-    where phase gives hue and saturaton/value are given by the absolute value.
-    Especially for use with imshow for complex plots.'''
-    absmax = rmax or np.abs(X).max()
-    Y = np.zeros(X.shape + (3,), dtype='float')
-    Y[..., 0] = np.angle(X) / (2 * np.pi) % 1
-    if theme == 'light':
-        Y[..., 1] = np.clip(np.abs(X) / absmax, 0, 1)
-        Y[..., 2] = 1
-    elif theme == 'dark':
-        Y[..., 1] = 1
-        Y[..., 2] = np.clip(np.abs(X) / absmax, 0, 1)
-    Y = matplotlib.colors.hsv_to_rgb(Y)
-    return Y
-
-
-# B = flow[:, :, 0] + 1j*flow[:, :, 1]
-
-# plt.figure()
-# plt.imshow(complex_array_to_rgb(B))
+    return fl

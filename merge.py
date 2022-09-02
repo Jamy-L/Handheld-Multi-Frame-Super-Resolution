@@ -22,7 +22,7 @@ import cupy as cp
 from scipy.interpolate import interp2d
 
 
-def merge(ref_img, comp_tiles, alignments, options, params):
+def merge(ref_img, comp_imgs, alignments, options, params):
     """
     Merges all the images, based on the alignments previously estimated.
     The size of the merge_result is adjustable with params['scale']
@@ -32,8 +32,8 @@ def merge(ref_img, comp_tiles, alignments, options, params):
     ----------
     ref_img : Array[imsize_y, imsize_x]
         The reference image
-    comp_tiles : Array [n_images, n_tiles_y, n_tiles_x, tile_size, tile_size]
-        Tiles composing the compared image (0.5 overlapping tiles)
+    comp_imgs : Array [n_images,imsize_y, imsize_x]
+        The compared images
     alignments : Array[n_images, n_tiles_y, n_tiles_x, 2]
         The final estimation of the tiles' alignment
     options : Dict
@@ -47,40 +47,30 @@ def merge(ref_img, comp_tiles, alignments, options, params):
         merged images
 
     """
-    # TODO Non int scale is broken
+    # TODO Non int scale is broken atm
     VERBOSE = options['verbose']
     SCALE = params['scale']
     TILE_SIZE = params['tuning']['tileSizes']
     N_IMAGES, N_TILES_Y, N_TILES_X, _ \
         = alignments.shape
 
-    assert TILE_SIZE == comp_tiles.shape[3] == comp_tiles.shape[4], (
-        "Mismatch between announced tile size ({}) and comp_tiles tile"
-        " size ({} by {})". format(TILE_SIZE,
-                                   comp_tiles.shape[3],
-                                   comp_tiles.shape[4]))
-
     if VERBOSE > 2:
         print('Beginning mergin process')
         current_time = time()
 
     native_im_size = ref_img.shape
-    # TODO we may rework the init to optimize memory usage and bandwidth usage
-    # betweeen host and device
-    merge_result = np.zeros(
-        (SCALE*native_im_size[0], SCALE*native_im_size[1], 3))
-    accumulator = np.zeros((merge_result.shape))
+    output_size = (SCALE*native_im_size[0], SCALE*native_im_size[1])
+    output_img = cuda.device_array(output_size)
 
     # moving arrays to GPU
-    cuda_comp_tiles = cuda.to_device(comp_tiles)
+    cuda_comp_imgs = cuda.to_device(comp_imgs)
+    cuda_ref_img = cuda.to_device(ref_img)
     cuda_alignments = cuda.to_device(alignments)
-    cuda_merge_result = cuda.to_device(merge_result)
-    cuda_accumulator = cuda.to_device(accumulator)
 
     # specifying the block size
-    # TODO 1 bloc = 1 tile so far. Is that the best choice ??
-    threadsperblock = (int(np.ceil(TILE_SIZE/3)), int(np.ceil(TILE_SIZE/3)))
-    blockspergrid = (N_IMAGES, N_TILES_X, N_TILES_Y)
+    # 1 block per output pixel, 9 threads per block
+    threadsperblock = (3, 3)
+    blockspergrid = output_size
 
     if VERBOSE > 2:
         current_time = getTime(
@@ -93,31 +83,47 @@ def merge(ref_img, comp_tiles, alignments, options, params):
                 if (0 <= subtile_center_idy + i < TILE_SIZE and
                         0 <= subtile_center_idx + j < TILE_SIZE):
 
-                    neighborhood[i+2, j+2] = tile[subtile_center_idy + i,
-                                                  subtile_center_idx + j]
+                    neighborhood[i + 2, j + 2] = tile[subtile_center_idy + i,
+                                                      subtile_center_idx + j]
                 else:
                     # TODO Nan would be better but I don't know how to create Nan with cuda
-                    neighborhood[i+2, j+2] = np.inf
-
+                    neighborhood[i + 2, j + 2] = np.inf
+                    
+    @cuda.jit(device=True)
+    def get_closest_flows():
+        #TODO 
+        return None     
+    
+    @cuda.jit(device=True)
+    def get_channel():
+        #TODO 
+        return None
+    
+    @cuda.jit(device=True)
+    def ker(d, cov):
+        #TODO 
+        return 1
+    
+      
     @cuda.jit
-    def accumulate(comp_tiles, alignments, merge_result, accumulator):
+    def accumulate(ref_img, comp_imgs, alignments, output_img):
         """
-        Cuda kernel, each thread represents a 3x3 neighborhood within a
-        specific tile of a specific image. These neighborhoods dont overlap
-        and cover the entirety of comp_tiles.
+        Cuda kernel, each block represents an output pixel. Each block contains
+        a 3 by 3 neighborhood for each moving image. A single threads takes
+        care of one of these pixels, for all the moving images.
 
 
 
         Parameters
         ----------
-        comp_tiles : Array [n_images, n_tiles_y, n_tiles_x, tile_size, tile_size]
-            Tiles composing the compared image (0.5 overlapping tiles)
-        alignments :  Array[n_images, n_tiles_y, n_tiles_x, 2]
-            The final estimation of the tiles' alignment
-        merge_result : Array[scale * imsize_y, scale * imsize_x, 3]
-            The numerator of pixel values
-        accumulator : Array[scale * imsize_y, scale * imsize_x, 3]
-            The denominator of pixel values
+        ref_img : Array[imsize_y, imsize_x]
+            The reference image
+        comp_imgs : Array[n_images-1, imsize_y, imsize_x]
+            The compared images
+        alignements : Array[n_images, n_tiles_y, n_tiles_x, 2]
+            The alignemtn vectors for each tile of each image
+        output_img : Array[SCALE*imsize_y, SCALE_imsize_x]
+            The empty output image
 
         Returns
         -------
@@ -125,104 +131,91 @@ def merge(ref_img, comp_tiles, alignments, options, params):
 
         """
 
-        image_index, tile_idx, tile_idy = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z,
-        tx = cuda.threadIdx.x
-        ty = cuda.threadIdx.y
+        output_pixel_idx, output_pixel_idy = cuda.blockIdx.x, cuda.blockIdx.y
+        tx = cuda.threadIdx.x-1
+        ty = cuda.threadIdx.y-1
+        output_size_y, output_size_x = output_img.shape
+        input_size_y, input_size_x = ref_img.shape
+        
+        # We pick one single thread to do certain calculations
+        if tx == 0 and ty == 0:
+            coarse_ref_sub_x = cuda.sharred.array(output_pixel_idx / SCALE, type=float32)
+            coarse_ref_sub_y = cuda.sharred.array(output_pixel_idy / SCALE, type=float32)
+            local_optical_flows = get_closest_flows(coarse_ref_sub_x,
+                                                    coarse_ref_sub_y,
+                                                    alignments
+                                                    )
+            acc = cuda.sharred.array(3, type=float64)
+            acc[0] = 0
+            acc[1] = 0
+            acc[2] = 2
 
-        # calculating the coordinates of the center of the subtiles in the
-        # referential of the tile
-        subtile_center_idx = 3*tx+1
-        subtile_center_idy = 3*ty+1
-
-        # TODO Apparently conditonal return and cuda.syncthreads() dont mix well,
-        # The code as such works, but we may investigate
-        if not (0 <= image_index < N_IMAGES and 0 <= tile_idx < N_TILES_X and
-                0 <= tile_idy < N_TILES_Y):
-            return
-
-        # TODO is sharred memory useful or not here ?
-        # all threads are executing on the same tile. Let's store it in sharred memory
-        tile = cuda.shared.array(
-            shape=(TILE_SIZE, TILE_SIZE), dtype=float64)
-        alignment = cuda.shared.array(
-            shape=(2), dtype=float64)
-
-        alignment[0] = alignments[image_index, tile_idy, tile_idx, 0]
-        alignment[1] = alignments[image_index, tile_idy, tile_idx, 1]
-
-        for i in range(-1, 2):
-            for j in range(-1, 2):
-                if (0 <= subtile_center_idy+i < TILE_SIZE and
-                        0 <= subtile_center_idx+j < TILE_SIZE):
-
-                    tile[subtile_center_idy+i, subtile_center_idx + j] =\
-                        comp_tiles[image_index, tile_idy, tile_idx,
-                                   subtile_center_idy+i, subtile_center_idx + j]
-
-        # syncing when the entire thread pool is done
+            val = cuda.sharred.array(3, type=float64)
+            val[0] = 0
+            val[1] = 0
+            val[2] = 2
+        # We need to wait the fetching of the flow
         cuda.syncthreads()
 
-        # TODO calculating the kernel and the confidence once for each thread
+        patch_center_x = cuda.sharred.array(1, uint16)
+        patch_center_y = cuda.sharred.array(1, uint16)
 
-        # TODO This is very memory expensive. Maybe it can be avoided.
-        # extracting the large neighborhood (5x5)
-        neighborhood = cuda.local.array(shape=(5, 5), dtype=float64)
+        for image_index in range(N_IMAGES + 1):
+            if tx == 0 and ty == 0:
+                if image_index == 0:  # ref image
+                    # no optical flow
+                    patch_center_x = round(coarse_ref_sub_x)
+                    patch_center_y = round(coarse_ref_sub_y)
 
-        extract_neighborhood(subtile_center_idy,
-                             subtile_center_idx, tile, neighborhood)
+                else:
+                    patch_center_x = round(coarse_ref_sub_x + local_optical_flows[image_index - 1, 0])
+                    patch_center_y = round(coarse_ref_sub_y + local_optical_flows[image_index - 1, 1])
 
-        rgb = cuda.local.array(shape=(3), dtype=float64)
-        acc = cuda.local.array(shape=(3), dtype=float64)
+                # TODO compute R and kernel
+                cov = None
+                R = 1
 
-        for neighborhood_idy in range(1, 4):
-            for neighborhood_idx in range(1, 4):
-                rgb[0] = 0.
-                rgb[1] = 0.
-                rgb[2] = 0.
-                acc[0] = 0
-                acc[1] = 0
-                acc[2] = 0
-                compute_rgb(neighborhood_idy, neighborhood_idx,
-                            subtile_center_idy, subtile_center_idx,
-                            neighborhood, rgb, acc)
+            # We need to wait the calculation of R, kernel and new position
+            cuda.syncthreads()
+            
+            patch_pixel_idx = patch_center_x + tx
+            patch_pixel_idy = patch_center_y + ty
+            
+            if not(0 <= patch_pixel_idx < input_size_x and
+                   0 <= patch_pixel_idy < input_size_y):
+                return
+            if image_index == 0:
+                c = ref_img[patch_pixel_idy, patch_pixel_idx]
+            else:
+                c = comp_imgs[image_index - 1, patch_pixel_idy, patch_pixel_idx]
 
-                # corresponding coordinates in the merge_result referential
-                scaled_coordinate_y = int((subtile_center_idy + (neighborhood_idy - 2)
-                                           + TILE_SIZE//2*tile_idy + alignment[1])*SCALE)
-                scaled_coordinate_x = int((subtile_center_idx + (neighborhood_idx - 2)
-                                           + TILE_SIZE//2*tile_idx + alignment[0])*SCALE)
+            channel = get_channel(patch_pixel_idx, patch_pixel_idy)
 
-                # 2 condition:
-                #   ->  After dilation and translation, the pixel
-                #       coordinates must arrive in the merge_result.
-                #   ->  Tile_size is not divible by 3 (but by 2), so
-                #       some subtiles are slightly out of tile
-                if ((0 <= scaled_coordinate_y < merge_result.shape[0]) and
-                    (0 <= scaled_coordinate_x < merge_result.shape[1]) and
-                    (0 <= subtile_center_idy + (neighborhood_idy - 2) < TILE_SIZE) and
-                        (0 <= subtile_center_idx + (neighborhood_idx - 2) < TILE_SIZE)):
+            fine_sub_pos_x = SCALE * (patch_pixel_idx - local_optical_flows[image_index - 1, 0])
+            fine_sub_pos_y = SCALE * (patch_pixel_idy - local_optical_flows[image_index - 1, 1])
 
-                    # Atomic operations are madatory ! (no +=)
-                    cuda.atomic.add(merge_result,
-                                    (scaled_coordinate_y, scaled_coordinate_x, 0),
-                                    rgb[0])
-                    cuda.atomic.add(merge_result,
-                                    (scaled_coordinate_y, scaled_coordinate_x, 1),
-                                    rgb[1])
-                    cuda.atomic.add(merge_result,
-                                    (scaled_coordinate_y, scaled_coordinate_x, 2),
-                                    rgb[2])
+            dist = np.sqrt(
+                (fine_sub_pos_x - output_pixel_idx) * (fine_sub_pos_x - output_pixel_idx) -
+                (fine_sub_pos_y - output_pixel_idy) * (fine_sub_pos_y - output_pixel_idy))
 
-                    cuda.atomic.add(accumulator,
-                                    (scaled_coordinate_y, scaled_coordinate_x, 0),
-                                    acc[0])
-                    cuda.atomic.add(accumulator, (scaled_coordinate_y, scaled_coordinate_x, 1),
-                                    acc[1])
-                    cuda.atomic.add(accumulator, (scaled_coordinate_y, scaled_coordinate_x, 2),
-                                    acc[2])
+            w = ker(dist, cov)
+            
+            cuda.atomic.add(val, channel, w*c*R)
+            cuda.atomic.add(acc, channel, w*R)
+            
+        # We need to wait that every 9 pixel from every image
+        # has accumulated
+        cuda.syncthreads()
+        
+        if tx == 0 and ty == 0:
+            output_img[output_pixel_idy, output_pixel_idx, 0] = val[0]/acc[0]
+            output_img[output_pixel_idy, output_pixel_idx, 1] = val[1]/acc[1]
+            output_img[output_pixel_idy, output_pixel_idx, 2] = val[2]/acc[2]
+
+
 
     accumulate[blockspergrid, threadsperblock](
-        cuda_comp_tiles, cuda_alignments, cuda_merge_result, cuda_accumulator)
+        cuda_ref_img, cuda_comp_imgs, cuda_alignments, output_img)
 
     if VERBOSE > 2:
         current_time = getTime(
@@ -230,20 +223,16 @@ def merge(ref_img, comp_tiles, alignments, options, params):
 
     # TODO This can probably be modified to save memory, but so far it's good
     # for debuging
-    merge_result = cuda_merge_result.copy_to_host()
-    accumulator = cuda_accumulator.copy_to_host()
+    merge_result = output_img.copy_to_host()
 
     if VERBOSE > 2:
         current_time = getTime(
             current_time, ' \t- Data returned from GPU')
 
-    # To avoid division by zeros
-    # accumulator[accumulator == 0] = 1
-
     # TODO 1023 is the max value in the example. Maybe we have to extract
     # metadata to have a more general framework
     # return merge_result/(1023*accumulator)
-    return merge_result, accumulator
+    return merge_result
 
 # %% test code, to remove in the final version
 
@@ -278,5 +267,5 @@ for i in range(n_images):
         comp_images[i], tile_size, final_alignments[i])
 
 
-num, den = merge(ref_img, comp_tiles, final_alignments, {"verbose": 3}, params)
+output = merge(ref_img, comp_tiles, final_alignments, {"verbose": 3}, params)
 print('\nTotal ellapsed time : ', time() - t1)
