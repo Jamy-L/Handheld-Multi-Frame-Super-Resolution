@@ -238,4 +238,4 @@ def coarse_subpixel_id_flow(idx_sub, idy_sub, tile_optical_flow, tile_size):
                 tile_optical_flow[patch_idy_bottom, patch_idx_left] +
                 tile_optical_flow[patch_idy_bottom, patch_idx_right])/4
 
-    return fl
+    return flow
