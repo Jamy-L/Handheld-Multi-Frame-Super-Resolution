@@ -10,7 +10,7 @@ import numpy as np
 
 from numba import uint8, uint16, float32, float64, cuda
 from math import sqrt
-from linalg import get_eighen_elmts_2x2
+from linalg import get_eighen_elmts_2x2, invert_2x2
 
 
 k_detail = 0.3  # [0.25, ..., 0.33]
@@ -98,9 +98,9 @@ def compute_k(l1, l2, k):
 
 
 @cuda.jit(device=True)
-def compute_kernel_cov(image, center_pos_x, center_pos_y, cov):
+def compute_kernel_cov(image, center_pos_x, center_pos_y, cov_i):
     """
-    Returns the covariance of the kernel centered at the given position
+    Returns the inverted covariance of the kernel centered at the given position
 
     Parameters
     ----------
@@ -110,8 +110,8 @@ def compute_kernel_cov(image, center_pos_x, center_pos_y, cov):
         horizontal position of the center of the Bayer 3x3 patch 
     center_pos_y : uint
         vertical position of the center of the Bayer 3x3 patch 
-    cov : array[2, 2]
-        Covariance matrix of the patch to be returned
+    cov_i : array[2, 2]
+        Inverted covariance matrix of the patch to be returned
 
     Returns
     -------
@@ -131,13 +131,21 @@ def compute_kernel_cov(image, center_pos_x, center_pos_y, cov):
     l = cuda.shared.array(2, dtype=float64)
     e1 = cuda.shared.array(2, dtype=float64)
     e2 = cuda.shared.array(2, dtype=float64)
+    k = cuda.shared.array(2, dtype=float64)
+    cov = cuda.shared.array((2, 2), dtype=float64)
     
     if tx == 0 and ty ==0 :
         get_eighen_elmts_2x2(harris, l, e1, e2)
-        k = cuda.shared.array(2, dtype=float64)
         compute_k(l[0], l[1], k)
-        
+    
     # we need k_1 and k_2 for what's next
     cuda.syncthreads()
     if tx>=0 and ty>=0:
         cov[ty, tx] = k[0]*e1[tx]*e1[ty] + k[1]*e2[tx]*e2[ty]
+    invert_2x2(cov, cov_i)
+    
+        
+        
+        
+        
+        

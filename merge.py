@@ -10,6 +10,7 @@ from hdrplus_python.package.algorithm.imageUtils import getTiles, getAlignedTile
 from hdrplus_python.package.algorithm.merging import depatchifyOverlap
 from hdrplus_python.package.algorithm.genericUtils import getTime
 from kernels import compute_kernel_cov
+from linalg import quad_mat_prod
 
 import cv2
 import numpy as np
@@ -211,13 +212,6 @@ def merge(ref_img, comp_imgs, alignments, options, params):
         
         elif patch_pixel_idx%2 == 0 and patch_pixel_idy%2 ==0 :#B
             return 2
-        
-    
-    @cuda.jit(device=True)
-    def ker(d, cov):
-        #TODO 
-        return 1
-    
       
     @cuda.jit
     def accumulate(ref_img, comp_imgs, alignments, output_img):
@@ -255,27 +249,29 @@ def merge(ref_img, comp_imgs, alignments, options, params):
         val = cuda.shared.array(3, dtype=float64)
         
         # We pick one single thread to do certain operations
+        coarse_ref_sub_x = cuda.shared.array(1, dtype=float64)
+        coarse_ref_sub_y = cuda.shared.array(1, dtype=float64)
         if tx == 0 and ty == 0:
-            coarse_ref_sub_x = cuda.shared.array(1, dtype=float64)
+            
             coarse_ref_sub_x[0] = output_pixel_idx / SCALE
             
-            coarse_ref_sub_y = cuda.shared.array(1, dtype=float64)
+            
             coarse_ref_sub_y[0] = output_pixel_idy / SCALE
 
             
-            acc[0] = 1
-            acc[1] = 1
-            acc[2] = 1
+            acc[0] = 0
+            acc[1] = 0
+            acc[2] = 0
 
-            val[0] = 1
-            val[1] = 1
-            val[2] = 1
+            val[0] = 0
+            val[1] = 0
+            val[2] = 0
         # We need to wait the fetching of the flow
         cuda.syncthreads()
 
         patch_center_x = cuda.shared.array(1, uint16)
         patch_center_y = cuda.shared.array(1, uint16)
-    
+        local_optical_flow = cuda.shared.array(2, dtype=float64)
 
         for image_index in range(N_IMAGES + 1):
             if tx == 0 and ty == 0:
@@ -285,7 +281,6 @@ def merge(ref_img, comp_imgs, alignments, options, params):
                     patch_center_y[0] = uint16(round(coarse_ref_sub_y[0]))
 
                 else:
-                    local_optical_flow = cuda.shared.array(2, dtype=float64)
                     get_closest_flow(coarse_ref_sub_x[0],
                                       coarse_ref_sub_y[0],
                                       alignments[image_index - 1],
@@ -299,11 +294,15 @@ def merge(ref_img, comp_imgs, alignments, options, params):
             cuda.syncthreads()
             
             # TODO compute R and kernel with another thread
-            cov = cuda.shared.array((2, 2), dtype=float64)
+            cov_i = cuda.shared.array((2, 2), dtype=float64)
+            # cov_i[0,0] = 1
+            # cov_i[1,0] = 1
+            # cov_i[0,1] = 1
+            # cov_i[1,1] = 1
             if image_index == 0:
-                compute_kernel_cov(ref_img, patch_center_x[0], patch_center_y[0], cov)
+                compute_kernel_cov(ref_img, patch_center_x[0], patch_center_y[0], cov_i)
             else:
-                compute_kernel_cov(comp_imgs[image_index - 1], patch_center_x[0], patch_center_y[0], cov)
+                compute_kernel_cov(comp_imgs[image_index - 1], patch_center_x[0], patch_center_y[0], cov_i)
             R = 1
 
             # We need to wait the calculation of R and kernel
@@ -324,16 +323,20 @@ def merge(ref_img, comp_imgs, alignments, options, params):
                 channel = get_channel(patch_pixel_idx, patch_pixel_idy)
     
                 # applying invert transformation and upscaling
-                fine_sub_pos_x = SCALE * (patch_pixel_idx - local_optical_flow[0])
-                fine_sub_pos_y = SCALE * (patch_pixel_idy - local_optical_flow[1])
+                if image_index == 0:
+                    fine_sub_pos_x = coarse_ref_sub_x[0]
+                    fine_sub_pos_y = coarse_ref_sub_y[0]
+                else:
+                    fine_sub_pos_x = SCALE * (patch_pixel_idx - local_optical_flow[0])
+                    fine_sub_pos_y = SCALE * (patch_pixel_idy - local_optical_flow[1])
+
                 
-
-                dist = math.sqrt(
-                    (fine_sub_pos_x - output_pixel_idx) * (fine_sub_pos_x - output_pixel_idx) +
-                    (fine_sub_pos_y - output_pixel_idy) * (fine_sub_pos_y - output_pixel_idy))
-    
-                w = ker(dist, cov)
-
+                dist = cuda.local.array(2, dtype=float64)
+                dist[0] = (fine_sub_pos_x - output_pixel_idx)
+                dist[1] = (fine_sub_pos_y - output_pixel_idy)
+                
+                # TODO bilinear upsamplign wizzardry
+                w = math.exp(-quad_mat_prod(cov_i, dist)/2)
 
                 cuda.atomic.add(val, channel, c*w*R)
                 cuda.atomic.add(acc, channel, w*R)
@@ -342,9 +345,10 @@ def merge(ref_img, comp_imgs, alignments, options, params):
             # has accumulated
             cuda.syncthreads()
         if tx == 0 and ty == 0:
-            output_img[output_pixel_idy, output_pixel_idx, 0] = val[0]/acc[0]
-            output_img[output_pixel_idy, output_pixel_idx, 1] = val[1]/acc[1]
-            output_img[output_pixel_idy, output_pixel_idx, 2] = val[2]/acc[2]
+            output_img[output_pixel_idy, output_pixel_idx, 0] = uint16(val[0]/acc[0])
+            output_img[output_pixel_idy, output_pixel_idx, 1] = uint16(val[1]/acc[1])
+            output_img[output_pixel_idy, output_pixel_idx, 2] = uint16(val[2]/acc[2])
+            
 
 
     accumulate[blockspergrid, threadsperblock](
@@ -388,7 +392,7 @@ n_images, n_patch_y, n_patch_x, _ = pre_alignment.shape
 tile_size = 32
 native_im_size = ref_img.shape
 
-params = {'tuning': {'tileSizes': 32}, 'scale': 6}
+params = {'tuning': {'tileSizes': 32}, 'scale': 2}
 params['tuning']['kanadeIter'] = 3
 
 

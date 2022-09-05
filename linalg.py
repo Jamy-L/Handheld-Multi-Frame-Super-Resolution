@@ -32,11 +32,31 @@ def solve_2x2(A, B, X):
     X[0] = (A[1, 1]*B[0] - A[0, 1]*B[1])/det_A
     X[1] = (A[0, 0]*B[1] - A[1, 0]*B[0])/det_A
 
-
 @cuda.jit(device=True)
-def sym_quad():
-    pass
+def invert_2x2(M, M_i):
+    """
+    inverts the 2x2 M array
 
+    Parameters
+    ----------
+    M : Array[2, 2]
+        Array to invert
+    M_i : Array[2, 2]
+
+    Returns
+    -------
+    None.
+
+    """
+    det = M[0,0]*M[1,1] - M[0,1]*M[1,0]
+    M_i[0,0] = M[1,1]/det
+    M_i[0, 1] = -M[0, 1]/det
+    M_i[1, 0] = -M[1, 0]/det
+    M_i [1, 1] = M[0, 0]/det
+    
+@cuda.jit(device=True)
+def quad_mat_prod(A, X):
+    return A[0, 0]*X[0]*X[0] + X[0]*X[1]*(A[0, 1] + A[1, 0]) + A[1, 1]*X[1]*X[1]
 
 @cuda.jit(device=True)
 def get_real_polyroots_2(a, b, c, roots):
