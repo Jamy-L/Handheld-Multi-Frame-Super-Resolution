@@ -9,7 +9,7 @@ from optical_flow import lucas_kanade_optical_flow
 from hdrplus_python.package.algorithm.imageUtils import getTiles, getAlignedTiles
 from hdrplus_python.package.algorithm.merging import depatchifyOverlap
 from hdrplus_python.package.algorithm.genericUtils import getTime
-from kernels import compute_rgb
+from kernels import compute_kernel_cov
 
 import cv2
 import numpy as np
@@ -294,12 +294,19 @@ def merge(ref_img, comp_imgs, alignments, options, params):
                     
                     patch_center_x[0] = uint16(round(coarse_ref_sub_x[0] + local_optical_flow[0]))
                     patch_center_y[0] = uint16(round(coarse_ref_sub_y[0] + local_optical_flow[1]))
+            
+            # we need the position of the patch before computing the kernel
+            cuda.syncthreads()
+            
+            # TODO compute R and kernel with another thread
+            cov = cuda.syncthreads((2, 2), dtype=float64)
+            if image_index == 0:
+                compute_kernel_cov(ref_img, patch_center_x[0], patch_center_y[0], cov)
+            else:
+                compute_kernel_cov(comp_imgs[image_index - 1], patch_center_x[0], patch_center_y[0], cov)
+            R = 1
 
-                # TODO compute R and kernel with another thread
-                cov = None
-                R = 1
-
-            # We need to wait the calculation of R, kernel and new position
+            # We need to wait the calculation of R and kernel
             cuda.syncthreads()
             
             patch_pixel_idx = patch_center_x[0] + tx
@@ -316,7 +323,7 @@ def merge(ref_img, comp_imgs, alignments, options, params):
                 # checking if pixel is r, g or b
                 channel = get_channel(patch_pixel_idx, patch_pixel_idy)
     
-                # applyinf invert transformation and upscaling
+                # applying invert transformation and upscaling
                 fine_sub_pos_x = SCALE * (patch_pixel_idx - local_optical_flow[0])
                 fine_sub_pos_y = SCALE * (patch_pixel_idy - local_optical_flow[1])
                 
@@ -338,7 +345,7 @@ def merge(ref_img, comp_imgs, alignments, options, params):
             output_img[output_pixel_idy, output_pixel_idx, 0] = val[0]/acc[0]
             output_img[output_pixel_idy, output_pixel_idx, 1] = val[1]/acc[1]
             output_img[output_pixel_idy, output_pixel_idx, 2] = val[2]/acc[2]
-
+ 
 ######
 
     accumulate[blockspergrid, threadsperblock](
@@ -398,3 +405,5 @@ final_alignments = lucas_kanade_optical_flow(
 
 output = merge(ref_img, comp_images, final_alignments, {"verbose": 3}, params)
 print('\nTotal ellapsed time : ', time() - t1)
+
+plt.imshow(gamma(output/1023))
