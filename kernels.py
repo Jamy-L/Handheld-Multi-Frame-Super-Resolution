@@ -57,7 +57,7 @@ def compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, ha
             grads_y[ty+1, tx+1] = greys[ty + 1, tx] - greys[ty, tx]
             
         # waiting that all gradients are known
-        cuda.synthreads()
+        cuda.syncthreads()
         
         if tx >=0 and ty >= 0:
             # averaging for estimating grad on middle point
@@ -126,7 +126,7 @@ def compute_kernel_cov(image, center_pos_x, center_pos_y, cov):
     downsampled_center_pos_y = center_pos_y - center_pos_y%2
     
     harris = cuda.shared.array((2,2), dtype = float64)
-    compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y)
+    compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, harris)
     
     l = cuda.shared.array(2, dtype=float64)
     e1 = cuda.shared.array(2, dtype=float64)
@@ -134,7 +134,7 @@ def compute_kernel_cov(image, center_pos_x, center_pos_y, cov):
     
     if tx == 0 and ty ==0 :
         get_eighen_elmts_2x2(harris, l, e1, e2)
-        k = cuda.sharred.array(2, dtype=float64)
+        k = cuda.shared.array(2, dtype=float64)
         compute_k(l[0], l[1], k)
         
     # we need k_1 and k_2 for what's next
