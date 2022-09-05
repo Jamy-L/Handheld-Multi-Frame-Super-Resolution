@@ -299,7 +299,7 @@ def merge(ref_img, comp_imgs, alignments, options, params):
             cuda.syncthreads()
             
             # TODO compute R and kernel with another thread
-            cov = cuda.syncthreads((2, 2), dtype=float64)
+            cov = cuda.shared.array((2, 2), dtype=float64)
             if image_index == 0:
                 compute_kernel_cov(ref_img, patch_center_x[0], patch_center_y[0], cov)
             else:
@@ -345,8 +345,7 @@ def merge(ref_img, comp_imgs, alignments, options, params):
             output_img[output_pixel_idy, output_pixel_idx, 0] = val[0]/acc[0]
             output_img[output_pixel_idy, output_pixel_idx, 1] = val[1]/acc[1]
             output_img[output_pixel_idy, output_pixel_idx, 2] = val[2]/acc[2]
- 
-######
+
 
     accumulate[blockspergrid, threadsperblock](
         cuda_ref_img, cuda_comp_imgs, cuda_alignments, output_img)
