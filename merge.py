@@ -261,13 +261,13 @@ def merge(ref_img, comp_imgs, alignments, options, params):
             coarse_ref_sub_y[0] = output_pixel_idy / SCALE
 
             
-            acc[0] = 1
-            acc[1] = 1
-            acc[2] = 1
+            acc[0] = 0
+            acc[1] = 0
+            acc[2] = 0
 
-            val[0] = 1
-            val[1] = 1
-            val[2] = 1
+            val[0] = 0
+            val[1] = 0
+            val[2] = 0
         # We need to wait the fetching of the flow
         cuda.syncthreads()
 
@@ -340,7 +340,7 @@ def merge(ref_img, comp_imgs, alignments, options, params):
                 dist[1] = (fine_sub_pos_y - output_pixel_idy)
                 
                 # TODO bilinear upsampling wizzardry
-                w = math.exp(-quad_mat_prod(cov_i, dist)/2)
+                w = math.exp(-quad_mat_prod(cov_i, dist)/(4*2))
 
                 cuda.atomic.add(val, channel, c*w*R)
                 cuda.atomic.add(acc, channel, w*R)
