@@ -62,8 +62,8 @@ def merge(ref_img, comp_imgs, alignments, options, params):
 
     native_im_size = ref_img.shape
     output_size = (SCALE*native_im_size[0], SCALE*native_im_size[1])
-    output_img = cuda.device_array(output_size+(3,)) #third dim for rgb canals
-
+    output_img = cuda.device_array(output_size+(10,)) #third dim for rgb channel
+    # TODO 3 channels are enough, the rest is for debugging
     # moving arrays to GPU
     cuda_comp_imgs = cuda.to_device(comp_imgs)
     cuda_ref_img = cuda.to_device(ref_img)
@@ -259,13 +259,13 @@ def merge(ref_img, comp_imgs, alignments, options, params):
             coarse_ref_sub_y[0] = output_pixel_idy / SCALE
 
             
-            acc[0] = 0
-            acc[1] = 0
-            acc[2] = 0
+            acc[0] = 1
+            acc[1] = 1
+            acc[2] = 1
 
-            val[0] = 0
-            val[1] = 0
-            val[2] = 0
+            val[0] = 1
+            val[1] = 1
+            val[2] = 1
         # We need to wait the fetching of the flow
         cuda.syncthreads()
 
@@ -295,10 +295,6 @@ def merge(ref_img, comp_imgs, alignments, options, params):
             
             # TODO compute R and kernel with another thread
             cov_i = cuda.shared.array((2, 2), dtype=float64)
-            # cov_i[0,0] = 1
-            # cov_i[1,0] = 1
-            # cov_i[0,1] = 1
-            # cov_i[1,1] = 1
             if image_index == 0:
                 compute_kernel_cov(ref_img, patch_center_x[0], patch_center_y[0], cov_i)
             else:
@@ -324,8 +320,8 @@ def merge(ref_img, comp_imgs, alignments, options, params):
     
                 # applying invert transformation and upscaling
                 if image_index == 0:
-                    fine_sub_pos_x = coarse_ref_sub_x[0]
-                    fine_sub_pos_y = coarse_ref_sub_y[0]
+                    fine_sub_pos_x = SCALE * patch_pixel_idx
+                    fine_sub_pos_y = SCALE * patch_pixel_idy
                 else:
                     fine_sub_pos_x = SCALE * (patch_pixel_idx - local_optical_flow[0])
                     fine_sub_pos_y = SCALE * (patch_pixel_idy - local_optical_flow[1])
@@ -335,20 +331,29 @@ def merge(ref_img, comp_imgs, alignments, options, params):
                 dist[0] = (fine_sub_pos_x - output_pixel_idx)
                 dist[1] = (fine_sub_pos_y - output_pixel_idy)
                 
-                # TODO bilinear upsamplign wizzardry
+                # TODO bilinear upsampling wizzardry
                 w = math.exp(-quad_mat_prod(cov_i, dist)/2)
 
                 cuda.atomic.add(val, channel, c*w*R)
                 cuda.atomic.add(acc, channel, w*R)
+                
+                # TODO debugging only
+                if image_index == 1 :
+                    if tx == 0 and ty == 0:
+                        output_img[output_pixel_idy, output_pixel_idx, channel+3] = w
+                    output_img[output_pixel_idy, output_pixel_idx, 6] = cov_i[0,0]
+                    output_img[output_pixel_idy, output_pixel_idx, 7] = cov_i[0, 1]
+                    output_img[output_pixel_idy, output_pixel_idx, 8] = cov_i[1, 0]
+                    output_img[output_pixel_idy, output_pixel_idx, 9] = cov_i[1, 1]
+                
             
             # We need to wait that every 9 pixel from every image
             # has accumulated
             cuda.syncthreads()
         if tx == 0 and ty == 0:
-            output_img[output_pixel_idy, output_pixel_idx, 0] = uint16(val[0]/acc[0])
-            output_img[output_pixel_idy, output_pixel_idx, 1] = uint16(val[1]/acc[1])
-            output_img[output_pixel_idy, output_pixel_idx, 2] = uint16(val[2]/acc[2])
-            
+            output_img[output_pixel_idy, output_pixel_idx, 0] = val[0]/acc[0]
+            output_img[output_pixel_idy, output_pixel_idx, 1] = val[1]/acc[1]
+            output_img[output_pixel_idy, output_pixel_idx, 2] = val[2]/acc[2]
 
 
     accumulate[blockspergrid, threadsperblock](
@@ -367,7 +372,6 @@ def merge(ref_img, comp_imgs, alignments, options, params):
 
     # TODO 1023 is the max value in the example. Maybe we have to extract
     # metadata to have a more general framework
-    # return merge_result/(1023*accumulator)
     return merge_result
 
 def gamma(image):
@@ -409,4 +413,18 @@ final_alignments = lucas_kanade_optical_flow(
 output = merge(ref_img, comp_images, final_alignments, {"verbose": 3}, params)
 print('\nTotal ellapsed time : ', time() - t1)
 
-plt.imshow(gamma(output/1023))
+#%%
+output_img = output[:,:,:3].copy()
+output_w = output[:,:,3:6].copy()
+output_grey_w = np.mean(output_w, axis=2)
+output_cov = np.empty((output.shape[0], output.shape[1], 2, 2))
+output_cov[:,:,0,0] = output[:,:,6]
+output_cov[:,:,0,1] = output[:,:,7]
+output_cov[:,:,1,0] = output[:,:,8]
+output_cov[:,:,1,1] = output[:,:,9]
+
+# plt.figure()
+# plt.imshow(gamma(output[:,:,:3]/1023))
+plt.figure()
+plt.imshow(output_grey_w/2, cmap = 'gray')
+
