@@ -22,7 +22,7 @@ k_shrink = 2
 
 
 @cuda.jit(device=True)
-def compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, harris):
+def compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, harris, DEBUG_GREY):
     imshape_y, imshape_x = image.shape
     
     greys = cuda.shared.array((3,3), dtype=float64)
@@ -46,19 +46,19 @@ def compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, ha
         
         #waiting the calculation of grey patch
         cuda.syncthreads()
-        
+        if tx ==0 and ty ==0:
+            DEBUG_GREY[0] = greys[0, 0] 
         # estimating gradients
         grads_x = cuda.shared.array((3, 2), dtype=float64)
         grads_y = cuda.shared.array((2, 3 ), dtype=float64)
         
         if tx < 1:
-            grads_x[ty+1, tx+1] = greys[ty, tx + 1] - greys[ty, tx]
+            grads_x[ty+1, tx+1] = greys[ty + 1, tx + 2] - greys[ty + 1, tx + 1]
         if ty < 1:
-            grads_y[ty+1, tx+1] = greys[ty + 1, tx] - greys[ty, tx]
+            grads_y[ty+1, tx+1] = greys[ty + 2, tx + 1] - greys[ty + 1, tx + 1]
             
         # waiting that all gradients are known
         cuda.syncthreads()
-        
         if tx >=0 and ty >= 0:
             # averaging for estimating grad on middle point
             gradx = (grads_x[ty + 1, tx] + grads_x[ty, tx])/2
@@ -99,7 +99,7 @@ def compute_k(l1, l2, k):
 
 
 @cuda.jit(device=True)
-def compute_kernel_cov(image, center_pos_x, center_pos_y, cov_i):
+def compute_kernel_cov(image, center_pos_x, center_pos_y, cov_i, DEBUG_E1, DEBUG_E2, DEBUG_L, DEBUG_GRAD, DEBUG_GREY):
     """
     Returns the inverted covariance of the kernel centered at the given position
 
@@ -127,7 +127,8 @@ def compute_kernel_cov(image, center_pos_x, center_pos_y, cov_i):
     downsampled_center_pos_y = center_pos_y - center_pos_y%2
     
     harris = cuda.shared.array((2,2), dtype = float64)
-    compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, harris)
+    harris[0, 0] = 0; harris[0, 1] = 0; harris[1, 0] = 0; harris[1, 1] = 0
+    compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, harris, DEBUG_GREY)
     
     l = cuda.shared.array(2, dtype=float64)
     e1 = cuda.shared.array(2, dtype=float64)
@@ -140,6 +141,12 @@ def compute_kernel_cov(image, center_pos_x, center_pos_y, cov_i):
         if l[0] + l[1] != 0:
             compute_k(l[0], l[1], k)
 
+        DEBUG_E1[0] = e1[0]; DEBUG_E1[1] = e1[1]
+        DEBUG_E2[0] = e2[0]; DEBUG_E2[1] = e2[1]
+        DEBUG_L[0] = l[0]; DEBUG_L[1] = l[1]
+        DEBUG_GRAD[0] = harris[0,0]
+        DEBUG_GRAD[1] = harris[1,1]
+        
     # we need k_1 and k_2 for what's next
     cuda.syncthreads()
     if l[0] + l[1] != 0:
