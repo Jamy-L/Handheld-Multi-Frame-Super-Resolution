@@ -94,6 +94,7 @@ def compute_k(l1, l2, k):
     
     k[0] = k_1
     k[1] = k_2
+
         
 
 
@@ -136,15 +137,23 @@ def compute_kernel_cov(image, center_pos_x, center_pos_y, cov_i):
     
     if tx == 0 and ty ==0 :
         get_eighen_elmts_2x2(harris, l, e1, e2)
-        compute_k(l[0], l[1], k)
-    
+        if l[0] + l[1] != 0:
+            compute_k(l[0], l[1], k)
+
     # we need k_1 and k_2 for what's next
     cuda.syncthreads()
-    if tx>=0 and ty>=0:
-        cov[ty, tx] = k[0]*e1[tx]*e1[ty] + k[1]*e2[tx]*e2[ty]
-    invert_2x2(cov, cov_i)
-    
+    if l[0] + l[1] != 0:
+        if tx>=0 and ty>=0:
+            cov[ty, tx] = k[0]*e1[tx]*e1[ty] + k[1]*e2[tx]*e2[ty]
+        invert_2x2(cov, cov_i)
+    else:
+        # For constant luminance patch, this a dummy filter
+        cov_i[0, 0] = 1
+        cov_i[0, 1] = 1
+        cov_i[1, 0] = 1
+        cov_i[1, 1] = 1
         
+
         
         
         

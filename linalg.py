@@ -63,7 +63,8 @@ def get_real_polyroots_2(a, b, c, roots):
     """
     Returns the two roots of the polynom a*X^2 + b*X + c = 0 for a, b and c
     real numbers. The function only returns real roots : make sure they exist
-    before calling the function
+    before calling the function. l[0] contains the root with the biggest module
+    and l[1] the smallest
 
 
     Parameters
@@ -74,7 +75,7 @@ def get_real_polyroots_2(a, b, c, roots):
 
     c : float
     
-    root : Array[2]
+    roots : Array[2]
 
     Returns
     -------
@@ -85,8 +86,17 @@ def get_real_polyroots_2(a, b, c, roots):
     delta = b*b - 4*a*c
 
     if delta >= 0:
-        roots[0] = (-b-sqrt(delta))/(2*a)
-        roots[1] = (-b+sqrt(delta))/(2*a)
+        r1 = (-b+sqrt(delta))/(2*a)
+        r2 = (-b-sqrt(delta))/(2*a)
+        if abs(r1) >= abs(r2) :
+            roots[0] = r1
+            roots[1] = r2
+        else:
+            roots[0] = r2
+            roots[1] = r1
+    else:
+        # Nan
+        return 1/0
 
 @cuda.jit(device=True)
 def get_eighen_val_2x2(M, l):
@@ -97,37 +107,43 @@ def get_eighen_val_2x2(M, l):
 
 # TODO Im not sure if its the best thing to do
 @cuda.jit(device=True)
-def get_eighen_vect_2x2(M, l, X):
+def get_eighen_vect_2x2(M, l, e1, e2):
     """
-    return the eighen vector with norm 1 for eighen value l
-    MX = lX
+    return the eighen vector with norm 1 for eighen values l
+    Me1 = l1e1 ; Me2 = l2e2
 
     Parameters
     ----------
     M : Array[2,2]
       Array for which eighen values are to be determined
-    l : float64
-        eighenvalue
-    X : Array[2]
-        Solution
+    l : Array[2, 2]
+        Eighenvalues
+    e1, e2 : Array[2]
+        Computed eighen vectors
 
     Returns
     -------
     None.
 
     """
-    X[1] = 1/sqrt((M[0,1]/(M[0,0] - l))*(M[0,1]/(M[0,0] - l)) + 1)
-    X[0] = - X[1] * M[0, 1]/(M[0,0] - l)
+    # 2x2 algorithm : https://en.wikipedia.org/wiki/Eigenvalue_algorithm (9 August 2022 version)
+    if M[0, 1] == 0 and M[1, 0] ==0 and M[0,0] == M[1, 1]:
+        # M is multiple of identity, picking 2 ortogonal eighen vectors.
+        e1[0] = 1; e1[1] = 0
+        e2[0] = 0; e2[0] = 1
+        
+    else:
+        e1[0] = M[0, 0] - l[1]; e1[1] = M[1,0]
+        e2[0] = M[0, 0] - l[0]; e2[0] = M[1,0]
+        
+    
     
     
 @cuda.jit(device=True)
 def get_eighen_elmts_2x2(M, l, e1, e2):
     
     get_eighen_val_2x2(M, l)
-    
-    e1 = get_eighen_vect_2x2(M, l[0], e1)
-    e2 = get_eighen_vect_2x2(M, l[1], e2)
-    
+    get_eighen_vect_2x2(M, l, e1, e2)
     
     
     
