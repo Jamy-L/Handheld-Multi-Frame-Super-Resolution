@@ -22,7 +22,9 @@ from time import time
 import cupy as cp
 from scipy.interpolate import interp2d
 import math
+from torch import from_numpy
 
+from fast_two_stage_psf_correction.fast_optics_correction.raw2rgb import process_isp
 
 def merge(ref_img, comp_imgs, alignments, options, params):
     """
@@ -62,7 +64,7 @@ def merge(ref_img, comp_imgs, alignments, options, params):
 
     native_im_size = ref_img.shape
     output_size = (SCALE*native_im_size[0], SCALE*native_im_size[1])
-    output_img = cuda.device_array(output_size+(10,)) #third dim for rgb channel
+    output_img = cuda.device_array(output_size+(15,)) #third dim for rgb channel
     # TODO 3 channels are enough, the rest is for debugging
     # moving arrays to GPU
     cuda_comp_imgs = cuda.to_device(comp_imgs)
@@ -295,10 +297,16 @@ def merge(ref_img, comp_imgs, alignments, options, params):
             
             # TODO compute R and kernel with another thread
             cov_i = cuda.shared.array((2, 2), dtype=float64)
+            DEBUG_E1 = cuda.shared.array(2, dtype=float64)
+            DEBUG_E2 = cuda.shared.array(2, dtype=float64)
+            DEBUG_L = cuda.shared.array(2, dtype=float64)
+            DEBUG_GRAD = cuda.shared.array(2, dtype=float64)
+            DEBUG_GREY = cuda.shared.array(1, dtype=float64)
+            
             if image_index == 0:
-                compute_kernel_cov(ref_img, patch_center_x[0], patch_center_y[0], cov_i)
+                compute_kernel_cov(ref_img, patch_center_x[0], patch_center_y[0], cov_i, DEBUG_E1, DEBUG_E2, DEBUG_L, DEBUG_GRAD, DEBUG_GREY)
             else:
-                compute_kernel_cov(comp_imgs[image_index - 1], patch_center_x[0], patch_center_y[0], cov_i)
+                compute_kernel_cov(comp_imgs[image_index - 1], patch_center_x[0], patch_center_y[0], cov_i, DEBUG_E1, DEBUG_E2, DEBUG_L, DEBUG_GRAD, DEBUG_GREY)
             R = 1
 
             # We need to wait the calculation of R and kernel
@@ -341,10 +349,15 @@ def merge(ref_img, comp_imgs, alignments, options, params):
                 if image_index == 1 :
                     if tx == 0 and ty == 0:
                         output_img[output_pixel_idy, output_pixel_idx, channel+3] = w
-                    output_img[output_pixel_idy, output_pixel_idx, 6] = cov_i[0,0]
-                    output_img[output_pixel_idy, output_pixel_idx, 7] = cov_i[0, 1]
-                    output_img[output_pixel_idy, output_pixel_idx, 8] = cov_i[1, 0]
-                    output_img[output_pixel_idy, output_pixel_idx, 9] = cov_i[1, 1]
+                        output_img[output_pixel_idy, output_pixel_idx, 6] = DEBUG_E1[0]
+                        output_img[output_pixel_idy, output_pixel_idx, 7] = DEBUG_E1[1]
+                        output_img[output_pixel_idy, output_pixel_idx, 8] = DEBUG_E2[0]
+                        output_img[output_pixel_idy, output_pixel_idx, 9] = DEBUG_E2[1]
+                        output_img[output_pixel_idy, output_pixel_idx, 10] = DEBUG_L[0]
+                        output_img[output_pixel_idy, output_pixel_idx, 11] = DEBUG_L[1]
+                        output_img[output_pixel_idy, output_pixel_idx, 12] = DEBUG_GRAD[0]
+                        output_img[output_pixel_idy, output_pixel_idx, 13] = DEBUG_GRAD[1]
+                        output_img[output_pixel_idy, output_pixel_idx, 14] = DEBUG_GREY[0]
                 
             
             # We need to wait that every 9 pixel from every image
@@ -379,9 +392,9 @@ def gamma(image):
 
 # %% test code, to remove in the final version
 
-
-ref_img = rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/results_test1/33TJ_20150606_224837_294/payload_N000.dng'
-                       ).raw_image.copy()
+raw_ref_img = rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/results_test1/33TJ_20150606_224837_294/payload_N000.dng'
+                       )
+ref_img = raw_ref_img.raw_image.copy()
 
 
 comp_images = rawpy.imread(
@@ -416,15 +429,53 @@ print('\nTotal ellapsed time : ', time() - t1)
 #%%
 output_img = output[:,:,:3].copy()
 output_w = output[:,:,3:6].copy()
-output_grey_w = np.mean(output_w, axis=2)
-output_cov = np.empty((output.shape[0], output.shape[1], 2, 2))
-output_cov[:,:,0,0] = output[:,:,6]
-output_cov[:,:,0,1] = output[:,:,7]
-output_cov[:,:,1,0] = output[:,:,8]
-output_cov[:,:,1,1] = output[:,:,9]
 
-# plt.figure()
-# plt.imshow(gamma(output[:,:,:3]/1023))
-plt.figure()
-plt.imshow(output_grey_w/2, cmap = 'gray')
+l1 = output[:,:,10]
+l2 = output[:,:,11]
+
+e1 = np.empty((output.shape[0], output.shape[1], 2))
+e1[:,:,0] = output[:,:,6]
+e1[:,:,1] = output[:,:,7]
+norm=np.linalg.norm(e1, axis=2)
+e1[:,:,0]/= norm
+e1[:,:,1] /= norm
+e1[np.isnan(e1)] = 0
+e1[:,:,0]*=l1
+e1[:,:,1]*=l1
+
+
+e2 = np.empty((output.shape[0], output.shape[1], 2))
+e2[:,:,0] = output[:,:,8]
+e2[:,:,1] = output[:,:,9]
+norm=np.linalg.norm(e2, axis=2)
+e2[:,:,0]/= norm
+e2[:,:,1] /= norm
+e2[np.isnan(e2)] = 0
+e2[:,:,0]*=l2
+e2[:,:,1]*=l2
+
+gradx = output[:,:,12]
+grady = output[:,:,13]
+
+grey = output[:,:,14] 
+
+
+
+
+output_img[np.isnan(output_img)] = 1
+output_img[output_img == 0] = 1
+output_img = output_img.transpose(0,1, 2)
+#%%
+# quivers for eighenvectors
+# Lower res because pyplot's quiver is really not made for that (=slow)
+plt.imshow(gamma(output[:,:,:3][::15, ::15]/1023))
+plt.quiver(e1[:,:,0][::15, ::15], e1[:,:,1][::15, ::15], width=0.001,linewidth=0.0001)
+plt.quiver(e2[:,:,0][::15, ::15], e2[:,:,1][::15, ::15], width=0.001,linewidth=0.0001, color='b')
+
+
+# # No RGB matrix for this picture unfortunately... So no color correction
+# # img = process_isp(raw=raw_ref_img, img=(output_img/1023), do_color_correction=False, do_tonemapping=True, do_gamma=True, do_sharpening=False)
+
+# # plt.figure()
+# # plt.imshow(gamma(output[:,:,:3]/1023))
 
