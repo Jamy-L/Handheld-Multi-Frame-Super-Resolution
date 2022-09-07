@@ -7,7 +7,7 @@ Created on Thu Sep  1 08:41:58 2022
 
 import numpy as np
 from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda
-from math import sqrt
+from math import sqrt, isnan
 
 
 @cuda.jit(device=True)
@@ -48,11 +48,17 @@ def invert_2x2(M, M_i):
     None.
 
     """
-    det = M[0,0]*M[1,1] - M[0,1]*M[1,0]
-    M_i[0,0] = M[1,1]/det
-    M_i[0, 1] = -M[0, 1]/det
-    M_i[1, 0] = -M[1, 0]/det
-    M_i [1, 1] = M[0, 0]/det
+    det_i = 1/(M[0,0]*M[1,1] - M[0,1]*M[1,0])
+    if isnan(det_i):
+        M_i[0,0] = 1
+        M_i[0, 1] = 0
+        M_i[1, 0] = 0
+        M_i [1, 1] = 1
+    else:
+        M_i[0,0] = M[1,1]*det_i
+        M_i[0, 1] = -M[0, 1]*det_i
+        M_i[1, 0] = -M[1, 0]*det_i
+        M_i [1, 1] = M[0, 0]*det_i
     
 @cuda.jit(device=True)
 def quad_mat_prod(A, X):
@@ -133,7 +139,9 @@ def get_eighen_vect_2x2(M, l, e1, e2):
         e2[0] = 0; e2[0] = 1
         
     else:
-        e1[0] = M[0, 0] - l[1]; e1[1] = M[1,0]
+        e1[0] = M[0, 0] - l[1] + M[0, 1]; e1[1] = M[1,0] + M[1,1] - l[1]
+        
+    
         if e1[0] == 0:
             e2[0] = 1; e2[1] = 0
         elif e1[1] == 0:
@@ -142,7 +150,6 @@ def get_eighen_vect_2x2(M, l, e1, e2):
             _ = e1[0]/e1[1]
             e2[0] = 1/sqrt(1+_*_)
             e2[1] = -e2[0]*_
-    
     
     
 @cuda.jit(device=True)

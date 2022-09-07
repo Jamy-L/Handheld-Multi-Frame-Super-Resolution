@@ -35,7 +35,7 @@ final_alignments = lucas_kanade_optical_flow(
     ref_img, comp_images, pre_alignment, {"verbose": 3}, params)
 # %%
 comp_tiles = []
-for i in range(1, 9):
+for i in range(0, 10):
     comp_tiles.append(
         getAlignedTiles(
             comp_images[i], tile_size, final_alignments[i-1])[::2, ::2])
@@ -45,3 +45,4 @@ for i in range(1, 9):
                                                   1).reshape(32*131, 97*32).transpose()
     plt.figure()
     plt.imshow(test, cmap='gray')
+    plt.imsave("C:/Users/jamyl/OneDrive/Cours/ARIA/Projet Aria/figs/burst_{}.png".format(i), test, cmap="gray")
