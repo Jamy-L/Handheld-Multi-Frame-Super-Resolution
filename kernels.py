@@ -93,9 +93,7 @@ def compute_k(l1, l2, k):
     k_2 = _*_
     
     k[0] = k_1
-    k[1] = k_2
-
-        
+    k[1] = k_2 
 
 
 @cuda.jit(device=True)
@@ -144,15 +142,19 @@ def compute_kernel_cov(image, center_pos_x, center_pos_y, cov_i, DEBUG_E1, DEBUG
         DEBUG_E1[0] = e1[0]; DEBUG_E1[1] = e1[1]
         DEBUG_E2[0] = e2[0]; DEBUG_E2[1] = e2[1]
         DEBUG_L[0] = l[0]; DEBUG_L[1] = l[1]
-        DEBUG_GRAD[0] = harris[0,0]
-        DEBUG_GRAD[1] = harris[1,1]
+
         
     # we need k_1 and k_2 for what's next
     cuda.syncthreads()
     if l[0] + l[1] != 0:
         if tx>=0 and ty>=0:
             cov[ty, tx] = k[0]*e1[tx]*e1[ty] + k[1]*e2[tx]*e2[ty]
-        invert_2x2(cov, cov_i)
+            
+        cuda.syncthreads()
+        if tx == 0 and ty ==0 :
+            invert_2x2(cov, cov_i)
+            DEBUG_GRAD[0] = cov_i[0, 0]
+            DEBUG_GRAD[1] = cov_i[1, 1]
     else:
         # For constant luminance patch, this a dummy filter
         cov_i[0, 0] = 1

@@ -364,9 +364,16 @@ def merge(ref_img, comp_imgs, alignments, options, params):
             # has accumulated
             cuda.syncthreads()
         if tx == 0 and ty == 0:
-            output_img[output_pixel_idy, output_pixel_idx, 0] = val[0]/acc[0]
-            output_img[output_pixel_idy, output_pixel_idx, 1] = val[1]/acc[1]
-            output_img[output_pixel_idy, output_pixel_idx, 2] = val[2]/acc[2]
+            for chan in range(0,3):
+                _ = val[chan]/acc[chan]
+                if math.isnan(val[chan] + acc[chan]): #if one is nan, the result is nan
+                    output_img[output_pixel_idy, output_pixel_idx, chan] = val[chan] + acc[chan]
+                elif not(math.isnan(_)) : # elif division is possibler make it 
+                    output_img[output_pixel_idy, output_pixel_idx, chan] = _
+                else:
+                    # TODO debug value
+                    output_img[output_pixel_idy, output_pixel_idx, chan] = 1023
+                    
 
 
     accumulate[blockspergrid, threadsperblock](
@@ -436,41 +443,44 @@ l2 = output[:,:,11]
 e1 = np.empty((output.shape[0], output.shape[1], 2))
 e1[:,:,0] = output[:,:,6]
 e1[:,:,1] = output[:,:,7]
-norm=np.linalg.norm(e1, axis=2)
-e1[:,:,0]/= norm
-e1[:,:,1] /= norm
-e1[np.isnan(e1)] = 0
-e1[:,:,0]*=l1
-e1[:,:,1]*=l1
+# norm=np.linalg.norm(e1, axis=2)
+# e1[:,:,0]/= norm
+# e1[:,:,1] /= norm
+# e1[np.isnan(e1)] = 0
+# e1[:,:,0]*=l1
+# e1[:,:,1]*=l1
 
 
 e2 = np.empty((output.shape[0], output.shape[1], 2))
 e2[:,:,0] = output[:,:,8]
 e2[:,:,1] = output[:,:,9]
-norm=np.linalg.norm(e2, axis=2)
-e2[:,:,0]/= norm
-e2[:,:,1] /= norm
-e2[np.isnan(e2)] = 0
-e2[:,:,0]*=l2
-e2[:,:,1]*=l2
+# norm=np.linalg.norm(e2, axis=2)
+# e2[:,:,0]/= norm
+# e2[:,:,1] /= norm
+# e2[np.isnan(e2)] = 0
+# e2[:,:,0]*=l2
+# e2[:,:,1]*=l2
 
 gradx = output[:,:,12]
 grady = output[:,:,13]
 
 grey = output[:,:,14] 
 
+print(np.sum(np.isnan(output_img)))
+plt.imshow(gamma(output_img/1023))
 
-
-
+#%%
 output_img[np.isnan(output_img)] = 1
 output_img[output_img == 0] = 1
-output_img = output_img.transpose(0,1, 2)
+
 #%%
 # quivers for eighenvectors
 # Lower res because pyplot's quiver is really not made for that (=slow)
+plt.figure('quiver')
+scale = 10e4
 plt.imshow(gamma(output[:,:,:3][::15, ::15]/1023))
-plt.quiver(e1[:,:,0][::15, ::15], e1[:,:,1][::15, ::15], width=0.001,linewidth=0.0001)
-plt.quiver(e2[:,:,0][::15, ::15], e2[:,:,1][::15, ::15], width=0.001,linewidth=0.0001, color='b')
+plt.quiver(e1[:,:,0][::15, ::15], e1[:,:,1][::15, ::15], width=0.001,linewidth=0.0001, scale=scale)
+plt.quiver(e2[:,:,0][::15, ::15], e2[:,:,1][::15, ::15], width=0.001,linewidth=0.0001, scale=scale, color='b')
 
 
 # # No RGB matrix for this picture unfortunately... So no color correction
