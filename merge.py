@@ -9,7 +9,8 @@ from optical_flow import lucas_kanade_optical_flow
 from hdrplus_python.package.algorithm.imageUtils import getTiles, getAlignedTiles
 from hdrplus_python.package.algorithm.merging import depatchifyOverlap
 from hdrplus_python.package.algorithm.genericUtils import getTime
-from kernels import compute_rgb
+from kernels import compute_kernel_cov
+from linalg import quad_mat_prod
 
 import cv2
 import numpy as np
@@ -21,7 +22,11 @@ from time import time
 import cupy as cp
 from scipy.interpolate import interp2d
 import math
+from torch import from_numpy
 
+from fast_two_stage_psf_correction.fast_optics_correction.raw2rgb import process_isp
+
+EPSILON = 1e-6
 
 def merge(ref_img, comp_imgs, alignments, options, params):
     """
@@ -61,8 +66,8 @@ def merge(ref_img, comp_imgs, alignments, options, params):
 
     native_im_size = ref_img.shape
     output_size = (SCALE*native_im_size[0], SCALE*native_im_size[1])
-    output_img = cuda.device_array(output_size+(3,)) #third dim for rgb canals
-
+    output_img = cuda.device_array(output_size+(15,)) #third dim for rgb channel
+    # TODO 3 channels are enough, the rest is for debugging
     # moving arrays to GPU
     cuda_comp_imgs = cuda.to_device(comp_imgs)
     cuda_ref_img = cuda.to_device(ref_img)
@@ -211,13 +216,6 @@ def merge(ref_img, comp_imgs, alignments, options, params):
         
         elif patch_pixel_idx%2 == 0 and patch_pixel_idy%2 ==0 :#B
             return 2
-        
-    
-    @cuda.jit(device=True)
-    def ker(d, cov):
-        #TODO 
-        return 1
-    
       
     @cuda.jit
     def accumulate(ref_img, comp_imgs, alignments, output_img):
@@ -255,27 +253,29 @@ def merge(ref_img, comp_imgs, alignments, options, params):
         val = cuda.shared.array(3, dtype=float64)
         
         # We pick one single thread to do certain operations
+        coarse_ref_sub_x = cuda.shared.array(1, dtype=float64)
+        coarse_ref_sub_y = cuda.shared.array(1, dtype=float64)
         if tx == 0 and ty == 0:
-            coarse_ref_sub_x = cuda.shared.array(1, dtype=float64)
+            
             coarse_ref_sub_x[0] = output_pixel_idx / SCALE
             
-            coarse_ref_sub_y = cuda.shared.array(1, dtype=float64)
+            
             coarse_ref_sub_y[0] = output_pixel_idy / SCALE
 
             
-            acc[0] = 1
-            acc[1] = 1
-            acc[2] = 1
+            acc[0] = 0
+            acc[1] = 0
+            acc[2] = 0
 
-            val[0] = 1
-            val[1] = 1
-            val[2] = 1
+            val[0] = 0
+            val[1] = 0
+            val[2] = 0
         # We need to wait the fetching of the flow
         cuda.syncthreads()
 
         patch_center_x = cuda.shared.array(1, uint16)
         patch_center_y = cuda.shared.array(1, uint16)
-    
+        local_optical_flow = cuda.shared.array(2, dtype=float64)
 
         for image_index in range(N_IMAGES + 1):
             if tx == 0 and ty == 0:
@@ -285,7 +285,6 @@ def merge(ref_img, comp_imgs, alignments, options, params):
                     patch_center_y[0] = uint16(round(coarse_ref_sub_y[0]))
 
                 else:
-                    local_optical_flow = cuda.shared.array(2, dtype=float64)
                     get_closest_flow(coarse_ref_sub_x[0],
                                       coarse_ref_sub_y[0],
                                       alignments[image_index - 1],
@@ -294,12 +293,25 @@ def merge(ref_img, comp_imgs, alignments, options, params):
                     
                     patch_center_x[0] = uint16(round(coarse_ref_sub_x[0] + local_optical_flow[0]))
                     patch_center_y[0] = uint16(round(coarse_ref_sub_y[0] + local_optical_flow[1]))
+            
+            # we need the position of the patch before computing the kernel
+            cuda.syncthreads()
+            
+            # TODO compute R and kernel with another thread
+            cov_i = cuda.shared.array((2, 2), dtype=float64)
+            DEBUG_E1 = cuda.shared.array(2, dtype=float64)
+            DEBUG_E2 = cuda.shared.array(2, dtype=float64)
+            DEBUG_L = cuda.shared.array(2, dtype=float64)
+            DEBUG_GRAD = cuda.shared.array(2, dtype=float64)
+            DEBUG_GREY = cuda.shared.array(1, dtype=float64)
+            
+            if image_index == 0:
+                compute_kernel_cov(ref_img, patch_center_x[0], patch_center_y[0], cov_i, DEBUG_E1, DEBUG_E2, DEBUG_L, DEBUG_GRAD, DEBUG_GREY)
+            else:
+                compute_kernel_cov(comp_imgs[image_index - 1], patch_center_x[0], patch_center_y[0], cov_i, DEBUG_E1, DEBUG_E2, DEBUG_L, DEBUG_GRAD, DEBUG_GREY)
+            R = 1
 
-                # TODO compute R and kernel with another thread
-                cov = None
-                R = 1
-
-            # We need to wait the calculation of R, kernel and new position
+            # We need to wait the calculation of R and kernel
             cuda.syncthreads()
             
             patch_pixel_idx = patch_center_x[0] + tx
@@ -316,30 +328,51 @@ def merge(ref_img, comp_imgs, alignments, options, params):
                 # checking if pixel is r, g or b
                 channel = get_channel(patch_pixel_idx, patch_pixel_idy)
     
-                # applyinf invert transformation and upscaling
-                fine_sub_pos_x = SCALE * (patch_pixel_idx - local_optical_flow[0])
-                fine_sub_pos_y = SCALE * (patch_pixel_idy - local_optical_flow[1])
+                # applying invert transformation and upscaling
+                if image_index == 0:
+                    fine_sub_pos_x = SCALE * patch_pixel_idx
+                    fine_sub_pos_y = SCALE * patch_pixel_idy
+                else:
+                    fine_sub_pos_x = SCALE * (patch_pixel_idx - local_optical_flow[0])
+                    fine_sub_pos_y = SCALE * (patch_pixel_idy - local_optical_flow[1])
+
                 
-
-                dist = math.sqrt(
-                    (fine_sub_pos_x - output_pixel_idx) * (fine_sub_pos_x - output_pixel_idx) +
-                    (fine_sub_pos_y - output_pixel_idy) * (fine_sub_pos_y - output_pixel_idy))
-    
-                w = ker(dist, cov)
-
+                dist = cuda.local.array(2, dtype=float64)
+                dist[0] = (fine_sub_pos_x - output_pixel_idx)
+                dist[1] = (fine_sub_pos_y - output_pixel_idy)
+                
+                # TODO bilinear upsampling wizzardry
+                y = max(0, quad_mat_prod(cov_i, dist))
+                # y can be slightly negative because of numerical precision.
+                # I clamp it to not explode the error with exp
+                w = math.exp(-y/2)
 
                 cuda.atomic.add(val, channel, c*w*R)
                 cuda.atomic.add(acc, channel, w*R)
+                
+                # TODO debugging only
+                if image_index == 1 :
+                    if tx == 0 and ty == 0:
+                        output_img[output_pixel_idy, output_pixel_idx, channel+3] = w
+                        output_img[output_pixel_idy, output_pixel_idx, 6] = DEBUG_E1[0]
+                        output_img[output_pixel_idy, output_pixel_idx, 7] = DEBUG_E1[1]
+                        output_img[output_pixel_idy, output_pixel_idx, 8] = DEBUG_E2[0]
+                        output_img[output_pixel_idy, output_pixel_idx, 9] = DEBUG_E2[1]
+                        output_img[output_pixel_idy, output_pixel_idx, 10] = DEBUG_L[0]
+                        output_img[output_pixel_idy, output_pixel_idx, 11] = DEBUG_L[1]
+                        output_img[output_pixel_idy, output_pixel_idx, 12] = DEBUG_GRAD[0]
+                        output_img[output_pixel_idy, output_pixel_idx, 13] = DEBUG_GRAD[1]
+                
             
             # We need to wait that every 9 pixel from every image
             # has accumulated
             cuda.syncthreads()
         if tx == 0 and ty == 0:
-            output_img[output_pixel_idy, output_pixel_idx, 0] = val[0]/acc[0]
-            output_img[output_pixel_idy, output_pixel_idx, 1] = val[1]/acc[1]
-            output_img[output_pixel_idy, output_pixel_idx, 2] = val[2]/acc[2]
+            for chan in range(0,3):
+                output_img[output_pixel_idy, output_pixel_idx, chan] = val[chan]/(acc[chan] + EPSILON) 
 
-######
+                    
+
 
     accumulate[blockspergrid, threadsperblock](
         cuda_ref_img, cuda_comp_imgs, cuda_alignments, output_img)
@@ -357,7 +390,6 @@ def merge(ref_img, comp_imgs, alignments, options, params):
 
     # TODO 1023 is the max value in the example. Maybe we have to extract
     # metadata to have a more general framework
-    # return merge_result/(1023*accumulator)
     return merge_result
 
 def gamma(image):
@@ -365,24 +397,25 @@ def gamma(image):
 
 # %% test code, to remove in the final version
 
-
-ref_img = rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/results_test1/33TJ_20150606_224837_294/payload_N000.dng'
-                       ).raw_image.copy()
+raw_ref_img = rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N000.dng'
+                       )
+ref_img = raw_ref_img.raw_image.copy()
 
 
 comp_images = rawpy.imread(
     'C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N001.dng').raw_image.copy()[None]
-for i in range(2, 9):
+for i in range(2, 10):
     comp_images = np.append(comp_images, rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N00{}.dng'.format(i)
                                                       ).raw_image.copy()[None], axis=0)
 
 pre_alignment = np.load(
-    'C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/results_test1/unpaddedMotionVectors.npy')[:-1]
+    'C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/results_test1/unpaddedMotionVectors.npy')
+
 n_images, n_patch_y, n_patch_x, _ = pre_alignment.shape
 tile_size = 32
 native_im_size = ref_img.shape
 
-params = {'tuning': {'tileSizes': 32}, 'scale': 6}
+params = {'tuning': {'tileSizes': 32}, 'scale': 1}
 params['tuning']['kanadeIter'] = 3
 
 
@@ -390,11 +423,52 @@ t1 = time()
 final_alignments = lucas_kanade_optical_flow(
     ref_img, comp_images, pre_alignment, {"verbose": 3}, params)
 
-# comp_tiles = np.zeros((n_images, n_patch_y, n_patch_x, tile_size, tile_size))
-# for i in range(n_images):
-#     comp_tiles[i] = getAlignedTiles(
-#         comp_images[i], tile_size, final_alignments[i])
-
-
 output = merge(ref_img, comp_images, final_alignments, {"verbose": 3}, params)
 print('\nTotal ellapsed time : ', time() - t1)
+
+#%%
+output_img = output[:,:,:3].copy()
+output_w = output[:,:,3:6].copy()
+
+l1 = output[:,:,10]
+l2 = output[:,:,11]
+
+e1 = np.empty((output.shape[0], output.shape[1], 2))
+e1[:,:,0] = output[:,:,6]
+e1[:,:,1] = output[:,:,7]
+# e1[:,:,0]*=l1
+# e1[:,:,1]*=l1
+
+
+e2 = np.empty((output.shape[0], output.shape[1], 2))
+e2[:,:,0] = output[:,:,8]
+e2[:,:,1] = output[:,:,9]
+# e2[:,:,0]*=l2
+# e2[:,:,1]*=l2
+
+gradx = output[:,:,12]
+grady = output[:,:,13]
+                                          
+grey = output[:,:,14] 
+
+print('Nan detected in output: ', np.sum(np.isnan(output_img)))
+print('Inf detected in output: ', np.sum(1 - np.isinf(output_img)))
+plt.imshow(gamma(output_img/1023))
+
+
+#%%
+# quivers for eighenvectors
+# Lower res because pyplot's quiver is really not made for that (=slow)
+plt.figure('quiver')
+scale = 3*10e0
+plt.imshow(gamma(output[:,:,:3][::15, ::15]/1023))
+plt.quiver(e1[:,:,0][::15, ::15], e1[:,:,1][::15, ::15], width=0.001,linewidth=0.0001, scale=scale)
+plt.quiver(e2[:,:,0][::15, ::15], e2[:,:,1][::15, ::15], width=0.001,linewidth=0.0001, scale=scale, color='b')
+
+
+# # No RGB matrix for this picture unfortunately... So no color correction
+# # img = process_isp(raw=raw_ref_img, img=(output_img/1023), do_color_correction=False, do_tonemapping=True, do_gamma=True, do_sharpening=False)
+
+# # plt.figure()
+# # plt.imshow(gamma(output[:,:,:3]/1023))
+
