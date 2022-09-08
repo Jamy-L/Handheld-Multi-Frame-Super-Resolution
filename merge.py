@@ -452,7 +452,7 @@ grady = output[:,:,13]
 grey = output[:,:,14] 
 
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
-print('Inf detected in output: ', np.sum(1 - np.isinf(output_img)))
+print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 plt.imshow(gamma(output_img/1023))
 
 
