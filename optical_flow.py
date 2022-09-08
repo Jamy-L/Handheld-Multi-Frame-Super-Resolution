@@ -8,6 +8,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from hdrplus_python.package.algorithm.imageUtils import getTiles, getAlignedTiles
 from hdrplus_python.package.algorithm.genericUtils import getTime
+from linalg import solve_2x2
 
 import cv2
 import numpy as np
@@ -15,9 +16,11 @@ from time import time
 import cupy as cp
 import rawpy
 from tqdm import tqdm
+from numba import cuda, float64, int16
 
 
-def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params):
+
+def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer, options, params):
     """
     Computes the displacement based on a naive implementation of
     Lucas-Kanade optical flow (https://www.cs.cmu.edu/~16385/s15/lectures/Lecture21.pdf)
@@ -26,11 +29,11 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params)
 
     Parameters
     ----------
-    ref_img : Array[imsize_y, imsize_x]
+    ref_img_Bayer : Array[imsize_y, imsize_x]
         The reference image
-    comp_img : Array[n_images, imsize_y, imsize_x]
+    comp_img_Bayer : Array[n_images, imsize_y, imsize_x]
         The images to rearrange and compare to the reference
-    pre_alignment : Array[n_images, n_tiles_y, n_tiles_x, 2]
+    pre_alignment_bayer : Array[n_images, n_tiles_y, n_tiles_x, 2]
         The alignment vectors obtained by the coarse to fine pyramid search.
     options : Dict
         Options to pass
@@ -44,29 +47,34 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params)
 
     """
 
+    # grey level
+    ref_img = ref_img_bayer[::2, ::2]/3 + ref_img_bayer[1::2, 1::2]/3 + ref_img_bayer[::2, 1::2]/6 + ref_img_bayer[1::2, ::2]/6
+    comp_img = comp_img_bayer[:,::2, ::2]/3 + comp_img_bayer[:,1::2, 1::2]/3 + comp_img_bayer[:,::2, 1::2]/6 + comp_img_bayer[:,1::2, ::2]/6
+    pre_alignment = pre_alignment_bayer/2 # dividing by 2 because grey image is decimated by 2
+
+
     current_time, verbose = time(), options['verbose'] > 2
 
     tile_size = params['tuning']['tileSizes']
     n_iter = params['tuning']['kanadeIter']
 
-    if verbose:
-        current_time = time()
-        print("Estimating Lucas-Kanade's optical flow")
-
-    # Estimating gradients with cv2 sobel filters
-    # Data format is very important. default 8uint is bad, because we use negative
-    # Values, and because may go up to a value of 3080. We need signed int16
-    gradx = cv2.Sobel(ref_img, cv2.CV_16S, dx=1, dy=0)
-    grady = cv2.Sobel(ref_img, cv2.CV_16S, dx=0, dy=1)
-
     n_images, n_patch_y, n_patch_x, _ \
         = pre_alignment.shape
 
-    # dividing into tiles, solving systems will be easier to implement
-    # this way
-    gradx = getTiles(gradx, tile_size, tile_size // 2)
-    grady = getTiles(grady, tile_size, tile_size // 2)
-    ref_img_tiles = getTiles(ref_img, tile_size, tile_size // 2)
+    if verbose:
+        current_time = time()
+        print("Estimating Lucas-Kanade's optical flow")
+        
+    gradsx = np.empty_like(comp_img)
+    gradsy = np.empty_like(comp_img)
+    
+    for image_id in range(n_images):
+        
+        # Estimating gradients with cv2 sobel filters
+        # Data format is very important. default 8uint is bad, because we use negative
+        # Values, and because may go up to a value of 3080. We need signed int16
+        gradsx[image_id] = cv2.Sobel(comp_img[image_id], cv2.CV_16S, dx=1, dy=0)
+        gradsy[image_id] = cv2.Sobel(comp_img[image_id], cv2.CV_16S, dx=0, dy=1)
 
     if verbose:
         current_time = getTime(
@@ -74,23 +82,24 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params)
 
     alignment = np.array(pre_alignment, dtype=np.float64)
     for iter_index in range(n_iter):
-        alignment -= lucas_kanade_optical_flow_iteration(
-            ref_img_tiles, gradx, grady, comp_img, alignment, options, params, iter_index)
-    return alignment
+        alignment = lucas_kanade_optical_flow_iteration(
+            ref_img, gradsx, gradsy, comp_img, alignment, options, params, iter_index)
+    
+    return alignment*2 # alignemnt for Bayer, 2 times bigger
 
 
-def lucas_kanade_optical_flow_iteration(ref_img_tiles, gradx, grady, comp_img, alignment, options, params, iter_index):
+def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, options, params, iter_index):
     """
     Computes one iteration of the Lucas-Kanade optical flow
 
     Parameters
     ----------
-    ref_img_tiles : Array [n_tiles_y, n_tiles_x, tile_size, tile_size]
-        Tiles composing the ref image (0.5 overlapping tiles)
-    gradx : Array [n_tiles_y, n_tiles_x, tile_size, tile_size]
-        Horizontal gradient of the ref tiles
-    grady : Array [n_tiles_y, n_tiles_x, tile_size, tile_size]
-        Vertical gradient of the ref tiles
+    ref_img : Array [imsize_y, imsize_x]
+        Ref image
+    gradsx : Array [n_images, imsize_y, imsize_x]
+        Horizontal gradient of the compared images
+    gradsy : Array [n_images, imsize_y, imsize_x]
+        Vertical gradient of thecompared images
     comp_img : Array[n_images, imsize_y, imsize_x]
         The images to rearrange and compare to the reference
     alignment : Array[n_images, n_tiles_y, n_tiles_x, 2]
@@ -111,65 +120,92 @@ def lucas_kanade_optical_flow_iteration(ref_img_tiles, gradx, grady, comp_img, a
 
     """
     verbose = options['verbose']
-    tile_size = params['tuning']['tileSizes']
+    tile_size = int(params['tuning']['tileSizes']/2) #grey tiles are twice as small
     n_images, n_patch_y, n_patch_x, _ \
         = alignment.shape
+    _, imsize_y, imsize_x = comp_img.shape
+
     print(" -- Lucas-Kanade iteration {}".format(iter_index))
-    # TODO this is dirty, memory usage may be doubled. We may directly call
-    # cp arrays instead
-    cgradx, cgrady = cp.array(gradx), cp.array(grady)
-    cref_img_tiles = cp.array(ref_img_tiles)
-
-    # aligning while considering the previous estimation
-    aligned_comp_tiles = cp.empty(
-        (n_images, n_patch_y, n_patch_x, tile_size, tile_size))
-
-    # this is suboptimal but getAlignedTiles is only defined for 2d arrays
-    for i in range(n_images):
-        aligned_comp_tiles[i] = cp.array(
-            getAlignedTiles(comp_img[i], tile_size, alignment[i]))
 
     current_time = time()
 
-    # TODO The next step is the bottleneck. Maybe Cupy sum and norm are not optimal
-    # here, we may directly write cuda kernels
-
-    # estimating systems with adapted shape
-    crossed = cp.sum(cgradx*cgrady, axis=(-2, -1))
-    ATA = cp.array([[cp.linalg.norm(cgradx, axis=(-2, -1))**2, crossed],
-                    [crossed, cp.linalg.norm(cgrady, axis=(-2, -1))**2]]).transpose((2, 3, 0, 1))
-    ATB = cp.array([[cp.sum((aligned_comp_tiles-cref_img_tiles)*cgradx, axis=(-2, -1))],
-                    [cp.sum((aligned_comp_tiles-cref_img_tiles)*cgrady, axis=(-2, -1))]])
-    ATB = ATB[:, 0, :, :, :].transpose((2, 3, 0, 1))
-
     if verbose:
         current_time = getTime(
-            current_time, ' \t- System generated')
-
-    # TODO The systems are 2x2. linalg.solve may be suboptimal, compared to simply
-    # injecting the hand-calculated theorical solution
-
-    # solving systems
-    solution = np.linalg.solve(ATA, ATB)
-
+            current_time, ' \t-- Moving arrays to GPU')
+    cuda_ref_img = cuda.to_device(np.ascontiguousarray(ref_img))
+    cuda_comp_img = cuda.to_device(np.ascontiguousarray(comp_img))
+    cuda_gradsx = cuda.to_device(gradsx)
+    cuda_gradsy = cuda.to_device(gradsy)
+    cuda_alignment = cuda.to_device(alignment.astype(np.float64))
+    
     if verbose:
         current_time = getTime(
-            current_time, ' \t- System solved')
+            current_time, ' \t-- Preparing and solving systems')
+        
+    @cuda.jit
+    def get_new_flow(ref_img, comp_img, gradsx, gradsy, alignment):
+        
+        
+        image_index, patch_idy, patch_idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
+        pixel_local_idx = cuda.threadIdx.x
+        pixel_local_idy = cuda.threadIdx.y
+        
+        inbound = (0 <= pixel_local_idx < tile_size) and (0 <= pixel_local_idy < tile_size)
+        
+        pixel_global_idx = tile_size//2 * patch_idx + pixel_local_idx
+        pixel_global_idy = tile_size//2 * patch_idy + pixel_local_idy
+        
+        ATA = cuda.shared.array((2,2), dtype = float64)
+        ATB = cuda.shared.array(2, dtype = float64)
+        ATA[0, 0] = 0
+        ATA[0, 1] = 0
+        ATA[1, 0] = 0
+        ATA[1, 1] = 0
+        ATB[0] = 0
+        ATB[1] = 0
+        
+        inbound = inbound and  (0 <= pixel_global_idx < imsize_x) and (0 <= pixel_global_idy < imsize_y)
+    
+        if inbound :
+            new_idx = round(pixel_global_idx + alignment[image_index, pixel_local_idy, pixel_local_idx, 0])
+            new_idy = round(pixel_global_idy + alignment[image_index, pixel_local_idy, pixel_local_idx, 1])
+        
+        inbound = inbound and (0 <= new_idx < imsize_x) and (0 <= new_idy < imsize_y)
+        
+        if inbound:
+            gradx = gradsx[image_index, new_idy, new_idx]
+            grady = gradsy[image_index, new_idy, new_idx]
+            gradt = int16(comp_img[image_index, new_idy, new_idx]) - int16(ref_img[new_idy, new_idx])
+            
+            cuda.atomic.add(ATB, 0, gradx*gradt)
+            cuda.atomic.add(ATB, 1, grady*gradt)
+            
+            cuda.atomic.add(ATA, (0, 0), gradx**2)
+            cuda.atomic.add(ATA, (1, 0), gradx*grady)
+            cuda.atomic.add(ATA, (0, 1), gradx*grady)
+            cuda.atomic.add(ATA, (1, 1), grady**2)
+        
+        # We need the entire tile accumulation
+        tile_disp = cuda.shared.array(2, dtype = float64)
+        cuda.syncthreads()
+        if pixel_local_idx == 0 and pixel_local_idy == 0 and inbound:
+            solve_2x2(ATA, ATB, tile_disp) 
+            alignment[image_index, patch_idy, patch_idx, 0] += tile_disp[0]
+            alignment[image_index, patch_idy, patch_idx, 1] += tile_disp[1]
+            
+    
+    
+    get_new_flow[[(n_images, n_patch_y, n_patch_x), (tile_size, tile_size)]
+        ](cuda_ref_img, cuda_comp_img, cuda_gradsx, cuda_gradsy, cuda_alignment)
+    
+    
+    
+    if verbose:
+        current_time = getTime(
+            current_time, ' \t-- Retrieveing flow from GPU')
+    flow = cuda_alignment.copy_to_host()
 
-    return_value = cp.asnumpy(solution.transpose(3, 0, 1, 2))
-    # iteration specific tensors
-    del ATB
-    del solution
-    del aligned_comp_tiles
-    # general tensor
-    if iter_index == params['tuning']['kanadeIter'] - 1:
-        del ATA
-        del cref_img_tiles
-        del cgradx
-        del cgrady
-        del crossed
-        cp._default_memory_pool.free_all_blocks()
-    return return_value
+    return flow
 
 
 def coarse_subpixel_id_flow(idx_sub, idy_sub, tile_optical_flow, tile_size):
@@ -239,3 +275,38 @@ def coarse_subpixel_id_flow(idx_sub, idy_sub, tile_optical_flow, tile_size):
                 tile_optical_flow[patch_idy_bottom, patch_idx_right])/4
 
     return flow
+
+# %% test code, to remove in the final version
+
+# raw_ref_img = rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N000.dng'
+#                         )
+# ref_img = raw_ref_img.raw_image.copy()
+
+
+# comp_images = rawpy.imread(
+#     'C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N001.dng').raw_image.copy()[None]
+# for i in range(2, 10):
+#     comp_images = np.append(comp_images, rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N00{}.dng'.format(i)
+#                                                       ).raw_image.copy()[None], axis=0)
+
+# pre_alignment = np.load(
+#     'C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/results_test1/unpaddedMotionVectors.npy')
+
+# n_images, n_patch_y, n_patch_x, _ = pre_alignment.shape
+# tile_size = int(32/2)
+# native_im_size = ref_img.shape
+
+# params = {'tuning': {'tileSizes': tile_size}, 'scale': 1}
+# params['tuning']['kanadeIter'] = 3
+
+
+
+
+
+# #%%
+# t1 = time()
+# final_alignments = lucas_kanade_optical_flow(
+#     ref_img, comp_images, pre_alignment, {"verbose": 3}, params)
+# print('\nTotal ellapsed time : ', time() - t1)
+
+# a,b = final_alignments[0, :, :]*2, pre_alignment[0, :, :]*2
