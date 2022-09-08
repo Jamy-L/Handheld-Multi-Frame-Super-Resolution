@@ -397,36 +397,31 @@ def gamma(image):
 
 # %% test code, to remove in the final version
 
-raw_ref_img = rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/results_test1/33TJ_20150606_224837_294/payload_N000.dng'
+raw_ref_img = rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N000.dng'
                        )
 ref_img = raw_ref_img.raw_image.copy()
 
 
 comp_images = rawpy.imread(
     'C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N001.dng').raw_image.copy()[None]
-for i in range(2, 9):
+for i in range(2, 10):
     comp_images = np.append(comp_images, rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N00{}.dng'.format(i)
                                                       ).raw_image.copy()[None], axis=0)
 
 pre_alignment = np.load(
-    'C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/results_test1/unpaddedMotionVectors.npy')[:-1]
+    'C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/results_test1/unpaddedMotionVectors.npy')
+
 n_images, n_patch_y, n_patch_x, _ = pre_alignment.shape
 tile_size = 32
 native_im_size = ref_img.shape
 
-params = {'tuning': {'tileSizes': 32}, 'scale': 2}
+params = {'tuning': {'tileSizes': 32}, 'scale': 1}
 params['tuning']['kanadeIter'] = 3
 
 
 t1 = time()
 final_alignments = lucas_kanade_optical_flow(
     ref_img, comp_images, pre_alignment, {"verbose": 3}, params)
-
-# comp_tiles = np.zeros((n_images, n_patch_y, n_patch_x, tile_size, tile_size))
-# for i in range(n_images):
-#     comp_tiles[i] = getAlignedTiles(
-#         comp_images[i], tile_size, final_alignments[i])
-
 
 output = merge(ref_img, comp_images, final_alignments, {"verbose": 3}, params)
 print('\nTotal ellapsed time : ', time() - t1)
@@ -456,8 +451,10 @@ grady = output[:,:,13]
                                           
 grey = output[:,:,14] 
 
-print(np.sum(np.isnan(output_img)))
+print('Nan detected in output: ', np.sum(np.isnan(output_img)))
+print('Inf detected in output: ', np.sum(1 - np.isinf(output_img)))
 plt.imshow(gamma(output_img/1023))
+
 
 #%%
 # quivers for eighenvectors
