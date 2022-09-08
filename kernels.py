@@ -10,7 +10,7 @@ import numpy as np
 
 from numba import uint8, uint16, float32, float64, cuda
 from math import sqrt
-from linalg import get_eighen_elmts_2x2, invert_2x2
+from linalg import get_eighen_elmts_2x2, invert_2x2, clamp
 
 
 k_detail = 0.3  # [0.25, ..., 0.33]
@@ -69,15 +69,6 @@ def compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, ha
             cuda.atomic.add(harris, (0,1), gradx*grady)
             
             
-        
-@cuda.jit(device=True)
-def clamp(x, min_, max_):   
-    if x < min_ :
-        return min_
-    elif x > max_:
-        return max_
-    else:
-        return x
         
 @cuda.jit(device=True)
 def compute_k(l1, l2, k):
@@ -153,14 +144,12 @@ def compute_kernel_cov(image, center_pos_x, center_pos_y, cov_i, DEBUG_E1, DEBUG
         cuda.syncthreads()
         if tx == 0 and ty ==0 :
             invert_2x2(cov, cov_i)
-            DEBUG_GRAD[0] = cov_i[0, 0]
-            DEBUG_GRAD[1] = cov_i[1, 1]
     else:
         # For constant luminance patch, this a dummy filter
         cov_i[0, 0] = 1
-        cov_i[0, 1] = 1
+        cov_i[0, 1] = 0
         cov_i[1, 0] = 1
-        cov_i[1, 1] = 1
+        cov_i[1, 1] = 0
         
 
         
