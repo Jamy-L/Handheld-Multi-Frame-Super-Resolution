@@ -26,6 +26,8 @@ from torch import from_numpy
 
 from fast_two_stage_psf_correction.fast_optics_correction.raw2rgb import process_isp
 
+EPSILON = 1e-6
+
 def merge(ref_img, comp_imgs, alignments, options, params):
     """
     Merges all the images, based on the alignments previously estimated.
@@ -340,7 +342,10 @@ def merge(ref_img, comp_imgs, alignments, options, params):
                 dist[1] = (fine_sub_pos_y - output_pixel_idy)
                 
                 # TODO bilinear upsampling wizzardry
-                w = math.exp(-quad_mat_prod(cov_i, dist)/(4*2))
+                y = max(0, quad_mat_prod(cov_i, dist))
+                # y can be slightly negative because of numerical precision.
+                # I clamp it to not explode the error with exp
+                w = math.exp(-y/2)
 
                 cuda.atomic.add(val, channel, c*w*R)
                 cuda.atomic.add(acc, channel, w*R)
@@ -357,7 +362,6 @@ def merge(ref_img, comp_imgs, alignments, options, params):
                         output_img[output_pixel_idy, output_pixel_idx, 11] = DEBUG_L[1]
                         output_img[output_pixel_idy, output_pixel_idx, 12] = DEBUG_GRAD[0]
                         output_img[output_pixel_idy, output_pixel_idx, 13] = DEBUG_GRAD[1]
-                        output_img[output_pixel_idy, output_pixel_idx, 14] = DEBUG_GREY[0]
                 
             
             # We need to wait that every 9 pixel from every image
@@ -365,14 +369,8 @@ def merge(ref_img, comp_imgs, alignments, options, params):
             cuda.syncthreads()
         if tx == 0 and ty == 0:
             for chan in range(0,3):
-                _ = val[chan]/acc[chan]
-                if math.isnan(val[chan] + acc[chan]): #if one is nan, the result is nan
-                    output_img[output_pixel_idy, output_pixel_idx, chan] = val[chan] + acc[chan]
-                elif not(math.isnan(_)) : # elif division is possibler make it 
-                    output_img[output_pixel_idy, output_pixel_idx, chan] = _
-                else:
-                    # TODO debug value
-                    output_img[output_pixel_idy, output_pixel_idx, chan] = 1023
+                output_img[output_pixel_idy, output_pixel_idx, chan] = val[chan]/(acc[chan] + EPSILON) 
+
                     
 
 
@@ -443,10 +441,6 @@ l2 = output[:,:,11]
 e1 = np.empty((output.shape[0], output.shape[1], 2))
 e1[:,:,0] = output[:,:,6]
 e1[:,:,1] = output[:,:,7]
-# norm=np.linalg.norm(e1, axis=2)
-# e1[:,:,0]/= norm
-# e1[:,:,1] /= norm
-# e1[np.isnan(e1)] = 0
 # e1[:,:,0]*=l1
 # e1[:,:,1]*=l1
 
@@ -454,30 +448,22 @@ e1[:,:,1] = output[:,:,7]
 e2 = np.empty((output.shape[0], output.shape[1], 2))
 e2[:,:,0] = output[:,:,8]
 e2[:,:,1] = output[:,:,9]
-# norm=np.linalg.norm(e2, axis=2)
-# e2[:,:,0]/= norm
-# e2[:,:,1] /= norm
-# e2[np.isnan(e2)] = 0
 # e2[:,:,0]*=l2
 # e2[:,:,1]*=l2
 
 gradx = output[:,:,12]
 grady = output[:,:,13]
-
+                                          
 grey = output[:,:,14] 
 
 print(np.sum(np.isnan(output_img)))
 plt.imshow(gamma(output_img/1023))
 
 #%%
-output_img[np.isnan(output_img)] = 1
-output_img[output_img == 0] = 1
-
-#%%
 # quivers for eighenvectors
 # Lower res because pyplot's quiver is really not made for that (=slow)
 plt.figure('quiver')
-scale = 10e4
+scale = 3*10e0
 plt.imshow(gamma(output[:,:,:3][::15, ::15]/1023))
 plt.quiver(e1[:,:,0][::15, ::15], e1[:,:,1][::15, ::15], width=0.001,linewidth=0.0001, scale=scale)
 plt.quiver(e2[:,:,0][::15, ::15], e2[:,:,1][::15, ::15], width=0.001,linewidth=0.0001, scale=scale, color='b')

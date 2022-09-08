@@ -17,7 +17,7 @@ ref_img = rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Sup
 
 comp_images = rawpy.imread(
     'C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N001.dng').raw_image.copy()[None]
-for i in range(2, 10):
+for i in range(1, 10):
     comp_images = np.append(comp_images, rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N00{}.dng'.format(i)
                                                       ).raw_image.copy()[None], axis=0)
 
@@ -45,4 +45,3 @@ for i in range(0, 10):
                                                   1).reshape(32*131, 97*32).transpose()
     plt.figure()
     plt.imshow(test, cmap='gray')
-    plt.imsave("C:/Users/jamyl/OneDrive/Cours/ARIA/Projet Aria/figs/burst_{}.png".format(i), test, cmap="gray")

@@ -7,8 +7,17 @@ Created on Thu Sep  1 08:41:58 2022
 
 import numpy as np
 from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda
-from math import sqrt, isnan
+from math import sqrt, isnan, isinf, copysign
 
+
+@cuda.jit(device=True)
+def clamp(x, min_, max_):   
+    if x < min_ :
+        return min_
+    elif x > max_:
+        return max_
+    else:
+        return x
 
 @cuda.jit(device=True)
 def solve_2x2(A, B, X):
@@ -49,7 +58,7 @@ def invert_2x2(M, M_i):
 
     """
     det_i = 1/(M[0,0]*M[1,1] - M[0,1]*M[1,0])
-    if isnan(det_i):
+    if isinf(det_i):
         M_i[0,0] = 1
         M_i[0, 1] = 0
         M_i[1, 0] = 0
@@ -62,7 +71,8 @@ def invert_2x2(M, M_i):
     
 @cuda.jit(device=True)
 def quad_mat_prod(A, X):
-    return A[0, 0]*X[0]*X[0] + X[0]*X[1]*(A[0, 1] + A[1, 0]) + A[1, 1]*X[1]*X[1]
+    _ = A[0, 0]*X[0]*X[0] + X[0]*X[1]*(A[0, 1] + A[1, 0]) + A[1, 1]*X[1]*X[1]
+    return _
 
 @cuda.jit(device=True)
 def get_real_polyroots_2(a, b, c, roots):
@@ -102,7 +112,7 @@ def get_real_polyroots_2(a, b, c, roots):
             roots[1] = r1
     else:
         # Nan
-        return 1/0
+        return 0/0
 
 @cuda.jit(device=True)
 def get_eighen_val_2x2(M, l):
@@ -139,17 +149,21 @@ def get_eighen_vect_2x2(M, l, e1, e2):
         e2[0] = 0; e2[0] = 1
         
     else:
+        # averaging 2 for increased reliability
         e1[0] = M[0, 0] - l[1] + M[0, 1]; e1[1] = M[1,0] + M[1,1] - l[1]
         
-    
         if e1[0] == 0:
+            e1[1] = 1
             e2[0] = 1; e2[1] = 0
         elif e1[1] == 0:
+            e1[0] = 1
             e2[0] = 0; e2[1] = 1
         else:
-            _ = e1[0]/e1[1]
-            e2[0] = 1/sqrt(1+_*_)
-            e2[1] = -e2[0]*_
+            norm1 = sqrt(e1[0]**2 + e1[1]**2)
+            e1[0] /= norm1; e1[1] /= norm1
+            sign = copysign(1, e1[0]) # for whatever reason, python has no sign func
+            e2[1] = abs(e1[0])
+            e2[0] = -e1[1]*sign
     
     
 @cuda.jit(device=True)
