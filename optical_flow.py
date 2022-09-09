@@ -47,24 +47,26 @@ def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer
         alignment vector for each tile of each image
 
     """
+    current_time, verbose = time(), options['verbose'] > 2
+    n_iter = params['tuning']['kanadeIter']
+
+    n_images, n_patch_y, n_patch_x, _ \
+        = pre_alignment_bayer.shape
+        
+    if verbose:
+        t1 = time()
+        current_time = time()
+        print("Estimating Lucas-Kanade's optical flow")
 
     # grey level
     ref_img = ref_img_bayer[::2, ::2]/3 + ref_img_bayer[1::2, 1::2]/3 + ref_img_bayer[::2, 1::2]/6 + ref_img_bayer[1::2, ::2]/6
     comp_img = comp_img_bayer[:,::2, ::2]/3 + comp_img_bayer[:,1::2, 1::2]/3 + comp_img_bayer[:,::2, 1::2]/6 + comp_img_bayer[:,1::2, ::2]/6
     pre_alignment = pre_alignment_bayer/2 # dividing by 2 because grey image is decimated by 2
 
-
-    current_time, verbose = time(), options['verbose'] > 2
-
-    tile_size = params['tuning']['tileSizes']
-    n_iter = params['tuning']['kanadeIter']
-
-    n_images, n_patch_y, n_patch_x, _ \
-        = pre_alignment.shape
-
     if verbose:
-        current_time = time()
-        print("Estimating Lucas-Kanade's optical flow")
+        current_time = getTime(
+            current_time, ' -- Grey Image decimated')
+
         
     gradsx = np.empty_like(comp_img)
     gradsy = np.empty_like(comp_img)
@@ -81,12 +83,25 @@ def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer
         current_time = getTime(
             current_time, ' -- Gradients estimated')
 
-    alignment = np.array(pre_alignment, dtype=DEFAULT_NUMPY_FLOAT_TYPE)
+    alignment = cuda.to_device(pre_alignment) # init of flow, directly on GPU
+    cuda_ref_img = cuda.to_device(np.ascontiguousarray(ref_img))
+    cuda_comp_img = cuda.to_device(np.ascontiguousarray(comp_img))
+    cuda_gradsx = cuda.to_device(gradsx)
+    cuda_gradsy = cuda.to_device(gradsy)
+    
+    current_time = getTime(
+        current_time, ' -- Arrays moved to GPU')
+    
     for iter_index in range(n_iter):
         alignment = lucas_kanade_optical_flow_iteration(
-            ref_img, gradsx, gradsy, comp_img, alignment, options, params, iter_index)
+            cuda_ref_img, cuda_gradsx, cuda_gradsy, cuda_comp_img, alignment,
+            options, params, iter_index)
     
-    return alignment*2 # alignemnt for Bayer, 2 times bigger
+    if verbose:
+        getTime(t1, 'Flows estimated')
+        print('\n')
+    
+    return alignment
 
 
 def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, options, params, iter_index):
@@ -121,6 +136,7 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
 
     """
     verbose = options['verbose']
+    n_iter = params['tuning']['kanadeIter']
     tile_size = int(params['tuning']['tileSizes']/2) #grey tiles are twice as small
     n_images, n_patch_y, n_patch_x, _ \
         = alignment.shape
@@ -128,23 +144,10 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
 
     print(" -- Lucas-Kanade iteration {}".format(iter_index))
 
-    current_time = time()
 
-    if verbose:
-        current_time = getTime(
-            current_time, ' \t-- Moving arrays to GPU')
-    cuda_ref_img = cuda.to_device(np.ascontiguousarray(ref_img))
-    cuda_comp_img = cuda.to_device(np.ascontiguousarray(comp_img))
-    cuda_gradsx = cuda.to_device(gradsx)
-    cuda_gradsy = cuda.to_device(gradsy)
-    cuda_alignment = cuda.to_device(alignment.astype(DEFAULT_NUMPY_FLOAT_TYPE))
-    
-    if verbose:
-        current_time = getTime(
-            current_time, ' \t-- Preparing and solving systems')
         
     @cuda.jit
-    def get_new_flow(ref_img, comp_img, gradsx, gradsy, alignment):
+    def get_new_flow(ref_img, comp_img, gradsx, gradsy, alignment, last_it):
         
         
         image_index, patch_idy, patch_idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
@@ -194,22 +197,24 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
             alignment[image_index, patch_idy, patch_idx, 0] += tile_disp[0]
             alignment[image_index, patch_idy, patch_idx, 1] += tile_disp[1]
             
+            if last_it : #uspcaling because grey img is 2x smaller
+                alignment[image_index, patch_idy, patch_idx, 0] *= 2
+                alignment[image_index, patch_idy, patch_idx, 0] *= 2
     
+    current_time = time()
     
     get_new_flow[[(n_images, n_patch_y, n_patch_x), (tile_size, tile_size)]
-        ](cuda_ref_img, cuda_comp_img, cuda_gradsx, cuda_gradsy, cuda_alignment)
-    
-    
+        ](ref_img, comp_img, gradsx, gradsy, alignment, n_iter - 1 == iter_index)
     
     if verbose:
         current_time = getTime(
-            current_time, ' \t-- Retrieveing flow from GPU')
-    flow = cuda_alignment.copy_to_host()
+            current_time, ' --- Systems calculated and solved')
 
-    return flow
+    return alignment
 
 
-def coarse_subpixel_id_flow(idx_sub, idy_sub, tile_optical_flow, tile_size):
+@cuda.jit(device=True)
+def get_closest_flow(idx_sub, idy_sub, optical_flows, tile_size, imsize, local_flow):
     """
     Returns the estimated optical flow for a subpixel (or a pixel), based on
     the tile based estimated optical flow.
@@ -218,10 +223,9 @@ def coarse_subpixel_id_flow(idx_sub, idy_sub, tile_optical_flow, tile_size):
     ----------
     idx_sub, idy_sub : float
         subpixel ids where the flow must be estimated
-    tile_optical_flow : tensor[n_tiles_y, n_tiles_x, 2]
+    optical_flow : Array[n_tiles_y, n_tiles_x, 2]
         tile based optical flow
-    tile_size : int
-        size of the tiles
+
 
     Returns
     -------
@@ -235,47 +239,70 @@ def coarse_subpixel_id_flow(idx_sub, idy_sub, tile_optical_flow, tile_size):
     patch_idx_right = int(idx_sub//(tile_size//2))
     patch_idx_left = patch_idx_right - 1
 
-    imshape = tile_optical_flow.shape[:2]
+    imshape = optical_flows.shape[:2]
+    # out of bounds. With zero flow, they will be discarded later
+    if (idx_sub < 0 or idx_sub >= imsize[1] or
+        idy_sub < 0 or idy_sub >= imsize[0]):
+        flow_x = 0
+        flow_y = 0
 
     # corner conditions
-    if patch_idy_bottom >= imshape[0] and patch_idx_left < 0:
-        flow = tile_optical_flow[patch_idy_top, patch_idx_right]
+    elif patch_idy_bottom >= imshape[0] and patch_idx_left < 0:
+        flow_x = optical_flows[patch_idy_top, patch_idx_right, 0]
+        flow_y = optical_flows[patch_idy_top, patch_idx_right, 1]
 
     elif patch_idy_bottom >= imshape[0] and patch_idx_right >= imshape[1]:
-        flow = tile_optical_flow[patch_idy_top, patch_idx_left]
+        flow_x = optical_flows[patch_idy_top, patch_idx_left, 0]
+        flow_y = optical_flows[patch_idy_top, patch_idx_left, 1]
 
     elif patch_idy_top < 0 and patch_idx_left < 0:
-        flow = tile_optical_flow[patch_idy_bottom, patch_idx_right]
+        flow_x = optical_flows[patch_idy_bottom, patch_idx_right, 0]
+        flow_y = optical_flows[patch_idy_bottom, patch_idx_right, 1]
 
     elif patch_idy_top < 0 and patch_idx_right >= imshape[1]:
-        flow = tile_optical_flow[patch_idy_bottom, patch_idx_left]
+        flow_x = optical_flows[patch_idy_bottom, patch_idx_left, 0]
+        flow_y = optical_flows[patch_idy_bottom, patch_idx_left, 1]
 
     # side conditions
     elif patch_idy_bottom >= imshape[0]:
-        flow = (tile_optical_flow[patch_idy_top, patch_idx_left] +
-                tile_optical_flow[patch_idy_top, patch_idx_right])/2
+        flow_x = (optical_flows[patch_idy_top, patch_idx_left, 0] +
+                optical_flows[patch_idy_top, patch_idx_right, 0])/2
+        flow_y = (optical_flows[patch_idy_top, patch_idx_left, 1] +
+                optical_flows[patch_idy_top, patch_idx_right, 1])/2
 
     elif patch_idy_top < 0:
-        flow = (tile_optical_flow[patch_idy_bottom, patch_idx_left] +
-                tile_optical_flow[patch_idy_bottom, patch_idx_right])/2
+        flow_x = (optical_flows[patch_idy_bottom, patch_idx_left, 0] +
+                optical_flows[patch_idy_bottom, patch_idx_right, 0])/2
+        flow_y = (optical_flows[patch_idy_bottom, patch_idx_left, 1] +
+                optical_flows[patch_idy_bottom, patch_idx_right, 1])/2
 
     elif patch_idx_left < 0:
-        flow = (tile_optical_flow[patch_idy_bottom, patch_idx_right] +
-                tile_optical_flow[patch_idy_top, patch_idx_right])/2
+        flow_x = (optical_flows[patch_idy_bottom, patch_idx_right, 0] +
+                optical_flows[patch_idy_top, patch_idx_right, 0])/2
+        flow_y = (optical_flows[patch_idy_bottom, patch_idx_right, 1] +
+                optical_flows[patch_idy_top, patch_idx_right, 1])/2
 
     elif patch_idx_right >= imshape[1]:
-        flow = (tile_optical_flow[patch_idy_bottom, patch_idx_left] +
-                tile_optical_flow[patch_idy_top, patch_idx_left])/2
+        flow_x = (optical_flows[patch_idy_bottom, patch_idx_left, 0] +
+                optical_flows[patch_idy_top, patch_idx_left, 0])/2
+        flow_y = (optical_flows[patch_idy_bottom, patch_idx_left, 1] +
+                optical_flows[patch_idy_top, patch_idx_left, 1])/2
 
     # general case
     else:
         # Averaging patches
-        flow = (tile_optical_flow[patch_idy_top, patch_idx_left] +
-                tile_optical_flow[patch_idy_top, patch_idx_right] +
-                tile_optical_flow[patch_idy_bottom, patch_idx_left] +
-                tile_optical_flow[patch_idy_bottom, patch_idx_right])/4
-
-    return flow
+        flow_x = (optical_flows[patch_idy_top, patch_idx_left, 0] +
+                optical_flows[patch_idy_top, patch_idx_right, 0] +
+                optical_flows[patch_idy_bottom, patch_idx_left, 0] +
+                optical_flows[patch_idy_bottom, patch_idx_right, 0])/4
+        flow_y = (optical_flows[patch_idy_top, patch_idx_left, 1] +
+                optical_flows[patch_idy_top, patch_idx_right, 1] +
+                optical_flows[patch_idy_bottom, patch_idx_left, 1] +
+                optical_flows[patch_idy_bottom, patch_idx_right, 1])/4
+    
+ 
+    local_flow[0] = flow_x
+    local_flow[1] = flow_y
 
 # %% test code, to remove in the final version
 

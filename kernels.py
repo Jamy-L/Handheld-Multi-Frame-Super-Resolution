@@ -24,7 +24,7 @@ k_shrink = 2
 
 
 @cuda.jit(device=True)
-def compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, harris, DEBUG_GREY):
+def compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, harris):
     imshape_y, imshape_x = image.shape
     
     greys = cuda.shared.array((3,3), dtype=DEFAULT_NUMPY_FLOAT_TYPE)
@@ -48,8 +48,7 @@ def compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, ha
         
         #waiting the calculation of grey patch
         cuda.syncthreads()
-        if tx ==0 and ty ==0:
-            DEBUG_GREY[0] = greys[0, 0] 
+
         # estimating gradients
         grads_x = cuda.shared.array((3, 2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
         grads_y = cuda.shared.array((2, 3 ), dtype=DEFAULT_CUDA_FLOAT_TYPE)
@@ -90,7 +89,7 @@ def compute_k(l1, l2, k):
 
 
 @cuda.jit(device=True)
-def compute_kernel_cov(image, center_pos_x, center_pos_y, cov_i, DEBUG_E1, DEBUG_E2, DEBUG_L, DEBUG_GRAD, DEBUG_GREY):
+def compute_kernel_cov(image, center_pos_x, center_pos_y, cov_i, DEBUG_E1, DEBUG_E2, DEBUG_L):
     """
     Returns the inverted covariance of the kernel centered at the given position
 
@@ -119,7 +118,7 @@ def compute_kernel_cov(image, center_pos_x, center_pos_y, cov_i, DEBUG_E1, DEBUG
     
     harris = cuda.shared.array((2,2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
     harris[0, 0] = 0; harris[0, 1] = 0; harris[1, 0] = 0; harris[1, 1] = 0
-    compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, harris, DEBUG_GREY)
+    compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, harris)
     
     l = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
     e1 = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
