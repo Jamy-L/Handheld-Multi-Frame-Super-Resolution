@@ -63,6 +63,14 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
     VERBOSE = options['verbose']
     SCALE = params['scale']
     TILE_SIZE = params['tuning']['tileSizes']
+    k_detail =params['tuning']['tileSizes']
+    k_denoise = params['tuning']['k_denoise']
+    D_th = params['tuning']['D_th']
+    D_tr = params['tuning']['D_tr']
+    k_stretch = params['tuning']['k_stretch']
+    k_shrink = params['tuning']['k_shrink']
+    
+    
     N_IMAGES, N_TILES_Y, N_TILES_X, _ \
         = alignments.shape
 
@@ -74,7 +82,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
     output_size = (SCALE*native_im_size[0], SCALE*native_im_size[1])
     output_img = cuda.device_array(output_size+(9,), dtype = DEFAULT_NUMPY_FLOAT_TYPE) #third dim for rgb channel
     # TODO 3 channels are enough, the rest is for debugging
-
+    # we may also chose uint16 for output img, but float is nice for debugging
 
     # specifying the block size
     # 1 block per output pixel, 9 threads per block
@@ -210,12 +218,17 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
 
             
             if image_index == 0:
-                compute_kernel_cov(ref_img, patch_center_x[0], patch_center_y[0], cov_i, DEBUG_E1, DEBUG_E2, DEBUG_L)
+                compute_kernel_cov(ref_img, patch_center_x[0], patch_center_y[0], cov_i,
+                                   k_detail, k_denoise, D_th, D_tr, k_stretch,
+                                   k_shrink,DEBUG_E1, DEBUG_E2, DEBUG_L)
                 if tx == 0:
                     local_r[ty + 1] = 1 
 
             else:
-                compute_kernel_cov(comp_imgs[image_index - 1], patch_center_x[0], patch_center_y[0], cov_i, DEBUG_E1, DEBUG_E2, DEBUG_L)
+                compute_kernel_cov(comp_imgs[image_index - 1], patch_center_x[0],
+                                   patch_center_y[0], cov_i,
+                                   k_detail, k_denoise, D_th, D_tr, k_stretch,
+                                   k_shrink,DEBUG_E1, DEBUG_E2, DEBUG_L)
                 
                 # robustness
                 pos_x = uint16(round(coarse_ref_sub_x[0]))
@@ -261,8 +274,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                 y = max(0, quad_mat_prod(cov_i, dist))
                 # y can be slightly negative because of numerical precision.
                 # I clamp it to not explode the error with exp
-                w = math.exp(-y/2)
-
+                w = math.exp(-y/(4*2))
 
                 cuda.atomic.add(val, channel, c*w*local_r[channel])
                 cuda.atomic.add(acc, channel, w*local_r[channel])
@@ -311,6 +323,9 @@ def gamma(image):
 
 # %% test code, to remove in the final version
 
+def flat(x):
+    return 1-np.exp(-x/1000)
+
 
 def main(ref_img, comp_imgs, pre_alignment, options, params):
     t1 = time()
@@ -318,13 +333,13 @@ def main(ref_img, comp_imgs, pre_alignment, options, params):
     
     cuda_ref_img = cuda.to_device(ref_img)
     cuda_comp_imgs = cuda.to_device(comp_imgs)
-    cuda_pre_alignment = cuda.to_device(pre_alignment)
     
     current_time = getTime(
         current_time, 'Arrays moved to GPU')
     
     cuda_final_alignment = lucas_kanade_optical_flow(
         ref_img, comp_imgs, pre_alignment, options, params)
+    cuda_final_alignment = cuda.to_device(pre_alignment)
 
     current_time = time()
     
@@ -336,7 +351,7 @@ def main(ref_img, comp_imgs, pre_alignment, options, params):
     
     output = merge(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment, cuda_robustness, {"verbose": 3}, params)
     print('\nTotal ellapsed time : ', time() - t1)
-    return output
+    return output, cuda_robustness.copy_to_host()
     
 
 
@@ -354,54 +369,69 @@ for i in range(2, 10):
 pre_alignment = np.load(
     'C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/results_test1/unpaddedMotionVectors.npy')
 
-n_images, n_patch_y, n_patch_x, _ = pre_alignment.shape
-tile_size = 32
-native_im_size = ref_img.shape
 
-params = {'tuning': {'tileSizes': tile_size,
-                     'kanadeIter' : 3,
+params = {'tuning': {'kanadeIter': 3,
+                     'tileSizes': 32,
+                     'k_detail' : 0.3,  # [0.25, ..., 0.33]
+                     'k_denoise': 4,    # [3.0, ...,5.0]
+                     'D_th': 0.05,      # [0.001, ..., 0.010]
+                     'D_tr': 0.014,     # [0.006, ..., 0.020]
+                     'k_stretch' : 4,
+                     'k_shrink' : 2,
                      't' : 0.12,
-                     's1' : 12,
+                     's1' : 2,
                      's2' : 2,
                      'Mt' : 0.8,
                      'sigma_t' : 2,
                      'dt' : 15
                      },
-          'scale': 3}
+          'scale': 2}
 
-
-output = main(ref_img, comp_images, pre_alignment, {'verbose':3}, params)
+options = {'verbose' : 3}
+output, r = main(ref_img, comp_images[:-1], pre_alignment[:-1], options, params)
 
 
 #%%
 output_img = output[:,:,:3].copy()
 
-l1 = output[:,:,7]
-l2 = output[:,:,8]
+l1 = output[:,:,7].copy()
+l2 = output[:,:,8].copy()
 
 e1 = np.empty((output.shape[0], output.shape[1], 2))
-e1[:,:,0] = output[:,:,3]
-e1[:,:,1] = output[:,:,4]
-# e1[:,:,0]*=l1
-# e1[:,:,1]*=l1
+e1[:,:,0] = output[:,:,3].copy()
+e1[:,:,1] = output[:,:,4].copy()
+e1[:,:,0]*=flat(l1)
+e1[:,:,1]*=flat(l1)
 
 
 e2 = np.empty((output.shape[0], output.shape[1], 2))
-e2[:,:,0] = output[:,:,5]
-e2[:,:,1] = output[:,:,6]
-# e2[:,:,0]*=l2
-# e2[:,:,1]*=l2
+e2[:,:,0] = output[:,:,5].copy()
+e2[:,:,1] = output[:,:,6].copy()
+e2[:,:,0]*=flat(l2)
+e2[:,:,1]*=flat(l2)
 
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))
+
+plt.figure("output")
 plt.imshow(gamma(output_img/1023))
+base = np.empty((int(ref_img.shape[0]/2), int(ref_img.shape[1]/2), 3))
+base[:,:,0] = ref_img[1::2, 1::2]
+base[:,:,1] = (ref_img[::2, 1::2] + ref_img[1::2, ::2])/2
+base[:,:,2] = ref_img[::2, ::2]
+
+plt.figure("original")
+plt.imshow(gamma(base/1023))
 
 
+r2 = np.mean(((r+0.12)/12.12), axis = 3)
+plt.figure()
+plt.hist(r2.reshape(8*1560*2104))
 #%%
 # quivers for eighenvectors
 # Lower res because pyplot's quiver is really not made for that (=slow)
 plt.figure('quiver')
-scale = 3*10e0
+scale = 5*1e1
 plt.imshow(gamma(output[:,:,:3][::15, ::15]/1023))
 plt.quiver(e1[:,:,0][::15, ::15], e1[:,:,1][::15, ::15], width=0.001,linewidth=0.0001, scale=scale)
 plt.quiver(e2[:,:,0][::15, ::15], e2[:,:,1][::15, ::15], width=0.001,linewidth=0.0001, scale=scale, color='b')
@@ -409,7 +439,4 @@ plt.quiver(e2[:,:,0][::15, ::15], e2[:,:,1][::15, ::15], width=0.001,linewidth=0
 
 # # No RGB matrix for this picture unfortunately... So no color correction
 # # img = process_isp(raw=raw_ref_img, img=(output_img/1023), do_color_correction=False, do_tonemapping=True, do_gamma=True, do_sharpening=False)
-
-# # plt.figure()
-# # plt.imshow(gamma(output[:,:,:3]/1023))
 

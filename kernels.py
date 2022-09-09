@@ -15,14 +15,6 @@ from linalg import get_eighen_elmts_2x2, invert_2x2, clamp
 DEFAULT_CUDA_FLOAT_TYPE = float32
 DEFAULT_NUMPY_FLOAT_TYPE = np.float32
 
-k_detail = 0.3  # [0.25, ..., 0.33]
-k_denoise = 4   # [3.0, ...,5.0]
-D_th = 0.05     # [0.001, ..., 0.010]
-D_tr = 0.014    # [0.006, ..., 0.020]
-k_stretch = 4
-k_shrink = 2
-
-
 @cuda.jit(device=True)
 def compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, harris):
     imshape_y, imshape_x = image.shape
@@ -72,7 +64,8 @@ def compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, ha
             
         
 @cuda.jit(device=True)
-def compute_k(l1, l2, k):
+def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
+                          k_shrink):
     A = 1+sqrt((l1 - l2)/(l1 + l2))
     D = clamp(1 - sqrt(l1)/D_tr+D_th, 0, 1)
     k_1 = k_detail*k_stretch*A
@@ -89,7 +82,9 @@ def compute_k(l1, l2, k):
 
 
 @cuda.jit(device=True)
-def compute_kernel_cov(image, center_pos_x, center_pos_y, cov_i, DEBUG_E1, DEBUG_E2, DEBUG_L):
+def compute_kernel_cov(image, center_pos_x, center_pos_y, cov_i,
+                       k_detail, k_denoise, D_th, D_tr, k_stretch,
+                       k_shrink, DEBUG_E1, DEBUG_E2, DEBUG_L):
     """
     Returns the inverted covariance of the kernel centered at the given position
 
@@ -129,7 +124,8 @@ def compute_kernel_cov(image, center_pos_x, center_pos_y, cov_i, DEBUG_E1, DEBUG
     if tx == 0 and ty ==0 :
         get_eighen_elmts_2x2(harris, l, e1, e2)
         if l[0] + l[1] != 0:
-            compute_k(l[0], l[1], k)
+            compute_k(l[0], l[1], k, k_detail, k_denoise, D_th, D_tr, k_stretch,
+            k_shrink)
 
         DEBUG_E1[0] = e1[0]; DEBUG_E1[1] = e1[1]
         DEBUG_E2[0] = e2[0]; DEBUG_E2[1] = e2[1]
@@ -145,6 +141,7 @@ def compute_kernel_cov(image, center_pos_x, center_pos_y, cov_i, DEBUG_E1, DEBUG
         cuda.syncthreads()
         if tx == 0 and ty ==0 :
             invert_2x2(cov, cov_i)
+        
     else:
         # For constant luminance patch, this a dummy filter
         cov_i[0, 0] = 1
