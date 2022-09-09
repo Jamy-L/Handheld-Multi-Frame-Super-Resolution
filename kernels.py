@@ -12,6 +12,8 @@ from numba import uint8, uint16, float32, float64, cuda
 from math import sqrt
 from linalg import get_eighen_elmts_2x2, invert_2x2, clamp
 
+DEFAULT_CUDA_FLOAT_TYPE = float32
+DEFAULT_NUMPY_FLOAT_TYPE = np.float32
 
 k_detail = 0.3  # [0.25, ..., 0.33]
 k_denoise = 4   # [3.0, ...,5.0]
@@ -25,7 +27,7 @@ k_shrink = 2
 def compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, harris, DEBUG_GREY):
     imshape_y, imshape_x = image.shape
     
-    greys = cuda.shared.array((3,3), dtype=float64)
+    greys = cuda.shared.array((3,3), dtype=DEFAULT_NUMPY_FLOAT_TYPE)
     tx = cuda.threadIdx.x-1
     ty = cuda.threadIdx.y-1
     
@@ -49,8 +51,8 @@ def compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, ha
         if tx ==0 and ty ==0:
             DEBUG_GREY[0] = greys[0, 0] 
         # estimating gradients
-        grads_x = cuda.shared.array((3, 2), dtype=float64)
-        grads_y = cuda.shared.array((2, 3 ), dtype=float64)
+        grads_x = cuda.shared.array((3, 2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        grads_y = cuda.shared.array((2, 3 ), dtype=DEFAULT_CUDA_FLOAT_TYPE)
         
         if tx < 1:
             grads_x[ty+1, tx+1] = greys[ty + 1, tx + 2] - greys[ty + 1, tx + 1]
@@ -115,15 +117,15 @@ def compute_kernel_cov(image, center_pos_x, center_pos_y, cov_i, DEBUG_E1, DEBUG
     downsampled_center_pos_x = center_pos_x - center_pos_x%2
     downsampled_center_pos_y = center_pos_y - center_pos_y%2
     
-    harris = cuda.shared.array((2,2), dtype = float64)
+    harris = cuda.shared.array((2,2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
     harris[0, 0] = 0; harris[0, 1] = 0; harris[1, 0] = 0; harris[1, 1] = 0
     compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, harris, DEBUG_GREY)
     
-    l = cuda.shared.array(2, dtype=float64)
-    e1 = cuda.shared.array(2, dtype=float64)
-    e2 = cuda.shared.array(2, dtype=float64)
-    k = cuda.shared.array(2, dtype=float64)
-    cov = cuda.shared.array((2, 2), dtype=float64)
+    l = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+    e1 = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+    e2 = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+    k = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+    cov = cuda.shared.array((2, 2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
     
     if tx == 0 and ty ==0 :
         get_eighen_elmts_2x2(harris, l, e1, e2)

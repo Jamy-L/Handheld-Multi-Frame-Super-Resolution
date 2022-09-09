@@ -16,9 +16,10 @@ from time import time
 import cupy as cp
 import rawpy
 from tqdm import tqdm
-from numba import cuda, float64, int16
+from numba import cuda, float32, float64, int16
 
-
+DEFAULT_CUDA_FLOAT_TYPE = float32
+DEFAULT_NUMPY_FLOAT_TYPE = np.float32
 
 def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer, options, params):
     """
@@ -80,7 +81,7 @@ def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer
         current_time = getTime(
             current_time, ' -- Gradients estimated')
 
-    alignment = np.array(pre_alignment, dtype=np.float64)
+    alignment = np.array(pre_alignment, dtype=DEFAULT_NUMPY_FLOAT_TYPE)
     for iter_index in range(n_iter):
         alignment = lucas_kanade_optical_flow_iteration(
             ref_img, gradsx, gradsy, comp_img, alignment, options, params, iter_index)
@@ -136,7 +137,7 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
     cuda_comp_img = cuda.to_device(np.ascontiguousarray(comp_img))
     cuda_gradsx = cuda.to_device(gradsx)
     cuda_gradsy = cuda.to_device(gradsy)
-    cuda_alignment = cuda.to_device(alignment.astype(np.float64))
+    cuda_alignment = cuda.to_device(alignment.astype(DEFAULT_NUMPY_FLOAT_TYPE))
     
     if verbose:
         current_time = getTime(
@@ -155,8 +156,8 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
         pixel_global_idx = tile_size//2 * patch_idx + pixel_local_idx
         pixel_global_idy = tile_size//2 * patch_idy + pixel_local_idy
         
-        ATA = cuda.shared.array((2,2), dtype = float64)
-        ATB = cuda.shared.array(2, dtype = float64)
+        ATA = cuda.shared.array((2,2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+        ATB = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
         ATA[0, 0] = 0
         ATA[0, 1] = 0
         ATA[1, 0] = 0
@@ -186,7 +187,7 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
             cuda.atomic.add(ATA, (1, 1), grady**2)
         
         # We need the entire tile accumulation
-        tile_disp = cuda.shared.array(2, dtype = float64)
+        tile_disp = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
         cuda.syncthreads()
         if pixel_local_idx == 0 and pixel_local_idy == 0 and inbound:
             solve_2x2(ATA, ATB, tile_disp) 

@@ -27,6 +27,9 @@ from torch import from_numpy
 from fast_two_stage_psf_correction.fast_optics_correction.raw2rgb import process_isp
 
 EPSILON = 1e-6
+DEFAULT_CUDA_FLOAT_TYPE = float32
+DEFAULT_NUMPY_FLOAT_TYPE = np.float32
+
 
 def merge(ref_img, comp_imgs, alignments, options, params):
     """
@@ -249,12 +252,12 @@ def merge(ref_img, comp_imgs, alignments, options, params):
         output_size_y, output_size_x, _ = output_img.shape
         input_size_y, input_size_x = ref_img.shape
         
-        acc = cuda.shared.array(3, dtype=float64)
-        val = cuda.shared.array(3, dtype=float64)
+        acc = cuda.shared.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        val = cuda.shared.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         
         # We pick one single thread to do certain operations
-        coarse_ref_sub_x = cuda.shared.array(1, dtype=float64)
-        coarse_ref_sub_y = cuda.shared.array(1, dtype=float64)
+        coarse_ref_sub_x = cuda.shared.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        coarse_ref_sub_y = cuda.shared.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         if tx == 0 and ty == 0:
             
             coarse_ref_sub_x[0] = output_pixel_idx / SCALE
@@ -275,7 +278,7 @@ def merge(ref_img, comp_imgs, alignments, options, params):
 
         patch_center_x = cuda.shared.array(1, uint16)
         patch_center_y = cuda.shared.array(1, uint16)
-        local_optical_flow = cuda.shared.array(2, dtype=float64)
+        local_optical_flow = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
         for image_index in range(N_IMAGES + 1):
             if tx == 0 and ty == 0:
@@ -298,12 +301,12 @@ def merge(ref_img, comp_imgs, alignments, options, params):
             cuda.syncthreads()
             
             # TODO compute R and kernel with another thread
-            cov_i = cuda.shared.array((2, 2), dtype=float64)
-            DEBUG_E1 = cuda.shared.array(2, dtype=float64)
-            DEBUG_E2 = cuda.shared.array(2, dtype=float64)
-            DEBUG_L = cuda.shared.array(2, dtype=float64)
-            DEBUG_GRAD = cuda.shared.array(2, dtype=float64)
-            DEBUG_GREY = cuda.shared.array(1, dtype=float64)
+            cov_i = cuda.shared.array((2, 2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
+            DEBUG_E1 = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+            DEBUG_E2 = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+            DEBUG_L = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+            DEBUG_GRAD = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+            DEBUG_GREY = cuda.shared.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
             
             if image_index == 0:
                 compute_kernel_cov(ref_img, patch_center_x[0], patch_center_y[0], cov_i, DEBUG_E1, DEBUG_E2, DEBUG_L, DEBUG_GRAD, DEBUG_GREY)
@@ -337,7 +340,7 @@ def merge(ref_img, comp_imgs, alignments, options, params):
                     fine_sub_pos_y = SCALE * (patch_pixel_idy - local_optical_flow[1])
 
                 
-                dist = cuda.local.array(2, dtype=float64)
+                dist = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
                 dist[0] = (fine_sub_pos_x - output_pixel_idx)
                 dist[1] = (fine_sub_pos_y - output_pixel_idy)
                 
