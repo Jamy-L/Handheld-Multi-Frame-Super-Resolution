@@ -21,6 +21,9 @@ from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, 
 from time import time
 from math import isnan, sqrt, exp
 
+DEFAULT_CUDA_FLOAT_TYPE = float32
+DEFAULT_NUMPY_FLOAT_TYPE = np.float32
+
 def compute_robustness(ref_img, comp_imgs, flows, sigma_t, dt, Mt, s1, s2, t):
     
     n_images, imshape_y, imshape_x = comp_imgs.shape
@@ -139,24 +142,24 @@ def compute_robustness(ref_img, comp_imgs, flows, sigma_t, dt, Mt, s1, s2, t):
     
     @cuda.jit
     def cuda_compute_robustness(ref_img, comp_imgs, flows, sigma_t, dt, Mt, s1, s2, t, R, r):
-        guide_patch_ref = cuda.shared.array((3, 3, 3), dtype=float64)
-        guide_patch_comp = cuda.shared.array((3, 3, 3), dtype=float64)
+        guide_patch_ref = cuda.shared.array((3, 3, 3), dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        guide_patch_comp = cuda.shared.array((3, 3, 3), dtype=DEFAULT_CUDA_FLOAT_TYPE)
         
         image_index, pixel_idy, pixel_idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
         tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
         
         compute_guide_patchs(ref_img, comp_imgs, flows, guide_patch_ref, guide_patch_comp)
-        local_stats_ref = cuda.shared.array(2, dtype=float64) #mu, sigma
+        local_stats_ref = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) #mu, sigma
         local_stats_ref[0] = 0
         local_stats_ref[1] = 0
-        local_stats_comp = cuda.shared.array(2, dtype=float64)
+        local_stats_comp = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         local_stats_comp[0] = 0
         local_stats_comp[1] = 0
         cuda.syncthreads()
         
-        maxi = cuda.shared.array(2, dtype=float64) 
-        mini = cuda.shared.array(2, dtype=float64)
-        M = cuda.shared.array(2, dtype=float64)
+        maxi = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) 
+        mini = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        M = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         
         compute_local_stats(guide_patch_ref, guide_patch_comp,
                             local_stats_ref, local_stats_comp)
