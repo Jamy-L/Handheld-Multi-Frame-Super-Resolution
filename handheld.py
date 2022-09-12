@@ -97,7 +97,7 @@ params = {'block matching': {
                     'kanadeIter': 3, # 3 
                     }},
             'merging': {
-                'scale': 1,
+                'scale': 5,
                 'tuning': {
                     'tileSizes': 32,
                     'k_detail' : 0.3,  # [0.25, ..., 0.33]

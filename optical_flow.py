@@ -68,16 +68,15 @@ def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer
             current_time, ' -- Grey Image decimated')
 
         
-    gradsx = np.empty_like(comp_img)
-    gradsy = np.empty_like(comp_img)
+    gradx = np.empty_like(ref_img)
+    grady = np.empty_like(ref_img)
     
-    for image_id in range(n_images):
+    # Estimating gradients with cv2 sobel filters
+    # Data format is very important. default 8uint is bad, because we use negative
+    # Values, and because may go up to a value of 3080. We need signed int16
         
-        # Estimating gradients with cv2 sobel filters
-        # Data format is very important. default 8uint is bad, because we use negative
-        # Values, and because may go up to a value of 3080. We need signed int16
-        gradsx[image_id] = cv2.Sobel(comp_img[image_id], cv2.CV_16S, dx=1, dy=0)
-        gradsy[image_id] = cv2.Sobel(comp_img[image_id], cv2.CV_16S, dx=0, dy=1)
+    gradx = cv2.Sobel(ref_img, cv2.CV_16S, dx=1, dy=0)
+    grady = cv2.Sobel(ref_img, cv2.CV_16S, dx=0, dy=1)
 
     if verbose:
         current_time = getTime(
@@ -86,15 +85,15 @@ def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer
     alignment = cuda.to_device(pre_alignment) # init of flow, directly on GPU
     cuda_ref_img = cuda.to_device(np.ascontiguousarray(ref_img))
     cuda_comp_img = cuda.to_device(np.ascontiguousarray(comp_img))
-    cuda_gradsx = cuda.to_device(gradsx)
-    cuda_gradsy = cuda.to_device(gradsy)
+    cuda_gradx = cuda.to_device(gradx)
+    cuda_grady = cuda.to_device(grady)
     
     current_time = getTime(
         current_time, ' -- Arrays moved to GPU')
     
     for iter_index in range(n_iter):
         alignment = lucas_kanade_optical_flow_iteration(
-            cuda_ref_img, cuda_gradsx, cuda_gradsy, cuda_comp_img, alignment,
+            cuda_ref_img, cuda_gradx, cuda_grady, cuda_comp_img, alignment,
             options, params, iter_index)
     
     if verbose:
@@ -104,7 +103,7 @@ def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer
     return alignment
 
 
-def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, options, params, iter_index):
+def lucas_kanade_optical_flow_iteration(ref_img, gradx, grady, comp_img, alignment, options, params, iter_index):
     """
     Computes one iteration of the Lucas-Kanade optical flow
 
@@ -112,14 +111,14 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
     ----------
     ref_img : Array [imsize_y, imsize_x]
         Ref image
-    gradsx : Array [n_images, imsize_y, imsize_x]
-        Horizontal gradient of the compared images
-    gradsy : Array [n_images, imsize_y, imsize_x]
-        Vertical gradient of thecompared images
+    gradx : Array [imsize_y, imsize_x]
+        Horizontal gradient of the ref image
+    grady : Array [imsize_y, imsize_x]
+        Vertical gradient of the ref image
     comp_img : Array[n_images, imsize_y, imsize_x]
         The images to rearrange and compare to the reference
     alignment : Array[n_images, n_tiles_y, n_tiles_x, 2]
-        The inial alignment of the tile 
+        The inial alignment of the tiles
     options : Dict
         Options to pass
     params : Dict
@@ -147,7 +146,7 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
 
         
     @cuda.jit
-    def get_new_flow(ref_img, comp_img, gradsx, gradsy, alignment, last_it):
+    def get_new_flow(ref_img, comp_img, gradx, grady, alignment, last_it):
         
         
         image_index, patch_idy, patch_idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
@@ -171,14 +170,14 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
         inbound = inbound and  (0 <= pixel_global_idx < imsize_x) and (0 <= pixel_global_idy < imsize_y)
     
         if inbound :
-            new_idx = round(pixel_global_idx + alignment[image_index, pixel_local_idy, pixel_local_idx, 0])
-            new_idy = round(pixel_global_idy + alignment[image_index, pixel_local_idy, pixel_local_idx, 1])
+            new_idx = round(pixel_global_idx + alignment[image_index, patch_idy, patch_idx, 0])
+            new_idy = round(pixel_global_idy + alignment[image_index, patch_idy, patch_idx, 1])
         
         inbound = inbound and (0 <= new_idx < imsize_x) and (0 <= new_idy < imsize_y)
         
         if inbound:
-            gradx = gradsx[image_index, new_idy, new_idx]
-            grady = gradsy[image_index, new_idy, new_idx]
+            gradx = gradx[new_idy, new_idx]
+            grady = grady[new_idy, new_idx]
             gradt = int16(comp_img[image_index, new_idy, new_idx]) - int16(ref_img[new_idy, new_idx])
             
             cuda.atomic.add(ATB, 0, gradx*gradt)
@@ -199,12 +198,12 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
             
             if last_it : #uspcaling because grey img is 2x smaller
                 alignment[image_index, patch_idy, patch_idx, 0] *= 2
-                alignment[image_index, patch_idy, patch_idx, 0] *= 2
+                alignment[image_index, patch_idy, patch_idx, 1] *= 2
     
     current_time = time()
     
     get_new_flow[[(n_images, n_patch_y, n_patch_x), (tile_size, tile_size)]
-        ](ref_img, comp_img, gradsx, gradsy, alignment, n_iter - 1 == iter_index)
+        ](ref_img, comp_img, gradx, grady, alignment, n_iter - 1 == iter_index)
     
     if verbose:
         current_time = getTime(

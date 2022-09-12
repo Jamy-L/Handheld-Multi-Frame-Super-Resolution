@@ -197,8 +197,9 @@ def upscale_alignement(pre_alignment, imsize, tile_size):
 
 img = plt.imread("S:/Images/Photos/Usine/20190420_160949.jpg")
 transformation_params = {'max_translation':3}
-burst, flow = single2lrburst(img, 5, downsample_factor=2, transformation_params=transformation_params)
-dec_burst = decimate(burst)
+burst, flow = single2lrburst(img, 5, downsample_factor=1.5, transformation_params=transformation_params)
+dec_burst = decimate(burst)[:,:,:-1]
+flow = flow[:,:,:,:-1]
 
 
 params = {'block matching': {
@@ -260,13 +261,13 @@ EQ_final = EQ(truth, final_alignment)
 
 
 plt.figure("Pre alignment")
-plt.imshow(EQ_pre[0], vmin=0, vmax =50, cmap = 'Reds')
+plt.imshow(EQ_pre[0], vmin=0, vmax =5, cmap = 'Reds')
 plt.colorbar()
 
 plt.figure("Final alignment")
-plt.imshow(EQ_final[0], vmin=0, vmax =50, cmap = "Reds")
+plt.imshow(EQ_final[0], vmin=0, vmax =5, cmap = "Reds")
 plt.colorbar()
-
+#%%
 final_alignment[np.isnan(final_alignment)] = 0
 print("Pre alignment : ", np.mean(EQ(truth, pre_alignment)))
 print("Final alignment : ", np.mean(EQ(truth, final_alignment)))
