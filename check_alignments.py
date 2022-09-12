@@ -36,7 +36,9 @@ def gamma(image):
 
 final_alignments = lucas_kanade_optical_flow(
     ref_img, comp_images, pre_alignment, {"verbose": 3}, params)
-# %%
+
+
+# %% create a video of the realigned frames
 FPS = 30
 
 al = np.zeros(final_alignments[0].shape)
@@ -63,3 +65,4 @@ for i in tqdm(range(1, 9)):
     for j in range(FPS):
         out.write(frame.astype('uint8'))
 out.release()
+
