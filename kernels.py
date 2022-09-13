@@ -33,10 +33,10 @@ def compute_harris(image, downsampled_center_pos_x, downsampled_center_pos_y, ha
         thread_pixel_x = downsampled_center_pos_x + 2*tx
         thread_pixel_y = downsampled_center_pos_y + 2*ty
         
-        greys[1+ty, 1+tx] = (image[thread_pixel_y, thread_pixel_x]/3 +
-                      image[thread_pixel_y + 1, thread_pixel_x + 1]/3 +
-                      image[thread_pixel_y + 1, thread_pixel_x]/6 +
-                      image[thread_pixel_y, thread_pixel_x + 1]/6)
+        greys[1+ty, 1+tx] = (image[thread_pixel_y, thread_pixel_x] +
+                             image[thread_pixel_y + 1, thread_pixel_x + 1] +
+                             image[thread_pixel_y + 1, thread_pixel_x] +
+                             image[thread_pixel_y, thread_pixel_x + 1])/4
         
         #waiting the calculation of grey patch
         cuda.syncthreads()

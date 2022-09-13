@@ -29,6 +29,9 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
     imsize = ref_img.shape
     
     VERBOSE = options['verbose']
+    
+    CFA_pattern = params['exif']['CFA Pattern']
+    
     tile_size = params['tuning']["tileSizes"]
     t = params['tuning']["t"]
     s1 = params['tuning']["s1"]
@@ -44,6 +47,29 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
     r = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x, 3))
     R = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x, 3))
     
+    
+    @cuda.jit(device=True)
+    def get_channel(patch_pixel_idx, patch_pixel_idy):
+        """
+        Return 0, 1 or 2 depending if the coordinates point a red, green or
+        blue pixel on the Bayer frame
+
+        Parameters
+        ----------
+        patch_pixel_idx : unsigned int
+            horizontal coordinates
+        patch_pixel_idy : unigned int
+            vertical coordinates
+
+        Returns
+        -------
+        int
+
+        """
+        return uint8(CFA_pattern[patch_pixel_idy%2, patch_pixel_idx%2])
+    
+    
+    
     @cuda.jit(device=True)
     def compute_guide_patchs(ref_img, comp_imgs, flows, guide_patch_ref, guide_patch_comp):
         image_index, pixel_idy, pixel_idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
@@ -57,12 +83,12 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         
         if (0 <= top_left_ref_y < imshape_y -1) and (0 <= top_left_ref_x < imshape_x -1): # ref inbounds
             # ref
-            guide_patch_ref[ty + 1, tx + 1, 0] = ref_img[top_left_ref_y + 1 ,
-                                                         top_left_ref_x + 1] #r
-            guide_patch_ref[ty + 1, tx + 1, 1] = (ref_img[top_left_ref_y, top_left_ref_x + 1] +
-                                                  ref_img[top_left_ref_y + 1, top_left_ref_x])/2#g
-            guide_patch_ref[ty + 1, tx + 1, 2] = ref_img[top_left_ref_y,
-                                                         top_left_ref_x] #b   
+            for i in range(2):
+                for j in range(2):
+                    channel = get_channel(j, i)
+                    guide_patch_ref[ty + 1, tx + 1, channel] = ref_img[top_left_ref_y + i ,
+                                                                 top_left_ref_x + j]
+            guide_patch_ref[ty + 1, tx + 1, 1]/=2 # avergaging the green contribution
             
             
             # Moving. We divide flow by 2 because rgb image is twice smaller
@@ -73,36 +99,62 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
             top_left_m_y = round(top_left_ref_y + flow[1]/2)
             top_left_m_y = top_left_m_y - top_left_m_y%2
 
-            
-            if (0 <= top_left_m_y < imshape_y) and (0 <= top_left_m_x < imshape_x):
-                guide_patch_comp[ty + 1, tx + 1, 2] = comp_imgs[image_index, top_left_m_y, top_left_m_x] # b
-            else:
-                guide_patch_comp[ty + 1, tx + 1, 2] = 0/0 #Nan
-                
-            
-            if (0 <= top_left_m_y + 1< imshape_y) and (0 <= top_left_m_x + 1< imshape_x):
-                guide_patch_comp[ty + 1, tx + 1, 0] = comp_imgs[image_index, top_left_m_y + 1, top_left_m_x + 1] # r
-            else:
-                guide_patch_comp[ty + 1, tx + 1, 0] = 0/0 #Nan
-                
-            if (0 <= top_left_m_y < imshape_y) and (0 <= top_left_m_x + 1< imshape_x):
-                g1 = comp_imgs[image_index, top_left_m_y, top_left_m_x + 1] # g1
-            else:
-                g1 = 0/0 #Nan
-            
-            if (0 <= top_left_m_y + 1< imshape_y) and (0 <= top_left_m_x < imshape_x):
-                g2 = comp_imgs[image_index, top_left_m_y + 1, top_left_m_x] # g2
-            else:
-                g2 = 0 / 0  # Nan
+            g = 0   # green accumulator
 
-            if isnan(g1) and isnan(g2):
-                guide_patch_comp[ty + 1, tx + 1, 1] = 0/0
-            elif isnan(g1):
-                guide_patch_comp[ty + 1, tx + 1, 1] = g2
-            elif isnan(g2):
-                guide_patch_comp[ty + 1, tx + 1, 1] = g1
+            channel = get_channel(0, 0)
+            if (0 <= top_left_m_y < imshape_y) and (0 <= top_left_m_x < imshape_x): # top left
+                if channel == 1:
+                    g += comp_imgs[image_index, top_left_m_y, top_left_m_x]
+                else:
+                    guide_patch_comp[ty + 1, tx + 1, channel] = comp_imgs[image_index, top_left_m_y, top_left_m_x]
             else:
-                guide_patch_comp[ty + 1, tx + 1, 1] = (g1 + g2)/2
+                if channel == 1:
+                    g += 0/0
+                else:
+                    guide_patch_comp[ty + 1, tx + 1, channel] = 0/0 #Nan
+                
+            channel = get_channel(1, 1)
+            if (0 <= top_left_m_y + 1< imshape_y) and (0 <= top_left_m_x + 1< imshape_x): # bottom right
+                if channel == 1:
+                    g += comp_imgs[image_index, top_left_m_y, top_left_m_x]
+                else:
+                    guide_patch_comp[ty + 1, tx + 1, channel] = comp_imgs[image_index, top_left_m_y + 1, top_left_m_x + 1]
+            else:
+                if channel == 1:
+                    g += 0/0
+                else:
+                    guide_patch_comp[ty + 1, tx + 1, channel] = 0/0 #Nan
+                
+                
+            channel = get_channel(0, 1) 
+            if (0 <= top_left_m_y < imshape_y) and (0 <= top_left_m_x + 1< imshape_x):  # top right
+                if channel == 1:
+                    g += comp_imgs[image_index, top_left_m_y, top_left_m_x]
+                else:
+                    guide_patch_comp[ty + 1, tx + 1, channel] = comp_imgs[image_index, top_left_m_y, top_left_m_x + 1]
+            else:
+                if channel == 1:
+                    g += 0/0
+                else:
+                    guide_patch_comp[ty + 1, tx + 1, channel] = 0/0 #Nan
+            
+            
+            
+            
+            channel = get_channel(1, 0) 
+            if (0 <= top_left_m_y + 1< imshape_y) and (0 <= top_left_m_x < imshape_x): # bottom left
+                if channel == 1:
+                    g += comp_imgs[image_index, top_left_m_y, top_left_m_x]
+                else:
+                    guide_patch_comp[ty + 1, tx + 1, channel] = comp_imgs[image_index, top_left_m_y + 1, top_left_m_x] # g2
+            else:
+                if channel == 1:
+                    g += 0/0
+                else:
+                    guide_patch_comp[ty + 1, tx + 1, channel] = 0/0 #Nan
+
+
+            guide_patch_comp[ty + 1, tx + 1, 1] /= 2 # Averaging greens 
             
             
         else: #out of bounds
@@ -264,45 +316,6 @@ def fetch_robustness(pos_x, pos_y,image_index, R, local_R):
     
     if tx == 0 and ty >=0: # TODO Neirest neighboor is made here. Maybe bilinear interpolation is better ?
         local_R[ty] = max(0, R[image_index, downscaled_posy, downscaled_posx, ty])
-    
-    
-    
-# %% test code, to remove in the final version
-
-# raw_ref_img = rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N000.dng'
-#                         )
-# ref_img = raw_ref_img.raw_image.copy()
-
-
-# comp_images = rawpy.imread(
-#     'C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N001.dng').raw_image.copy()[None]
-# for i in range(2, 10):
-#     comp_images = np.append(comp_images, rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N00{}.dng'.format(i)
-#                                                       ).raw_image.copy()[None], axis=0)
-
-# pre_alignment = np.load(
-#     'C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/results_test1/unpaddedMotionVectors.npy')
-
-# n_images, n_patch_y, n_patch_x, _ = pre_alignment.shape
-# tile_size1 = 32
-# native_im_size = ref_img.shape
-
-# params = {'tuning': {'tileSizes': 32}, 'scale': 1}
-# params['tuning']['kanadeIter'] = 3
-# t = 0.12
-# s1 = 12
-# s2 = 2
-# Mt = 0.8
-
-# sigma_t = 2
-# dt = 15
-
-
-
-
-# t1 = time()
-# final_alignments = lucas_kanade_optical_flow(
-#     ref_img, comp_images, pre_alignment, {"verbose": 3}, params)
-
-# output = compute_robustness(ref_img, comp_images, final_alignments, sigma_t, dt, Mt, s1, s2, t, 32)
-# print('\nTotal ellapsed time : ', time() - t1)
+        
+        
+        

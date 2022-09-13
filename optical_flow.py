@@ -137,6 +137,7 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradx, grady, comp_img, alignme
     verbose = options['verbose']
     n_iter = params['tuning']['kanadeIter']
     tile_size = int(params['tuning']['tileSizes']/2) #grey tiles are twice as small
+    EPSILON =  params['epsilon div']
     n_images, n_patch_y, n_patch_x, _ \
         = alignment.shape
     _, imsize_y, imsize_x = comp_img.shape
@@ -192,7 +193,11 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradx, grady, comp_img, alignme
         tile_disp = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
         cuda.syncthreads()
         if pixel_local_idx == 0 and pixel_local_idy == 0 and inbound:
-            solve_2x2(ATA, ATB, tile_disp) 
+            if ATA[0, 0]*ATA[1, 1] - ATA[0, 1]*ATA[1, 0] < EPSILON : # Aray cannot be inverted
+                tile_disp[0] = 0
+                tile_disp[1] = 0
+            else:
+                solve_2x2(ATA, ATB, tile_disp) 
             alignment[image_index, patch_idy, patch_idx, 0] += tile_disp[0]
             alignment[image_index, patch_idy, patch_idx, 1] += tile_disp[1]
             
@@ -239,11 +244,18 @@ def get_closest_flow(idx_sub, idy_sub, optical_flows, tile_size, imsize, local_f
     patch_idx_left = patch_idx_right - 1
 
     imshape = optical_flows.shape[:2]
-    # out of bounds. With zero flow, they will be discarded later
+    # Index out of bound. With zero flow, they will be discarded later
     if (idx_sub < 0 or idx_sub >= imsize[1] or
         idy_sub < 0 or idy_sub >= imsize[0]):
         flow_x = 0
         flow_y = 0
+    
+    # Side condition when the required patch is not existing (because it would be 
+    # too small for block matching)
+    elif patch_idy_top >= imshape[0] or patch_idx_left >= imshape[1]:
+        flow_x = 0
+        flow_y = 0
+
 
     # corner conditions
     elif patch_idy_bottom >= imshape[0] and patch_idx_left < 0:
