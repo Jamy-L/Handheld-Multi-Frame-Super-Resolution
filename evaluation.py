@@ -15,6 +15,7 @@ from optical_flow import get_closest_flow, lucas_kanade_optical_flow
 from numba import cuda, float64
 
 
+
 #%% Single img to burst
 # generates a downsampled synthetic burst from a single image 
 # with the optical flow from the ref img to the moved images.
@@ -170,10 +171,10 @@ def decimate(burst):
     output[:,1::2,1::2] = burst[:,1::2,1::2,0] #b
     return output
 
-def upscale_alignement(pre_alignment, imsize, tile_size):
-    upscaled_alignment = np.empty(((pre_alignment.shape[0],)+imsize+(2,)))
-    
-    @cuda.jit 
+def upscale_alignement(alignment, imsize, tile_size):
+    upscaled_alignment = cuda.device_array(((alignment.shape[0],)+imsize+(2,)))
+    cuda_alignment = cuda.to_device(np.ascontiguousarray(alignment))
+    @cuda.jit
     def get_flow(upscaled_alignment, pre_alignment):
         im_id, x, y=cuda.grid(3)
         if 0 <= x <imsize[1] and 0 <= y <imsize[0] and 0 <=  im_id < pre_alignment.shape[0]:
@@ -181,102 +182,109 @@ def upscale_alignement(pre_alignment, imsize, tile_size):
             get_closest_flow(x, y, pre_alignment[im_id], tile_size, imsize, local_flow)
             upscaled_alignment[im_id, y, x, 0] = local_flow[0]
             upscaled_alignment[im_id, y, x, 1] = local_flow[1]
-        
+
         
     threadsperblock = (2, 16, 16)
-    blockspergrid_n = int(np.ceil(pre_alignment.shape[0]/threadsperblock[0]))
+    blockspergrid_n = int(np.ceil(alignment.shape[0]/threadsperblock[0]))
     blockspergrid_x = int(np.ceil(imsize[1]/threadsperblock[1]))
     blockspergrid_y = int(np.ceil(imsize[0]/threadsperblock[0]))
     blockspergrid = (blockspergrid_n, blockspergrid_x, blockspergrid_y)
     
-    get_flow[blockspergrid, threadsperblock](upscaled_alignment, np.ascontiguousarray(pre_alignment))
-    return upscaled_alignment
+    get_flow[blockspergrid, threadsperblock](upscaled_alignment, cuda_alignment)
+    return upscaled_alignment.copy_to_host()
+
+def evaluate(burst):
+    flow = np.zeros((2, burst.shape[1], burst.shape[2]))
+    flow = np.stack((flow, np.ones((2, burst.shape[1], burst.shape[2]))/2))
+
+    dec_burst = decimate(burst)
 
 
+    params = {'block matching': {
+                    'mode':'bayer',
+                    'tuning': {
+                        # WARNING: these parameters are defined fine-to-coarse!
+                        'factors': [1, 2, 4, 4],
+                        'tileSizes': [16, 16, 16, 8],
+                        'searchRadia': [1, 4, 4, 4],
+                        'distances': ['L1', 'L2', 'L2', 'L2'],
+                        # if you want to compute subpixel tile alignment at each pyramid level
+                        'subpixels': [False, True, True, True]
+                        }},
+                'kanade' : {
+                    'epsilon div' : 1e-6,
+                    'tuning' : {
+                        'tileSizes' : 32,
+                        'kanadeIter': 6, # 3 
+                        }},
+                'merging': {
+                    'scale': 2,
+                    'tuning': {
+                        'tileSizes': 32,
+                        'k_detail' : 0.3,  # [0.25, ..., 0.33]
+                        'k_denoise': 4,    # [3.0, ...,5.0]
+                        'D_th': 0.05,      # [0.001, ..., 0.010]
+                        'D_tr': 0.014,     # [0.006, ..., 0.020]
+                        'k_stretch' : 4,   # 4
+                        'k_shrink' : 2,    # 2
+                        't' : 0.12,        # 0.12
+                        's1' : 2,
+                        's2' : 2,
+                        'Mt' : 0.8,
+                        'sigma_t' : 2,
+                        'dt' : 15},
+                        }
+                }
+
+    options = {'verbose' : 3}
+    pre_alignment, aligned_tiles = alignHdrplus(dec_burst[0], dec_burst[1:],params['block matching'], options)
+    pre_alignment = pre_alignment[:, :, :, ::-1]
+    tile_size = aligned_tiles.shape[-1]
+
+
+
+    cuda_final_alignment = lucas_kanade_optical_flow(
+        dec_burst[0], dec_burst[1:], pre_alignment, options, params['kanade'])
+    final_alignment = cuda_final_alignment.copy_to_host()
+
+
+    truth = flow[1:].transpose(0,2,3,1)
+    imsize = truth.shape[1:3]
+
+    def EQ(ground_truth, estimated_alignment):
+        upscaled = upscale_alignement(estimated_alignment, imsize, tile_size)
+        # we need to upscale because estimated_al is patchwise
+        return np.linalg.norm(ground_truth - upscaled, axis=3)
+
+    EQ_pre = EQ(truth, pre_alignment)
+    EQ_final = EQ(truth, final_alignment)
+
+
+    plt.figure("Pre alignment")
+    plt.imshow(EQ_pre[0], vmin=0, vmax =1, cmap = 'Reds')
+    plt.colorbar()
+
+    plt.figure("Final alignment 7")
+    plt.imshow(EQ_final[0], vmin=0, vmax =1, cmap = "Reds")
+    plt.colorbar()
+
+    print("Pre alignment MSE : ", np.mean(EQ(truth, pre_alignment)))
+    print("Final alignment MSE : ", np.mean(EQ(truth, final_alignment)))
+
+
+    scale =1e2
+    plt.figure("Quiver")
+    # reversing y scale because quiver naturally goes from bottom to top ...
+    plt.quiver(pre_alignment[0,::-1,:,0], -pre_alignment[0,::-1,:,1], color = "b", scale = scale)
+    plt.quiver(final_alignment[0,::-1,:,0], -final_alignment[0,::-1,:,1], color = "r", scale = scale)
+    return pre_alignment, final_alignment
 
 
 img = plt.imread("S:/Images/Photos/Usine/20190420_160949.jpg")
 transformation_params = {'max_translation':3}
-burst, flow = single2lrburst(img, 5, downsample_factor=1.5, transformation_params=transformation_params)
-dec_burst = decimate(burst)[:,:,:-1]
-flow = flow[:,:,:,:-1]
+#burst, flow = single2lrburst(img, 5, downsample_factor=1.5, transformation_params=transformation_params)
+burst = img[::2, ::2, :]
+burst = np.stack((burst, img[1::2, 1::2, :]))
 
-
-params = {'block matching': {
-                'mode':'bayer',
-                'tuning': {
-                    # WARNING: these parameters are defined fine-to-coarse!
-                    'factors': [1, 2, 4, 4],
-                    'tileSizes': [16, 16, 16, 8],
-                    'searchRadia': [1, 4, 4, 4],
-                    'distances': ['L1', 'L2', 'L2', 'L2'],
-                    # if you want to compute subpixel tile alignment at each pyramid level
-                    'subpixels': [False, True, True, True]
-                    }},
-            'kanade' : {
-                'tuning' : {
-                    'tileSizes' : 32,
-                    'kanadeIter': 3, # 3 
-                    }},
-            'merging': {
-                'scale': 2,
-                'tuning': {
-                    'tileSizes': 32,
-                    'k_detail' : 0.3,  # [0.25, ..., 0.33]
-                    'k_denoise': 4,    # [3.0, ...,5.0]
-                    'D_th': 0.05,      # [0.001, ..., 0.010]
-                    'D_tr': 0.014,     # [0.006, ..., 0.020]
-                    'k_stretch' : 4,   # 4
-                    'k_shrink' : 2,    # 2
-                    't' : 0.12,        # 0.12
-                    's1' : 2,
-                    's2' : 2,
-                    'Mt' : 0.8,
-                    'sigma_t' : 2,
-                    'dt' : 15},
-                    }
-            }
-
-options = {'verbose' : 3}
-pre_alignment, aligned_tiles = alignHdrplus(dec_burst[0], dec_burst[1:],params['block matching'], options)
-pre_alignment = pre_alignment[:, :, :, ::-1]
-tile_size = aligned_tiles.shape[-1]
-
-
-
-cuda_final_alignment = lucas_kanade_optical_flow(
-    dec_burst[0], dec_burst[1:], pre_alignment, options, params['kanade'])
-final_alignment = cuda_final_alignment.copy_to_host()
-
-#%%
-truth = flow[1:].transpose(0,2,3,1)
-imsize = truth.shape[1:3]
-
-def EQ(ground_truth, estimated_alignment):
-    upscaled = upscale_alignement(estimated_alignment, imsize, tile_size)
-    return np.linalg.norm(ground_truth - upscaled, axis=3)
-
-EQ_pre = EQ(truth, pre_alignment)
-EQ_final = EQ(truth, final_alignment)
-
-
-plt.figure("Pre alignment")
-plt.imshow(EQ_pre[0], vmin=0, vmax =5, cmap = 'Reds')
-plt.colorbar()
-
-plt.figure("Final alignment")
-plt.imshow(EQ_final[0], vmin=0, vmax =5, cmap = "Reds")
-plt.colorbar()
-#%%
-final_alignment[np.isnan(final_alignment)] = 0
-print("Pre alignment : ", np.mean(EQ(truth, pre_alignment)))
-print("Final alignment : ", np.mean(EQ(truth, final_alignment)))
-
-
-#%% quiver
-scale =1e2
-plt.figure("Quiver")
-plt.quiver(pre_alignment[0,:,:,0], pre_alignment[0,:,:,1], color = "b", scale = scale)
-plt.quiver(final_alignment[0,:,:,0], final_alignment[0,:,:,1], color = "r", scale = scale)
-
+pre_alignment, final_alignment = evaluate(burst)
 

@@ -28,8 +28,9 @@ import math
 from torch import from_numpy
 
 from fast_two_stage_psf_correction.fast_optics_correction.raw2rgb import process_isp
-
-
+import exifread
+import os
+import glob
 
 
 def gamma(image):
@@ -66,18 +67,45 @@ def main(ref_img, comp_imgs, options, params):
     print('\nTotal ellapsed time : ', time() - t1)
     return output, cuda_robustness.copy_to_host()
     
+#%%
+burst_path = 'P:/0000/Samsung'
 
 
-raw_ref_img = rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N000.dng'
-                        )
-ref_img = raw_ref_img.raw_image.copy()
+def process(burst_path, options, params):
+    currentTime, verbose = time(), options['verbose'] > 1
+    
 
+    ref_id = 0 #TODO get ref id
+    
+    raw_comp = []
+    
+    # Get the list of raw images in the burst path
+    raw_path_list = glob.glob(os.path.join(burst_path, '*.dng'))
+    assert raw_path_list != [], 'At least one raw .dng file must be present in the burst folder.'
+	# Read the raw bayer data from the DNG files
+    for index, raw_path in enumerate(raw_path_list):
+        with rawpy.imread(raw_path) as rawObject:
+            if index != ref_id :
+                
+                raw_comp.append(rawObject.raw_image.copy())  # copy otherwise image data is lost when the rawpy object is closed
+         
+    # Reference image selection and metadata         
+    ref_raw = rawpy.imread(raw_path_list[ref_id]).raw_image.copy()
+    with open(raw_path_list[ref_id], 'rb') as raw_file:
+        tags = exifread.process_file(raw_file)
+    
+    if not 'exif' in params['merging'].keys(): 
+        params['merging']['exif'] = {}
+        
+    params['merging']['exif']['white level'] = str(tags['Image Tag 0xC61D'])
+    CFA = str((tags['Image CFAPattern']))[1:-1].split(sep=', ')
+    CFA = np.array([int(x) for x in CFA]).reshape(2,2)
+    params['merging']['exif']['CFA Pattern'] = CFA
+    
+    if verbose:
+        currentTime = getTime(currentTime, ' -- Read raw files')
 
-comp_images = rawpy.imread(
-    'C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N001.dng').raw_image.copy()[None]
-for i in range(2, 10):
-    comp_images = np.append(comp_images, rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N00{}.dng'.format(i)
-                                                      ).raw_image.copy()[None], axis=0)
+    return main(ref_raw, np.array(raw_comp), options, params)
 
 
 params = {'block matching': {
@@ -92,12 +120,13 @@ params = {'block matching': {
                     'subpixels': [False, True, True, True]
                     }},
             'kanade' : {
+                'epsilon div' : 1e-6,
                 'tuning' : {
                     'tileSizes' : 32,
-                    'kanadeIter': 3, # 3 
+                    'kanadeIter': 6, # 3 
                     }},
             'merging': {
-                'scale': 5,
+                'scale': 3,
                 'tuning': {
                     'tileSizes': 32,
                     'k_detail' : 0.3,  # [0.25, ..., 0.33]
@@ -107,19 +136,37 @@ params = {'block matching': {
                     'k_stretch' : 4,   # 4
                     'k_shrink' : 2,    # 2
                     't' : 0.12,        # 0.12
-                    's1' : 2,
+                    's1' : 12,
                     's2' : 2,
                     'Mt' : 0.8,
                     'sigma_t' : 2,
                     'dt' : 15},
                     }
             }
-
+#%%
 options = {'verbose' : 3}
-output, r = main(ref_img, comp_images[:-1], options, params)
+
+output, r = process(burst_path, options, params)
 
 
 #%%
+
+raw_ref_img = rawpy.imread('P:/0000/Samsung/im_00.dng')
+exif_tags = open('P:/0000/Samsung/im_00.dng', 'rb')
+tags = exifread.process_file(exif_tags)
+ref_img = raw_ref_img.raw_image.copy()
+
+
+comp_images = rawpy.imread(
+    'P:/0000/Samsung/im_01.dng').raw_image.copy()[None]
+for i in range(2, 10):
+    comp_images = np.append(comp_images, rawpy.imread('P:/0000/Samsung/im_0{}.dng'.format(i)
+                                                      ).raw_image.copy()[None], axis=0)
+
+
+
+
+
 output_img = output[:,:,:3].copy()
 
 l1 = output[:,:,7].copy()
@@ -144,17 +191,17 @@ print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 plt.figure("output")
 plt.imshow(gamma(output_img/1023))
 base = np.empty((int(ref_img.shape[0]/2), int(ref_img.shape[1]/2), 3))
-base[:,:,0] = ref_img[1::2, 1::2]
-base[:,:,1] = (ref_img[::2, 1::2] + ref_img[1::2, ::2])/2
-base[:,:,2] = ref_img[::2, ::2]
+base[:,:,0] = ref_img[0::2, 1::2]
+base[:,:,1] = (ref_img[::2, ::2] + ref_img[1::2, 1::2])/2
+base[:,:,2] = ref_img[1::2, ::2]
 
 plt.figure("original")
 plt.imshow(gamma(base/1023))
 
 
-r2 = np.mean(((r+0.12)/12.12), axis = 3)
+r2 = np.mean(r, axis = 3)
 plt.figure()
-plt.hist(r2.reshape(8*1560*2104))
+plt.hist(r2.reshape(r2.size), bins=25)
 #%%
 # quivers for eighenvectors
 # Lower res because pyplot's quiver is really not made for that (=slow)
@@ -165,6 +212,5 @@ plt.quiver(e1[:,:,0][::15, ::15], e1[:,:,1][::15, ::15], width=0.001,linewidth=0
 plt.quiver(e2[:,:,0][::15, ::15], e2[:,:,1][::15, ::15], width=0.001,linewidth=0.0001, scale=scale, color='b')
 
 
-# # No RGB matrix for this picture unfortunately... So no color correction
-# # img = process_isp(raw=raw_ref_img, img=(output_img/1023), do_color_correction=False, do_tonemapping=True, do_gamma=True, do_sharpening=False)
+# img = process_isp(raw=raw_ref_img, img=(output_img/1023), do_color_correction=False, do_tonemapping=True, do_gamma=True, do_sharpening=False)
 

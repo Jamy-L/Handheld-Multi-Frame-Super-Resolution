@@ -62,6 +62,9 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
     # TODO Non int scale is broken atm
     VERBOSE = options['verbose']
     SCALE = params['scale']
+    
+    CFA_pattern = params['exif']['CFA Pattern']
+    
     TILE_SIZE = params['tuning']['tileSizes']
     k_detail =params['tuning']['tileSizes']
     k_denoise = params['tuning']['k_denoise']
@@ -108,22 +111,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
         int
 
         """
-        if patch_pixel_idx%2 == 1 and patch_pixel_idy%2 == 1: #R
-            return 0
-        
-        elif patch_pixel_idx%2 == 1 and patch_pixel_idy%2 == 0: #G
-            return 1
-
-        elif patch_pixel_idx%2 == 0 and patch_pixel_idy%2 == 1: #G
-            return 1
-        
-        elif patch_pixel_idx%2 == 0 and patch_pixel_idy%2 ==0 :#B
-            return 2
-        else:
-            raise IndexError('No Index Avalailable')
-            # This will never happen, but without this condition the return type
-            # infered bu numba is "Optionaltype int" instead of "int", because
-            # the interpreter thinks "None" may be returned 
+        return uint8(CFA_pattern[patch_pixel_idy%2, patch_pixel_idx%2])
       
     @cuda.jit
     def accumulate(ref_img, comp_imgs, alignments, r, output_img):
@@ -314,6 +302,4 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
         current_time = getTime(
             current_time, ' - Data returned from GPU')
 
-    # TODO 1023 is the max value in the example. Maybe we have to extract
-    # metadata to have a more general framework
     return merge_result
