@@ -123,10 +123,10 @@ params = {'block matching': {
                 'epsilon div' : 1e-6,
                 'tuning' : {
                     'tileSizes' : 32,
-                    'kanadeIter': 6, # 3 
+                    'kanadeIter': 3, # 3 
                     }},
             'merging': {
-                'scale': 3,
+                'scale': 2,
                 'tuning': {
                     'tileSizes': 32,
                     'k_detail' : 0.3,  # [0.25, ..., 0.33]

@@ -21,7 +21,7 @@ from numba import cuda, float32, float64, int16
 DEFAULT_CUDA_FLOAT_TYPE = float32
 DEFAULT_NUMPY_FLOAT_TYPE = np.float32
 
-def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer, options, params):
+def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer, options, params, debug = False):
     """
     Computes the displacement based on a naive implementation of
     Lucas-Kanade optical flow (https://www.cs.cmu.edu/~16385/s15/lectures/Lecture21.pdf)
@@ -40,6 +40,7 @@ def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer
         Options to pass
     params : Dict
         parameters
+    debug : When True, returns a list of the alignments of every Lucas-Kanade iteration
 
     Returns
     -------
@@ -47,6 +48,9 @@ def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer
         alignment vector for each tile of each image
 
     """
+    if debug : 
+        debug_list = []
+        
     current_time, verbose = time(), options['verbose'] > 2
     n_iter = params['tuning']['kanadeIter']
 
@@ -59,8 +63,8 @@ def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer
         print("Estimating Lucas-Kanade's optical flow")
 
     # grey level
-    ref_img = ref_img_bayer[::2, ::2]/3 + ref_img_bayer[1::2, 1::2]/3 + ref_img_bayer[::2, 1::2]/6 + ref_img_bayer[1::2, ::2]/6
-    comp_img = comp_img_bayer[:,::2, ::2]/3 + comp_img_bayer[:,1::2, 1::2]/3 + comp_img_bayer[:,::2, 1::2]/6 + comp_img_bayer[:,1::2, ::2]/6
+    ref_img = (ref_img_bayer[::2, ::2] + ref_img_bayer[1::2, 1::2] + ref_img_bayer[::2, 1::2] + ref_img_bayer[1::2, ::2])/4
+    comp_img = (comp_img_bayer[:,::2, ::2] + comp_img_bayer[:,1::2, 1::2] + comp_img_bayer[:,::2, 1::2] + comp_img_bayer[:,1::2, ::2])/4
     pre_alignment = pre_alignment_bayer/2 # dividing by 2 because grey image is decimated by 2
 
     if verbose:
@@ -92,14 +96,17 @@ def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer
         current_time, ' -- Arrays moved to GPU')
     
     for iter_index in range(n_iter):
-        alignment = lucas_kanade_optical_flow_iteration(
+        lucas_kanade_optical_flow_iteration(
             cuda_ref_img, cuda_gradx, cuda_grady, cuda_comp_img, alignment,
             options, params, iter_index)
+        if debug :
+            debug_list.append(alignment.copy_to_host())
     
     if verbose:
         getTime(t1, 'Flows estimated')
         print('\n')
-    
+    if debug:
+        return debug_list
     return alignment
 
 
@@ -179,7 +186,7 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradx, grady, comp_img, alignme
         if inbound:
             gradx = gradx[new_idy, new_idx]
             grady = grady[new_idy, new_idx]
-            gradt = int16(comp_img[image_index, new_idy, new_idx]) - int16(ref_img[new_idy, new_idx])
+            gradt = int16(comp_img[image_index, pixel_global_idy, pixel_global_idx]) - int16(ref_img[new_idy, new_idx])
             
             cuda.atomic.add(ATB, 0, gradx*gradt)
             cuda.atomic.add(ATB, 1, grady*gradt)
@@ -192,7 +199,7 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradx, grady, comp_img, alignme
         # We need the entire tile accumulation
         tile_disp = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
         cuda.syncthreads()
-        if pixel_local_idx == 0 and pixel_local_idy == 0 and inbound:
+        if pixel_local_idx == 0 and pixel_local_idy == 0:
             if ATA[0, 0]*ATA[1, 1] - ATA[0, 1]*ATA[1, 0] < EPSILON : # Aray cannot be inverted
                 tile_disp[0] = 0
                 tile_disp[1] = 0
@@ -208,7 +215,7 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradx, grady, comp_img, alignme
     current_time = time()
     
     get_new_flow[[(n_images, n_patch_y, n_patch_x), (tile_size, tile_size)]
-        ](ref_img, comp_img, gradx, grady, alignment, n_iter - 1 == iter_index)
+        ](ref_img, comp_img, gradx, grady, alignment, (n_iter - 1) == iter_index)
     
     if verbose:
         current_time = getTime(
@@ -315,37 +322,3 @@ def get_closest_flow(idx_sub, idy_sub, optical_flows, tile_size, imsize, local_f
     local_flow[0] = flow_x
     local_flow[1] = flow_y
 
-# %% test code, to remove in the final version
-
-# raw_ref_img = rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N000.dng'
-#                         )
-# ref_img = raw_ref_img.raw_image.copy()
-
-
-# comp_images = rawpy.imread(
-#     'C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N001.dng').raw_image.copy()[None]
-# for i in range(2, 10):
-#     comp_images = np.append(comp_images, rawpy.imread('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/test_data/33TJ_20150606_224837_294/payload_N00{}.dng'.format(i)
-#                                                       ).raw_image.copy()[None], axis=0)
-
-# pre_alignment = np.load(
-#     'C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/hdrplus_python/results_test1/unpaddedMotionVectors.npy')
-
-# n_images, n_patch_y, n_patch_x, _ = pre_alignment.shape
-# tile_size = int(32/2)
-# native_im_size = ref_img.shape
-
-# params = {'tuning': {'tileSizes': tile_size}, 'scale': 1}
-# params['tuning']['kanadeIter'] = 3
-
-
-
-
-
-# #%%
-# t1 = time()
-# final_alignments = lucas_kanade_optical_flow(
-#     ref_img, comp_images, pre_alignment, {"verbose": 3}, params)
-# print('\nTotal ellapsed time : ', time() - t1)
-
-# a,b = final_alignments[0, :, :]*2, pre_alignment[0, :, :]*2
