@@ -84,7 +84,7 @@ def single2lrburst(image, burst_size, downsample_factor=1, transformation_params
         if i == 0:
             # For base image, do not apply any random transformations. We only translate the image to center the
             # sampling grid
-            shift = 0#(downsample_factor / 2.0) - 0.5# I dont understant this line
+            shift = (downsample_factor / 2.0) - 0.5# I dont understant this line
             translation = (shift, shift)
             theta = 0.0
             shear_factor = (0.0, 0.0)
@@ -99,7 +99,7 @@ def single2lrburst(image, burst_size, downsample_factor=1, transformation_params
             else:
                 # translation = (random.uniform(-max_translation, max_translation),
                 #                random.uniform(-max_translation, max_translation))
-                translation = (10, 20)
+                translation = (1, 1)
 
             max_rotation = transformation_params.get('max_rotation', 0.0)
             theta = random.uniform(-max_rotation, max_rotation)
@@ -171,6 +171,55 @@ def decimate(burst):
     output[:,1::2,1::2] = burst[:,1::2,1::2,0] #b
     return output
 
+def get_im_mse(burst, alignment):
+    
+    
+    n_images, imsize_y, imsize_x, _ = burst.shape
+    tile_size = 32
+    imsize = (imsize_y, imsize_x)
+    n_images -= 1
+    iters = alignment.shape[0]
+    
+    @cuda.jit
+    def pixel_mse(burst, alignment,  im_mse):
+        s = cuda.shared.array(1, dtype=float64)
+        s[0] = 0
+        acc = cuda.shared.array(1, dtype=float64)
+        acc[0] = 0
+        i, idy, idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
+        
+        im_id = cuda.threadIdx.x
+        
+        local_flow = cuda.local.array(2, dtype=float64)
+        get_closest_flow(idx, idy, alignment[i, im_id], tile_size, imsize, local_flow)
+        
+        new_idx = idx + local_flow[0]
+        new_idy = idy + local_flow[1]
+        
+        if 0<= new_idx < imsize_x and 0 <= new_idy < imsize_y:
+            cuda.atomic.add(s, 0, 
+                            (burst[0, idy, idx, 0] - burst[im_id + 1, round(new_idy), round(new_idx), 0])**2)
+            cuda.atomic.add(s, 0, 
+                            (burst[0, idy, idx, 1] - burst[im_id + 1, round(new_idy), round(new_idx), 1])**2)
+            cuda.atomic.add(s, 0, 
+                            (burst[0, idy, idx, 2] - burst[im_id + 1, round(new_idy), round(new_idx), 2])**2)
+            cuda.atomic.add(acc, 0, 3)
+        
+        cuda.syncthreads()
+        if im_id == 0: #single threaded
+            if acc[0] == 0:
+                im_mse[i, idy, idx] = 0
+            else:
+                im_mse[i, idy, idx] = s[0]/acc[0]
+            
+    
+    
+    im_mse = cuda.device_array((iters, imsize_y, imsize_x), dtype = np.float32)
+    blockspergrid = (iters, imsize_y, imsize_x)
+    pixel_mse[blockspergrid, (n_images)](burst, alignment, im_mse)
+    return im_mse.copy_to_host()
+
+
 def upscale_alignement(alignment, imsize, tile_size):
     upscaled_alignment = cuda.device_array(((alignment.shape[0],)+imsize+(2,)))
     cuda_alignment = cuda.to_device(np.ascontiguousarray(alignment))
@@ -193,9 +242,7 @@ def upscale_alignement(alignment, imsize, tile_size):
     get_flow[blockspergrid, threadsperblock](upscaled_alignment, cuda_alignment)
     return upscaled_alignment.copy_to_host()
 
-def evaluate(burst):
-    flow = np.zeros((2, burst.shape[1], burst.shape[2]))
-    flow = np.stack((flow, np.ones((2, burst.shape[1], burst.shape[2]))/2))
+def evaluate(burst, flow):
 
     dec_burst = decimate(burst)
 
@@ -215,7 +262,7 @@ def evaluate(burst):
                     'epsilon div' : 1e-6,
                     'tuning' : {
                         'tileSizes' : 32,
-                        'kanadeIter': 6, # 3 
+                        'kanadeIter': 25, # 3 
                         }},
                 'merging': {
                     'scale': 2,
@@ -243,10 +290,9 @@ def evaluate(burst):
 
 
 
-    cuda_final_alignment = lucas_kanade_optical_flow(
-        dec_burst[0], dec_burst[1:], pre_alignment, options, params['kanade'])
-    final_alignment = cuda_final_alignment.copy_to_host()
-
+    lk_alignment = lucas_kanade_optical_flow(
+        dec_burst[0], dec_burst[1:], pre_alignment, options, params['kanade'], debug=True)
+    lk_alignment[-1]/=2 #last alignment is multiplied by 2 by the LK flow function
 
     truth = flow[1:].transpose(0,2,3,1)
     imsize = truth.shape[1:3]
@@ -257,34 +303,64 @@ def evaluate(burst):
         return np.linalg.norm(ground_truth - upscaled, axis=3)
 
     EQ_pre = EQ(truth, pre_alignment)
-    EQ_final = EQ(truth, final_alignment)
+    EQ_lk = [EQ(truth, final_alignment*2) for final_alignment in lk_alignment]
 
 
-    plt.figure("Pre alignment")
-    plt.imshow(EQ_pre[0], vmin=0, vmax =1, cmap = 'Reds')
-    plt.colorbar()
+    # plt.figure("Pre alignment")
+    # plt.imshow(EQ_pre[0], vmin=0, vmax =1, cmap = 'Reds')
+    # plt.colorbar()
 
-    plt.figure("Final alignment 7")
-    plt.imshow(EQ_final[0], vmin=0, vmax =1, cmap = "Reds")
-    plt.colorbar()
+    # for i, EQ in enumerate(EQ_lk):
+    #     plt.figure("lk alignment {}".format(i+1))
+    #     plt.imshow(EQ[0], vmin=0, vmax =1, cmap = "Reds")
+    #     plt.colorbar()
+    
+    EQ_lk.insert(0, EQ_pre)
+    plt.figure()
+    plt.plot([i for i in range(len(EQ_lk))], np.mean(EQ_lk, axis=(1,2,3)))
+    plt.xlabel('lk iteration')
+    plt.ylabel('MSE on flow')
+    
+    plt.figure()
+    plt.plot([np.mean(np.linalg.norm(x*2, axis=3)) for x in lk_alignment])
+    plt.xlabel('lk iteration')
+    plt.ylabel('mean norm of optical flow')
+    
+    plt.figure()
+    plt.plot([np.mean(np.linalg.norm(2*lk_alignment[i+1] - 2*lk_alignment[i], axis=3)) for i in range(len(lk_alignment)-1)])
+    plt.xlabel('lk iteration')
+    plt.ylabel('mean norm of optical flow step for each iteration')
 
-    print("Pre alignment MSE : ", np.mean(EQ(truth, pre_alignment)))
-    print("Final alignment MSE : ", np.mean(EQ(truth, final_alignment)))
 
+    lk_alignment.insert(0, pre_alignment)
 
-    scale =1e2
-    plt.figure("Quiver")
-    # reversing y scale because quiver naturally goes from bottom to top ...
-    plt.quiver(pre_alignment[0,::-1,:,0], -pre_alignment[0,::-1,:,1], color = "b", scale = scale)
-    plt.quiver(final_alignment[0,::-1,:,0], -final_alignment[0,::-1,:,1], color = "r", scale = scale)
-    return pre_alignment, final_alignment
+    im_mse = get_im_mse(burst, np.array(lk_alignment))
+
+    # for i, mse in enumerate(im_mse):
+    #     plt.figure("lk alignment {} Image MSE ".format(i))
+    #     plt.imshow(mse, vmin=0, vmax =100, cmap = "Reds")
+    #     plt.colorbar()    
+
+    plt.figure("Image MSE")
+    plt.plot(np.mean(im_mse, axis = (1, 2)))
+
+    return pre_alignment, lk_alignment, im_mse
 
 
 img = plt.imread("S:/Images/Photos/Usine/20190420_160949.jpg")
-transformation_params = {'max_translation':3}
-#burst, flow = single2lrburst(img, 5, downsample_factor=1.5, transformation_params=transformation_params)
+#transformation_params = {'max_translation':3}
+#burst, flow = single2lrburst(img, 5, downsample_factor=2, transformation_params=transformation_params)
 burst = img[::2, ::2, :]
 burst = np.stack((burst, img[1::2, 1::2, :]))
+flow = np.zeros(burst.shape[:-1]+(2, )).transpose(0, 3, 1, 2)
+# flow[1:] = 0.5
 
-pre_alignment, final_alignment = evaluate(burst)
+plt.figure("ref")
+plt.imshow(burst[0]/255)
+plt.figure("1")
+plt.imshow(burst[1]/255)
+#%%
+flow*=0
+flow[1:] += 0.5
+pre_alignment, final_alignment, im_mse = evaluate(burst, flow)
 
