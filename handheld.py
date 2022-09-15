@@ -123,14 +123,14 @@ params = {'block matching': {
                 'epsilon div' : 1e-6,
                 'tuning' : {
                     'tileSizes' : 32,
-                    'kanadeIter': 3, # 3 
+                    'kanadeIter': 6, # 3 
                     }},
             'merging': {
-                'scale': 2,
+                'scale': 1,
                 'tuning': {
                     'tileSizes': 32,
-                    'k_detail' : 0.3,  # [0.25, ..., 0.33]
-                    'k_denoise': 4,    # [3.0, ...,5.0]
+                    'k_detail' : 0.25,  # [0.25, ..., 0.33]
+                    'k_denoise': 3,    # [3.0, ...,5.0]
                     'D_th': 0.05,      # [0.001, ..., 0.010]
                     'D_tr': 0.014,     # [0.006, ..., 0.020]
                     'k_stretch' : 4,   # 4
@@ -200,7 +200,7 @@ plt.imshow(gamma(base/1023))
 
 
 r2 = np.mean(r, axis = 3)
-plt.figure()
+plt.figure("R histogram")
 plt.hist(r2.reshape(r2.size), bins=25)
 #%%
 # quivers for eighenvectors

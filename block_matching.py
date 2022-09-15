@@ -107,9 +107,7 @@ def alignHdrplus(referenceImage, alternateImages, params, options):
                 subpixels[-lv - 1],
                 alignments
             )
-            # filename = options['outputFolder'] + '/alignments/' +\
-            #     'img_{}_alignment_level_{}'.format(i+1, lv)
-            # np.save(filename, alignments)
+            
         if verbose:
             currentTime = getTime(currentTime, ' --- Align pyramid')
 

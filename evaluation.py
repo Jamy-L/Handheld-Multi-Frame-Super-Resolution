@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from block_matching import alignHdrplus
 from optical_flow import get_closest_flow, lucas_kanade_optical_flow
 from numba import cuda, float64
+from time import time
 
 
 
@@ -97,9 +98,9 @@ def single2lrburst(image, burst_size, downsample_factor=1, transformation_params
                 shift = (downsample_factor / 2.0) - 0.5
                 translation = (shift, shift)
             else:
-                # translation = (random.uniform(-max_translation, max_translation),
-                #                random.uniform(-max_translation, max_translation))
-                translation = (1, 1)
+                translation = (random.uniform(-max_translation, max_translation),
+                                random.uniform(-max_translation, max_translation))
+                # translation = (30, 30)
 
             max_rotation = transformation_params.get('max_rotation', 0.0)
             theta = random.uniform(-max_rotation, max_rotation)
@@ -162,6 +163,10 @@ def single2lrburst(image, burst_size, downsample_factor=1, transformation_params
     flow_vectors = -(sample_pos_inv_all - sample_pos_inv_all[:1, ...])
 
     return np.array(burst_images), np.array(flow_vectors)
+
+
+
+
 
 def decimate(burst):
     output = np.empty((burst.shape[0], burst.shape[1], burst.shape[2]), dtype = np.uint16)
@@ -242,46 +247,7 @@ def upscale_alignement(alignment, imsize, tile_size):
     get_flow[blockspergrid, threadsperblock](upscaled_alignment, cuda_alignment)
     return upscaled_alignment.copy_to_host()
 
-def evaluate(burst, flow):
-
-    dec_burst = decimate(burst)
-
-
-    params = {'block matching': {
-                    'mode':'bayer',
-                    'tuning': {
-                        # WARNING: these parameters are defined fine-to-coarse!
-                        'factors': [1, 2, 4, 4],
-                        'tileSizes': [16, 16, 16, 8],
-                        'searchRadia': [1, 4, 4, 4],
-                        'distances': ['L1', 'L2', 'L2', 'L2'],
-                        # if you want to compute subpixel tile alignment at each pyramid level
-                        'subpixels': [False, True, True, True]
-                        }},
-                'kanade' : {
-                    'epsilon div' : 1e-6,
-                    'tuning' : {
-                        'tileSizes' : 32,
-                        'kanadeIter': 25, # 3 
-                        }},
-                'merging': {
-                    'scale': 2,
-                    'tuning': {
-                        'tileSizes': 32,
-                        'k_detail' : 0.3,  # [0.25, ..., 0.33]
-                        'k_denoise': 4,    # [3.0, ...,5.0]
-                        'D_th': 0.05,      # [0.001, ..., 0.010]
-                        'D_tr': 0.014,     # [0.006, ..., 0.020]
-                        'k_stretch' : 4,   # 4
-                        'k_shrink' : 2,    # 2
-                        't' : 0.12,        # 0.12
-                        's1' : 2,
-                        's2' : 2,
-                        'Mt' : 0.8,
-                        'sigma_t' : 2,
-                        'dt' : 15},
-                        }
-                }
+def align_lk(dec_burst, params):
 
     options = {'verbose' : 3}
     pre_alignment, aligned_tiles = alignHdrplus(dec_burst[0], dec_burst[1:],params['block matching'], options)
@@ -293,74 +259,169 @@ def evaluate(burst, flow):
     lk_alignment = lucas_kanade_optical_flow(
         dec_burst[0], dec_burst[1:], pre_alignment, options, params['kanade'], debug=True)
     lk_alignment[-1]/=2 #last alignment is multiplied by 2 by the LK flow function
-
-    truth = flow[1:].transpose(0,2,3,1)
-    imsize = truth.shape[1:3]
-
-    def EQ(ground_truth, estimated_alignment):
-        upscaled = upscale_alignement(estimated_alignment, imsize, tile_size)
-        # we need to upscale because estimated_al is patchwise
-        return np.linalg.norm(ground_truth - upscaled, axis=3)
-
-    EQ_pre = EQ(truth, pre_alignment)
-    EQ_lk = [EQ(truth, final_alignment*2) for final_alignment in lk_alignment]
-
-
-    # plt.figure("Pre alignment")
-    # plt.imshow(EQ_pre[0], vmin=0, vmax =1, cmap = 'Reds')
-    # plt.colorbar()
-
-    # for i, EQ in enumerate(EQ_lk):
-    #     plt.figure("lk alignment {}".format(i+1))
-    #     plt.imshow(EQ[0], vmin=0, vmax =1, cmap = "Reds")
-    #     plt.colorbar()
     
-    EQ_lk.insert(0, EQ_pre)
-    plt.figure()
-    plt.plot([i for i in range(len(EQ_lk))], np.mean(EQ_lk, axis=(1,2,3)))
-    plt.xlabel('lk iteration')
-    plt.ylabel('MSE on flow')
-    
-    plt.figure()
-    plt.plot([np.mean(np.linalg.norm(x*2, axis=3)) for x in lk_alignment])
-    plt.xlabel('lk iteration')
-    plt.ylabel('mean norm of optical flow')
-    
-    plt.figure()
-    plt.plot([np.mean(np.linalg.norm(2*lk_alignment[i+1] - 2*lk_alignment[i], axis=3)) for i in range(len(lk_alignment)-1)])
-    plt.xlabel('lk iteration')
-    plt.ylabel('mean norm of optical flow step for each iteration')
-
-
+    for i,x in enumerate(lk_alignment):
+        lk_alignment[i] = 2*x
+        
     lk_alignment.insert(0, pre_alignment)
 
-    im_mse = get_im_mse(burst, np.array(lk_alignment))
+    imsize = (dec_burst.shape[1], dec_burst.shape[2])
+    
+    upscaled = np.empty((len(lk_alignment), dec_burst.shape[0]-1, dec_burst.shape[1], dec_burst.shape[2], 2))
+    for i in range(len(lk_alignment)):
+        upscaled[i] = upscale_alignement(np.array(lk_alignment[i]), imsize, tile_size)
+    # we need to upscale because estimated_al is patchwise
+
+    return upscaled
+
+def align_fb(dec_burst):
+    ref_grey = np.empty((int(dec_burst.shape[1]/2), int(dec_burst.shape[2]/2)))
+    ref_grey[:,:] = (dec_burst[0, ::2, ::2] + dec_burst[0, 1::2, ::2] + dec_burst[0, ::2, 1::2] + dec_burst[0,1::2, 1::2])/4  
+
+
+    farnback_flow = np.empty((dec_burst.shape[0] - 1, int(dec_burst.shape[1]/2), int(dec_burst.shape[2]/2), 2))
+
+    for i in range(dec_burst.shape[0] - 1):
+         
+        # Capture another frame and convert to gray scale
+        
+        comp_grey = np.empty((int(dec_burst.shape[1]/2), int(dec_burst.shape[2]/2)))
+        comp_grey[:,:] = (dec_burst[i+1, ::2, ::2] + dec_burst[i+1, 1::2, ::2] + dec_burst[i+1, ::2, 1::2] + dec_burst[i+1,1::2, 1::2])/4  
+        
+        
+        # Optical flow is now calculated
+        farnback_flow[i] = cv2.calcOpticalFlowFarneback(ref_grey, comp_grey, None, 0.5, 3, 16, 3, 5, 1.2, 0)
+    upscaled_fb = np.empty( (dec_burst.shape[0] - 1, ) + dec_burst.shape[1:] + (2, ))
+    upscaled_fb[:, ::2, ::2, :] = farnback_flow
+    upscaled_fb[:, 1::2, ::2, :] = farnback_flow
+    upscaled_fb[:, ::2, 1::2, :] = farnback_flow
+    upscaled_fb[:, 1::2, 1::2, :] = farnback_flow
+    return upscaled_fb*2 # greys are twice smaller
+
+def evaluate_alignment(alignment, ground_truth, label="", imshow=False):
+    """
+    
+
+    Parameters
+    ----------
+    alignment : Array [n_iter, n_images, imsize_y, imsize_x, 2]
+        DESCRIPTION.
+    ground_truth : TYPE
+        DESCRIPTION.
+    imshow : TYPE, optional
+        DESCRIPTION. The default is False.
+
+    Returns
+    -------
+    TYPE
+        DESCRIPTION.
+
+    """
+    
+    def flow_quad_error(ground_truth, alignment):
+        return np.linalg.norm(ground_truth - alignment, axis=4)
+
+
+    EQ = flow_quad_error(ground_truth, alignment)
+    if alignment.shape[0] > 1:
+        plt.figure()
+        plt.plot([i for i in range(len(EQ))], np.mean(EQ, axis=(1,2,3)))
+        plt.xlabel('lk iteration')
+        plt.ylabel('MSE on flow')
+    
+        plt.figure()
+        plt.plot([np.mean(np.linalg.norm(alignment[i], axis=3)) for i in range(alignment.shape[0])])
+        plt.xlabel('lk iteration')
+        plt.ylabel('mean norm of optical flow')
+    
+        plt.figure()
+        plt.plot([np.mean(np.linalg.norm(2*alignment[i+1] - 2*alignment[i], axis=3)) for i in range(alignment.shape[0]-1)])
+        plt.xlabel('lk iteration')
+        plt.ylabel('mean norm of optical flow step for each iteration')
+        
+    print("Last mean norm of optical flow on {} : {}".format(label, np.mean(np.linalg.norm(alignment[-1], axis=3))))
+        
+        
+    if imshow : 
+        for i, e in enumerate(EQ):
+            plt.figure("{} alignment, step {}".format(label, i))
+            plt.imshow(np.mean(e, axis = 0), vmin=0, vmax =3, cmap = "Reds")
+            plt.colorbar()
+
+    print("Last flow MSE on {} : {}".format(label, np.mean(EQ[-1])))
+    
+    #im_mse = get_im_mse(burst, np.array(lk_alignment))
 
     # for i, mse in enumerate(im_mse):
     #     plt.figure("lk alignment {} Image MSE ".format(i))
     #     plt.imshow(mse, vmin=0, vmax =100, cmap = "Reds")
     #     plt.colorbar()    
 
-    plt.figure("Image MSE")
-    plt.plot(np.mean(im_mse, axis = (1, 2)))
+    # plt.figure("Image MSE")
+    # plt.plot(np.mean(im_mse, axis = (1, 2)))
 
-    return pre_alignment, lk_alignment, im_mse
 
+#%%
+params = {'block matching': {
+                'mode':'bayer',
+                'tuning': {
+                    # WARNING: these parameters are defined fine-to-coarse!
+                    'factors': [1, 2, 4, 4],
+                    'tileSizes': [16, 16, 16, 8],
+                    'searchRadia': [1, 4, 4, 4],
+                    'distances': ['L1', 'L2', 'L2', 'L2'],
+                    # if you want to compute subpixel tile alignment at each pyramid level
+                    'subpixels': [False, True, True, True]
+                    }},
+            'kanade' : {
+                'epsilon div' : 1e-6,
+                'tuning' : {
+                    'tileSizes' : 32,
+                    'kanadeIter': 10, # 3 
+                    }},
+            'merging': {
+                'scale': 2,
+                'tuning': {
+                    'tileSizes': 32,
+                    'k_detail' : 0.3,  # [0.25, ..., 0.33]
+                    'k_denoise': 4,    # [3.0, ...,5.0]
+                    'D_th': 0.05,      # [0.001, ..., 0.010]
+                    'D_tr': 0.014,     # [0.006, ..., 0.020]
+                    'k_stretch' : 4,   # 4
+                    'k_shrink' : 2,    # 2
+                    't' : 0.12,        # 0.12
+                    's1' : 2,
+                    's2' : 2,
+                    'Mt' : 0.8,
+                    'sigma_t' : 2,
+                    'dt' : 15},
+                    }
+            }
 
 img = plt.imread("S:/Images/Photos/Usine/20190420_160949.jpg")
-#transformation_params = {'max_translation':3}
-#burst, flow = single2lrburst(img, 5, downsample_factor=2, transformation_params=transformation_params)
-burst = img[::2, ::2, :]
-burst = np.stack((burst, img[1::2, 1::2, :]))
-flow = np.zeros(burst.shape[:-1]+(2, )).transpose(0, 3, 1, 2)
-# flow[1:] = 0.5
+transformation_params = {'max_translation':10}
+burst, flow = single2lrburst(img, 5, downsample_factor=2, transformation_params=transformation_params)
+flow = flow[1:].transpose(0, 2, 3, 1)
+
 
 plt.figure("ref")
 plt.imshow(burst[0]/255)
 plt.figure("1")
 plt.imshow(burst[1]/255)
-#%%
-flow*=0
-flow[1:] += 0.5
-pre_alignment, final_alignment, im_mse = evaluate(burst, flow)
+
+dec_burst = decimate(burst)
+
+lk_alignment = align_lk(dec_burst, params)
+t1 = time()
+fb_alignment = align_fb(dec_burst)
+print('farneback evalueated : ', time()-t1)
+
+
+evaluate_alignment(lk_alignment, flow, label = "LK", imshow=True)
+
+evaluate_alignment(fb_alignment[None], flow, label = "FarneBack", imshow=True)
+
+origin = flow[0]
+lk = lk_alignment[-1, 0]
+fb = fb_alignment[0]
 
