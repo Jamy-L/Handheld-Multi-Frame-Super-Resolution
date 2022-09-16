@@ -9,7 +9,7 @@ from optical_flow import lucas_kanade_optical_flow, get_closest_flow
 from hdrplus_python.package.algorithm.imageUtils import getTiles, getAlignedTiles
 from hdrplus_python.package.algorithm.merging import depatchifyOverlap
 from hdrplus_python.package.algorithm.genericUtils import getTime
-from kernels import compute_kernel_cov
+from kernels import compute_interpolated_kernel_cov
 from linalg import quad_mat_prod
 from robustness import fetch_robustness, compute_robustness
 
@@ -171,16 +171,15 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
         # We need to wait the fetching of the flow
         cuda.syncthreads()
 
-        patch_center_x = cuda.shared.array(1, uint16)
-        patch_center_y = cuda.shared.array(1, uint16)
+        patch_center_pos = cuda.shared.array(2, uint16) # y, x
         local_optical_flow = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
         for image_index in range(N_IMAGES + 1):
             if tx == 0 and ty == 0:
                 if image_index == 0:  # ref image
                     # no optical flow
-                    patch_center_x[0] = uint16(round(coarse_ref_sub_x[0]))
-                    patch_center_y[0] = uint16(round(coarse_ref_sub_y[0]))
+                    patch_center_pos[1] = coarse_ref_sub_x[0]
+                    patch_center_pos[0] = coarse_ref_sub_y[0]
 
                 else:
                     get_closest_flow(coarse_ref_sub_x[0],
@@ -191,8 +190,8 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                                       local_optical_flow)
                     
                     
-                    patch_center_x[0] = uint16(round(coarse_ref_sub_x[0] + local_optical_flow[0]))
-                    patch_center_y[0] = uint16(round(coarse_ref_sub_y[0] + local_optical_flow[1]))
+                    patch_center_pos[1] = coarse_ref_sub_x[0] + local_optical_flow[0]
+                    patch_center_pos[0] = coarse_ref_sub_y[0] + local_optical_flow[1]
             
             # we need the position of the patch before computing the kernel
             cuda.syncthreads()
@@ -206,17 +205,16 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
 
             
             if image_index == 0:
-                compute_kernel_cov(ref_img, patch_center_x[0], patch_center_y[0], cov_i,
-                                   k_detail, k_denoise, D_th, D_tr, k_stretch,
-                                   k_shrink,DEBUG_E1, DEBUG_E2, DEBUG_L)
+                compute_interpolated_kernel_cov(ref_img, patch_center_pos, cov_i,
+                                                k_detail, k_denoise, D_th, D_tr, k_stretch,
+                                                k_shrink,DEBUG_E1, DEBUG_E2, DEBUG_L)
                 if tx == 0:
                     local_r[ty + 1] = 1 
 
             else:
-                compute_kernel_cov(comp_imgs[image_index - 1], patch_center_x[0],
-                                   patch_center_y[0], cov_i,
-                                   k_detail, k_denoise, D_th, D_tr, k_stretch,
-                                   k_shrink,DEBUG_E1, DEBUG_E2, DEBUG_L)
+                compute_interpolated_kernel_cov(comp_imgs[image_index - 1], patch_center_pos, cov_i,
+                                                k_detail, k_denoise, D_th, D_tr, k_stretch,
+                                                k_shrink,DEBUG_E1, DEBUG_E2, DEBUG_L)
                 
                 # robustness
                 pos_x = uint16(round(coarse_ref_sub_x[0]))
@@ -230,8 +228,8 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
             # We need to wait the calculation of R and kernel
             cuda.syncthreads()
             
-            patch_pixel_idx = patch_center_x[0] + tx
-            patch_pixel_idy = patch_center_y[0] + ty
+            patch_pixel_idx = uint16(patch_center_pos[1]) + tx
+            patch_pixel_idy = uint16(patch_center_pos[0]) + ty
             
             # in bounds conditions
             if (0 <= patch_pixel_idx < input_size_x and
@@ -262,7 +260,10 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                 y = max(0, quad_mat_prod(cov_i, dist))
                 # y can be slightly negative because of numerical precision.
                 # I clamp it to not explode the error with exp
-                w = math.exp(-y/(4*2))
+                w = math.exp(-y/(4*2*SCALE**2))
+                # kernels are estimated on grey levels, so distances have to
+                # be downscale to grey coarse level
+
 
                 cuda.atomic.add(val, channel, c*w*local_r[channel])
                 cuda.atomic.add(acc, channel, w*local_r[channel])
@@ -290,6 +291,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
 
     accumulate[blockspergrid, threadsperblock](
         ref_img, comp_imgs, alignments, r, output_img)
+    cuda.synchronize()
 
     if VERBOSE > 2:
         current_time = getTime(

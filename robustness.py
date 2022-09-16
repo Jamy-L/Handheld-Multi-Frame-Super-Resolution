@@ -9,7 +9,7 @@ from optical_flow import lucas_kanade_optical_flow, get_closest_flow
 from hdrplus_python.package.algorithm.imageUtils import getTiles, getAlignedTiles
 from hdrplus_python.package.algorithm.merging import depatchifyOverlap
 from hdrplus_python.package.algorithm.genericUtils import getTime
-from kernels import compute_kernel_cov
+
 from linalg import quad_mat_prod
 
 import cv2
