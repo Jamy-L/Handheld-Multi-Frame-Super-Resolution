@@ -9,7 +9,7 @@ from optical_flow import lucas_kanade_optical_flow, get_closest_flow
 from hdrplus_python.package.algorithm.imageUtils import getTiles, getAlignedTiles
 from hdrplus_python.package.algorithm.merging import depatchifyOverlap
 from hdrplus_python.package.algorithm.genericUtils import getTime
-from kernels import compute_kernel_cov
+
 from linalg import quad_mat_prod
 from robustness import fetch_robustness, compute_robustness
 from merge import merge
@@ -59,7 +59,7 @@ def main(ref_img, comp_imgs, options, params):
     current_time = time()
     cuda_robustness = compute_robustness(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment,
                                          options, params['merging'])
-    
+
     current_time = getTime(
         current_time, 'Robustness estimated')
     
@@ -68,8 +68,6 @@ def main(ref_img, comp_imgs, options, params):
     return output, cuda_robustness.copy_to_host()
     
 #%%
-burst_path = 'P:/0000/Samsung'
-
 
 def process(burst_path, options, params):
     currentTime, verbose = time(), options['verbose'] > 1
@@ -107,7 +105,7 @@ def process(burst_path, options, params):
 
     return main(ref_raw, np.array(raw_comp), options, params)
 
-
+#%%
 params = {'block matching': {
                 'mode':'bayer',
                 'tuning': {
@@ -129,8 +127,8 @@ params = {'block matching': {
                 'scale': 1,
                 'tuning': {
                     'tileSizes': 32,
-                    'k_detail' : 0.25,  # [0.25, ..., 0.33]
-                    'k_denoise': 3,    # [3.0, ...,5.0]
+                    'k_detail' : 0.33, # [0.25, ..., 0.33]
+                    'k_denoise': 5,    # [3.0, ...,5.0]
                     'D_th': 0.05,      # [0.001, ..., 0.010]
                     'D_tr': 0.014,     # [0.006, ..., 0.020]
                     'k_stretch' : 4,   # 4
@@ -143,16 +141,17 @@ params = {'block matching': {
                     'dt' : 15},
                     }
             }
-#%%
+
 options = {'verbose' : 3}
+burst_path = 'P:/0001/Samsung'
 
 output, r = process(burst_path, options, params)
 
 
 #%%
 
-raw_ref_img = rawpy.imread('P:/0000/Samsung/im_00.dng')
-exif_tags = open('P:/0000/Samsung/im_00.dng', 'rb')
+raw_ref_img = rawpy.imread('P:/0001/Samsung/im_00.dng')
+exif_tags = open('P:/0001/Samsung/im_00.dng', 'rb')
 tags = exifread.process_file(exif_tags)
 ref_img = raw_ref_img.raw_image.copy()
 
@@ -160,7 +159,7 @@ ref_img = raw_ref_img.raw_image.copy()
 comp_images = rawpy.imread(
     'P:/0000/Samsung/im_01.dng').raw_image.copy()[None]
 for i in range(2, 10):
-    comp_images = np.append(comp_images, rawpy.imread('P:/0000/Samsung/im_0{}.dng'.format(i)
+    comp_images = np.append(comp_images, rawpy.imread('P:/0001/Samsung/im_0{}.dng'.format(i)
                                                       ).raw_image.copy()[None], axis=0)
 
 
@@ -168,6 +167,7 @@ for i in range(2, 10):
 
 
 output_img = output[:,:,:3].copy()
+imsize = output_img.shape
 
 l1 = output[:,:,7].copy()
 l2 = output[:,:,8].copy()
@@ -207,9 +207,14 @@ plt.hist(r2.reshape(r2.size), bins=25)
 # Lower res because pyplot's quiver is really not made for that (=slow)
 plt.figure('quiver')
 scale = 5*1e1
-plt.imshow(gamma(output[:,:,:3][::15, ::15]/1023))
-plt.quiver(e1[:,:,0][::15, ::15], e1[:,:,1][::15, ::15], width=0.001,linewidth=0.0001, scale=scale)
-plt.quiver(e2[:,:,0][::15, ::15], e2[:,:,1][::15, ::15], width=0.001,linewidth=0.0001, scale=scale, color='b')
+downscale_coef = 4
+ix, iy = 1, 2
+patchx, patchy = int(imsize[1]/downscale_coef), int(imsize[0]/downscale_coef)
+plt.imshow(gamma(output_img[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1)]/1023))
+plt.quiver(e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
+           e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale)
+plt.quiver(e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
+           e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale, color='b')
 
 
 # img = process_isp(raw=raw_ref_img, img=(output_img/1023), do_color_correction=False, do_tonemapping=True, do_gamma=True, do_sharpening=False)
