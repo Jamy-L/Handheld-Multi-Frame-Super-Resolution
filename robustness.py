@@ -88,20 +88,16 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
                     channel = get_channel(j, i)
                     guide_patch_ref[ty + 1, tx + 1, channel] = ref_img[top_left_ref_y + i ,
                                                                  top_left_ref_x + j]
-            guide_patch_ref[ty + 1, tx + 1, 1]/=2 # avergaging the green contribution
+            guide_patch_ref[ty + 1, tx + 1, 1]/=2 # averaging the green contribution
             
             
             # Moving. We divide flow by 2 because rgb image is twice smaller
             top_left_m_x = round(top_left_ref_x + flow[0]/2)
-            top_left_m_x = top_left_m_x - top_left_m_x%2
-            # This transformation insures that we are indeed arriving on the right color channel (Bayer top left is generally red or blue)
-            
             top_left_m_y = round(top_left_ref_y + flow[1]/2)
-            top_left_m_y = top_left_m_y - top_left_m_y%2
 
             g = 0   # green accumulator
 
-            channel = get_channel(0, 0)
+            channel = get_channel(top_left_m_x, top_left_m_y)
             if (0 <= top_left_m_y < imshape_y) and (0 <= top_left_m_x < imshape_x): # top left
                 if channel == 1:
                     g += comp_imgs[image_index, top_left_m_y, top_left_m_x]
@@ -113,7 +109,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
                 else:
                     guide_patch_comp[ty + 1, tx + 1, channel] = 0/0 #Nan
                 
-            channel = get_channel(1, 1)
+            channel = get_channel(top_left_m_x + 1, top_left_m_y + 1)
             if (0 <= top_left_m_y + 1< imshape_y) and (0 <= top_left_m_x + 1< imshape_x): # bottom right
                 if channel == 1:
                     g += comp_imgs[image_index, top_left_m_y, top_left_m_x]
@@ -126,7 +122,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
                     guide_patch_comp[ty + 1, tx + 1, channel] = 0/0 #Nan
                 
                 
-            channel = get_channel(0, 1) 
+            channel = get_channel(top_left_m_x, top_left_m_y + 1) 
             if (0 <= top_left_m_y < imshape_y) and (0 <= top_left_m_x + 1< imshape_x):  # top right
                 if channel == 1:
                     g += comp_imgs[image_index, top_left_m_y, top_left_m_x]
@@ -141,7 +137,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
             
             
             
-            channel = get_channel(1, 0) 
+            channel = get_channel(top_left_m_x + 1, top_left_m_y)
             if (0 <= top_left_m_y + 1< imshape_y) and (0 <= top_left_m_x < imshape_x): # bottom left
                 if channel == 1:
                     g += comp_imgs[image_index, top_left_m_y, top_left_m_x]
@@ -189,12 +185,12 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
     def compute_m(flows, mini, maxi, M):
         tx, ty = cuda.threadIdx.x - 1, cuda.threadIdx.y - 1
         image_index, pixel_idy, pixel_idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
-        top_left_y = pixel_idy*2 +2*ty
-        top_left_x = pixel_idx*2 +2*tx
+        y = pixel_idy*2 + ty
+        x = pixel_idx*2 + tx
         
-        if 0 <= top_left_x < imshape_x and 0 <= top_left_y < imshape_y: #inbounds
+        if 0 <= x < imshape_x and 0 <= y < imshape_y: #inbounds
             flow = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) #local array, each threads manipulates a different flow
-            get_closest_flow(top_left_x, top_left_y, flows[image_index], tile_size, imsize, flow)
+            get_closest_flow(x, y, flows[image_index], tile_size, imsize, flow)
             
             #local max search
             cuda.atomic.max(maxi, 0, flow[0])
@@ -217,19 +213,31 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         image_index, pixel_idy, pixel_idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
         tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
         
+        # For each block, the ref guide patch and the matching compared guide image are computed
         compute_guide_patchs(ref_img, comp_imgs, flows, guide_patch_ref, guide_patch_comp)
+        
         local_stats_ref = cuda.shared.array((2, 3), dtype=DEFAULT_CUDA_FLOAT_TYPE) #mu, sigma for rgb
         local_stats_comp = cuda.shared.array((2,3), dtype=DEFAULT_CUDA_FLOAT_TYPE)
-        # init 0 
+        
+        maxi = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) #Max Vx, Vy
+        mini = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) # Min Vx, Vy
+        M = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) #Mx, My
+        # multithreade inits
         if ty < 2:
             local_stats_ref[ty, tx] = 0
             local_stats_comp[ty, tx] = 0
             
+        if tx == 0 and ty==2: # single threaded section
+            
+            maxi[0] = -np.inf 
+            maxi[1] = -np.inf  
+            mini[0] = np.inf
+            mini[1] = np.inf
+            
+            
+            
         cuda.syncthreads()
-        
-        maxi = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) 
-        mini = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-        M = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+
         
         compute_local_stats(guide_patch_ref, guide_patch_comp,
                             local_stats_ref, local_stats_comp)
@@ -250,18 +258,9 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
             # noise correction
             sigma[tx] = max(sigma_t, local_stats_comp[1, tx])
             dp[tx] = dp[tx]*(dp[tx]**2/(dp[tx]**2 + dt**2))
-            
-            if tx == 0: # single threaded section
-                # init, we take one flow vector from the patch
-                flow = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-                get_closest_flow(pixel_idx*2, pixel_idy*2, flows[image_index], tile_size, imsize, flow)
-                
-                maxi[0] = flow[0]
-                maxi[1] = flow[1]
-                mini[0] = flow[2]
-                mini[1] = flow[3]
-            
-        cuda.syncthreads()
+        
+        
+
         compute_m(flows, mini, maxi, M)
         cuda.syncthreads()
         
@@ -306,16 +305,16 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         current_time = getTime(
             current_time, ' - Robustness locally minimized')
     
-    return r
+    return R, r
 
 @cuda.jit(device=True)
-def fetch_robustness(pos_x, pos_y,image_index, R, local_R):
-    tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
+def fetch_robustness(pos_x, pos_y,image_index, R, channel):
     downscaled_posx = int(pos_x//2)
     downscaled_posy = int(pos_y//2)
     
-    if tx == 0 and ty >=0: # TODO Neirest neighboor is made here. Maybe bilinear interpolation is better ?
-        local_R[ty] = max(0, R[image_index, downscaled_posy, downscaled_posx, ty])
+    # TODO Neirest neighboor is made here. Maybe bilinear interpolation is better ?
+    return max(0, R[image_index, downscaled_posy, downscaled_posx, channel])
+
         
         
         

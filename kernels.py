@@ -11,6 +11,7 @@ import numpy as np
 from numba import uint8, uint16, float32, float64, cuda
 from math import sqrt
 from linalg import get_eighen_elmts_2x2, invert_2x2, clamp, interpolate_cov
+import matplotlib.pyplot as plt
 
 DEFAULT_CUDA_FLOAT_TYPE = float32
 DEFAULT_NUMPY_FLOAT_TYPE = np.float32
@@ -122,11 +123,10 @@ def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
     k_1 = k_detail*k_stretch*A
     k_2 = k_detail/(k_shrink*A)
     
-    _ = ((1-D)*k_1 + D*k_detail*k_denoise)
-    k_1 = _*_
+
+    k_1 = ((1-D)*k_1 + D*k_detail*k_denoise)**2
     
-    _ = ((1-D)*k_2 + D*k_detail*k_denoise)
-    k_2 = _*_
+    k_2 = ((1-D)*k_2 + D*k_detail*k_denoise)
     
     k[0] = k_1
     k[1] = k_2 
@@ -247,7 +247,7 @@ def compute_kernel_covs(image, center_pos_x, center_pos_y, covs,
 
         for i in range(2):
             for j in range(2):
-                covs[typ, txp, i, j] = k[0]*e1[j]*e1[i] + k[1]*e2[j]*e2[i]
+                covs[typ, txp, i, j] = k[1]*e1[j]*e1[i] + k[0]*e2[j]*e2[i] # TODO k are inverted. What is going on ??
             
         
 
@@ -320,6 +320,14 @@ def compute_interpolated_kernel_cov(image, fine_center_pos, cov_i,
             cov_i[1, 0] = 1
             cov_i[1, 1] = 0
         
-    
-    
+
+def plot_kernel(cov_i):
+    L = np.linspace(-10, 10, 100)
+    Xm, Ym = np.meshgrid(L,L)
+    Z = np.empty_like(Xm)
+    Z = cov_i[0,0] * Xm**2 + (cov_i[1, 0] + cov_i[0, 1])*Xm*Ym + cov_i[1, 1]*Ym**2
+    plt.figure()
+    plt.pcolor(Xm, Ym, np.exp(-Z/2), vmin = 0, vmax=1)
+    plt.gca().invert_yaxis()
+    plt.colorbar()
     
