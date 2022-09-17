@@ -134,12 +134,12 @@ params = {'block matching': {
                     'D_tr': 0.014,     # [0.006, ..., 0.020]
                     'k_stretch' : 4,   # 4
                     'k_shrink' : 2,    # 2
-                    't' : 0.12,        # 0.12
-                    's1' : 12,
-                    's2' : 2,
-                    'Mt' : 0.8,
-                    'sigma_t' : 2,
-                    'dt' : 15},
+                    't' : 0,            # 0.12
+                    's1' : 12,          #12
+                    's2' : 2,              # 2
+                    'Mt' : 0.8,         # 0.8
+                    'sigma_t' : 10,
+                    'dt' : 1e-3},
                     }
             }
 
@@ -210,7 +210,7 @@ plt.figure("original")
 plt.imshow(gamma(base/1023))
 
 
-r2 = np.mean(r, axis = 3)
+r2 = np.mean(R, axis = 3)
 plt.figure("R histogram")
 plt.hist(r2.reshape(r2.size), bins=25)
 #%%
@@ -229,20 +229,27 @@ def plot_merge(cov_i, D, pos):
     #     plt.quiver(D[:,:,0].reshape(9)[i], -D[:,:,1].reshape(9)[i], scale=1, scale_units = "xy")
     plt.colorbar()
 
-# quivers for eighenvectors
-# Lower res because pyplot's quiver is really not made for that (=slow)
-plt.figure('quiver')
-scale = 5*1e1
-downscale_coef = 4
-ix, iy = 2, 1
-patchx, patchy = int(imsize[1]/downscale_coef), int(imsize[0]/downscale_coef)
-plt.imshow(gamma(output_img[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1)]/1023))
+plt.figure('r')
+plt.imshow(r[0]/np.max(r[0], axis=(0,1)))
 
-# minus sign because pyplot takes y axis growing towards top. but we need the opposite
-plt.quiver(e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
-           -e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale)
-plt.quiver(e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
-           -e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale, color='b')
+plt.figure('R')
+plt.imshow(R[0]/np.max(R[0], axis=(0,1)))
+
+
+# # quivers for eighenvectors
+# # Lower res because pyplot's quiver is really not made for that (=slow)
+# plt.figure('quiver')
+# scale = 5*1e1
+# downscale_coef = 4
+# ix, iy = 2, 1
+# patchx, patchy = int(imsize[1]/downscale_coef), int(imsize[0]/downscale_coef)
+# plt.imshow(gamma(output_img[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1)]/1023))
+
+# # minus sign because pyplot takes y axis growing towards top. but we need the opposite
+# plt.quiver(e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
+#            -e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale)
+# plt.quiver(e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
+#            -e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale, color='b')
 
 
 # img = process_isp(raw=raw_ref_img, img=(output_img/1023), do_color_correction=False, do_tonemapping=True, do_gamma=True, do_sharpening=False)

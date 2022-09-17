@@ -80,14 +80,25 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         
         flow = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         get_closest_flow(top_left_ref_x, top_left_ref_y, flows[image_index], tile_size, imsize, flow)
-        
         if (0 <= top_left_ref_y < imshape_y -1) and (0 <= top_left_ref_x < imshape_x -1): # ref inbounds
+            # We need to init because green is accumulating
+            guide_patch_ref[ty + 1, tx + 1, 0] = 0 
+            guide_patch_ref[ty + 1, tx + 1, 1] = 0
+            guide_patch_ref[ty + 1, tx + 1, 2] = 0
+            
+            guide_patch_comp[ty + 1, tx + 1, 0] = 0 
+            guide_patch_comp[ty + 1, tx + 1, 1] = 0
+            guide_patch_comp[ty + 1, tx + 1, 2] = 0
+        
+        
             # ref
             for i in range(2):
                 for j in range(2):
                     channel = get_channel(j, i)
-                    guide_patch_ref[ty + 1, tx + 1, channel] = ref_img[top_left_ref_y + i ,
-                                                                 top_left_ref_x + j]
+                    # This accumulation is single-threaded. No need to use cuda.atomic.add because there is no racing condition
+                    guide_patch_ref[ty + 1, tx + 1, channel] += ref_img[top_left_ref_y + i ,
+                                                                        top_left_ref_x + j]
+                    
             guide_patch_ref[ty + 1, tx + 1, 1]/=2 # averaging the green contribution
             
             
@@ -95,60 +106,13 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
             top_left_m_x = round(top_left_ref_x + flow[0]/2)
             top_left_m_y = round(top_left_ref_y + flow[1]/2)
 
-            g = 0   # green accumulator
-
-            channel = get_channel(top_left_m_x, top_left_m_y)
-            if (0 <= top_left_m_y < imshape_y) and (0 <= top_left_m_x < imshape_x): # top left
-                if channel == 1:
-                    g += comp_imgs[image_index, top_left_m_y, top_left_m_x]
-                else:
-                    guide_patch_comp[ty + 1, tx + 1, channel] = comp_imgs[image_index, top_left_m_y, top_left_m_x]
-            else:
-                if channel == 1:
-                    g += 0/0
-                else:
-                    guide_patch_comp[ty + 1, tx + 1, channel] = 0/0 #Nan
-                
-            channel = get_channel(top_left_m_x + 1, top_left_m_y + 1)
-            if (0 <= top_left_m_y + 1< imshape_y) and (0 <= top_left_m_x + 1< imshape_x): # bottom right
-                if channel == 1:
-                    g += comp_imgs[image_index, top_left_m_y, top_left_m_x]
-                else:
-                    guide_patch_comp[ty + 1, tx + 1, channel] = comp_imgs[image_index, top_left_m_y + 1, top_left_m_x + 1]
-            else:
-                if channel == 1:
-                    g += 0/0
-                else:
-                    guide_patch_comp[ty + 1, tx + 1, channel] = 0/0 #Nan
-                
-                
-            channel = get_channel(top_left_m_x, top_left_m_y + 1) 
-            if (0 <= top_left_m_y < imshape_y) and (0 <= top_left_m_x + 1< imshape_x):  # top right
-                if channel == 1:
-                    g += comp_imgs[image_index, top_left_m_y, top_left_m_x]
-                else:
-                    guide_patch_comp[ty + 1, tx + 1, channel] = comp_imgs[image_index, top_left_m_y, top_left_m_x + 1]
-            else:
-                if channel == 1:
-                    g += 0/0
-                else:
-                    guide_patch_comp[ty + 1, tx + 1, channel] = 0/0 #Nan
-            
-            
-            
-            
-            channel = get_channel(top_left_m_x + 1, top_left_m_y)
-            if (0 <= top_left_m_y + 1< imshape_y) and (0 <= top_left_m_x < imshape_x): # bottom left
-                if channel == 1:
-                    g += comp_imgs[image_index, top_left_m_y, top_left_m_x]
-                else:
-                    guide_patch_comp[ty + 1, tx + 1, channel] = comp_imgs[image_index, top_left_m_y + 1, top_left_m_x] # g2
-            else:
-                if channel == 1:
-                    g += 0/0
-                else:
-                    guide_patch_comp[ty + 1, tx + 1, channel] = 0/0 #Nan
-
+            for i in range(2):
+                for j in range(2):
+                    channel = get_channel(top_left_m_x + j, top_left_m_y + i)
+                    if (0 <= top_left_m_y + i < imshape_y) and (0 <= top_left_m_x + j < imshape_x):
+                        guide_patch_comp[ty + 1, tx + 1, channel] += comp_imgs[image_index, top_left_m_y + i, top_left_m_x + j]
+                    else:
+                        guide_patch_comp[ty + 1, tx + 1, channel] = 0/0 #Nan
 
             guide_patch_comp[ty + 1, tx + 1, 1] /= 2 # Averaging greens 
             
@@ -257,7 +221,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
             dp[tx] = abs(local_stats_ref[0, tx] - local_stats_comp[0, tx])
             # noise correction
             sigma[tx] = max(sigma_t, local_stats_comp[1, tx])
-            dp[tx] = dp[tx]*(dp[tx]**2/(dp[tx]**2 + dt**2))
+            dp[tx] = dp[tx] # *(dp[tx]**2/(dp[tx]**2 + dt**2))
         
         
 
@@ -280,9 +244,10 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
             
         cuda.syncthreads()
         #local min search
-        cuda.atomic.min(mini, 0, R[image_index, pixel_idy, pixel_idx, 0])
-        cuda.atomic.min(mini, 1, R[image_index, pixel_idy, pixel_idx, 1])
-        cuda.atomic.min(mini, 2, R[image_index, pixel_idy, pixel_idx, 2])
+        if 0 <= pixel_idx + tx < rgb_imshape_x and 0<= pixel_idy + ty < imshape_y : #inbound
+            cuda.atomic.min(mini, 0, R[image_index, pixel_idy, pixel_idx, 0])
+            cuda.atomic.min(mini, 1, R[image_index, pixel_idy, pixel_idx, 1])
+            cuda.atomic.min(mini, 2, R[image_index, pixel_idy, pixel_idx, 2])
         
         cuda.syncthreads()
         if tx == 0 and ty >= 0 :
