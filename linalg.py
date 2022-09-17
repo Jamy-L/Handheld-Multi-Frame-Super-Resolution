@@ -143,7 +143,7 @@ def get_eighen_vect_2x2(M, l, e1, e2):
 
     """
     # 2x2 algorithm : https://en.wikipedia.org/wiki/Eigenvalue_algorithm (9 August 2022 version)
-    if M[0, 1] == 0 and M[1, 0] ==0 and M[0,0] == M[1, 1]:
+    if M[0, 1] == 0 and M[1, 0] == 0 and M[0,0] == M[1, 1]:
         # M is multiple of identity, picking 2 ortogonal eighen vectors.
         e1[0] = 1; e1[1] = 0
         e2[0] = 0; e2[0] = 1

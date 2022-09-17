@@ -14,6 +14,7 @@ from linalg import quad_mat_prod
 from robustness import fetch_robustness, compute_robustness
 from merge import merge
 from block_matching import alignHdrplus
+from kernels import plot_kernel
 
 import cv2
 import numpy as np
@@ -57,7 +58,7 @@ def main(ref_img, comp_imgs, options, params):
         ref_img, comp_imgs, pre_alignment, options, params['kanade'])
 
     current_time = time()
-    cuda_robustness = compute_robustness(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment,
+    cuda_Robustness, cuda_robustness = compute_robustness(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment,
                                          options, params['merging'])
 
     current_time = getTime(
@@ -65,7 +66,7 @@ def main(ref_img, comp_imgs, options, params):
     
     output = merge(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment, cuda_robustness, {"verbose": 3}, params['merging'])
     print('\nTotal ellapsed time : ', time() - t1)
-    return output, cuda_robustness.copy_to_host()
+    return output, cuda_Robustness.copy_to_host(), cuda_robustness.copy_to_host()
     
 #%%
 
@@ -145,7 +146,7 @@ params = {'block matching': {
 options = {'verbose' : 3}
 burst_path = 'P:/0001/Samsung'
 
-output, r = process(burst_path, options, params)
+output, R, r = process(burst_path, options, params)
 
 
 #%%
@@ -157,7 +158,7 @@ ref_img = raw_ref_img.raw_image.copy()
 
 
 comp_images = rawpy.imread(
-    'P:/0000/Samsung/im_01.dng').raw_image.copy()[None]
+    'P:/0001/Samsung/im_01.dng').raw_image.copy()[None]
 for i in range(2, 10):
     comp_images = np.append(comp_images, rawpy.imread('P:/0001/Samsung/im_0{}.dng'.format(i)
                                                       ).raw_image.copy()[None], axis=0)
@@ -185,6 +186,16 @@ e2[:,:,1] = output[:,:,6].copy()
 e2[:,:,0]*=flat(l2)
 e2[:,:,1]*=flat(l2)
 
+covs = np.empty((output.shape[0], output.shape[1], 2, 2))
+covs[:,:,0,0] = output[:,:,9].copy()
+covs[:,:,0,1] = output[:,:,10].copy()
+covs[:,:,1,0] = output[:,:,11].copy()
+covs[:,:,1,1] = output[:,:,12].copy()
+
+D = np.empty((output.shape[0], output.shape[1], 3, 3, 2))
+for i in range(18):
+    D[:, :, i//6, (i%6)//2, i%2] = output[:,:,13 + i].copy() 
+
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 
@@ -203,18 +214,35 @@ r2 = np.mean(r, axis = 3)
 plt.figure("R histogram")
 plt.hist(r2.reshape(r2.size), bins=25)
 #%%
+def plot_merge(cov_i, D, pos):
+    cov_i = cov_i[pos]
+    D = D[pos]
+    L = np.linspace(-10, 10, 100)
+    Xm, Ym = np.meshgrid(L,L)
+    Z = np.empty_like(Xm)
+    Z = cov_i[0,0] * Xm**2 + (cov_i[1, 0] + cov_i[0, 1])*Xm*Ym + cov_i[1, 1]*Ym**2
+    plt.figure()
+    plt.pcolor(Xm, Ym, np.exp(-Z/2), vmin = 0, vmax=1)
+    plt.gca().invert_yaxis()
+    plt.scatter(D[:,:,0].reshape(9), D[:,:,1].reshape(9), c='r', marker ='x')
+    # for i in range(9):
+    #     plt.quiver(D[:,:,0].reshape(9)[i], -D[:,:,1].reshape(9)[i], scale=1, scale_units = "xy")
+    plt.colorbar()
+
 # quivers for eighenvectors
 # Lower res because pyplot's quiver is really not made for that (=slow)
 plt.figure('quiver')
 scale = 5*1e1
 downscale_coef = 4
-ix, iy = 1, 2
+ix, iy = 2, 1
 patchx, patchy = int(imsize[1]/downscale_coef), int(imsize[0]/downscale_coef)
 plt.imshow(gamma(output_img[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1)]/1023))
+
+# minus sign because pyplot takes y axis growing towards top. but we need the opposite
 plt.quiver(e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
-           e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale)
+           -e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale)
 plt.quiver(e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
-           e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale, color='b')
+           -e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale, color='b')
 
 
 # img = process_isp(raw=raw_ref_img, img=(output_img/1023), do_color_correction=False, do_tonemapping=True, do_gamma=True, do_sharpening=False)
