@@ -324,17 +324,17 @@ def evaluate_alignment(alignment, ground_truth, label="", imshow=False):
 
     EQ = flow_quad_error(ground_truth, alignment)
     if alignment.shape[0] > 1:
-        plt.figure()
+        plt.figure("flow MSE")
         plt.plot([i for i in range(len(EQ))], np.mean(EQ, axis=(1,2,3)))
         plt.xlabel('lk iteration')
         plt.ylabel('MSE on flow')
     
-        plt.figure()
+        plt.figure("flow norm")
         plt.plot([np.mean(np.linalg.norm(alignment[i], axis=3)) for i in range(alignment.shape[0])])
         plt.xlabel('lk iteration')
         plt.ylabel('mean norm of optical flow')
     
-        plt.figure()
+        plt.figure("flow step")
         plt.plot([np.mean(np.linalg.norm(2*alignment[i+1] - 2*alignment[i], axis=3)) for i in range(alignment.shape[0]-1)])
         plt.xlabel('lk iteration')
         plt.ylabel('mean norm of optical flow step for each iteration')
@@ -377,7 +377,7 @@ params = {'block matching': {
                 'epsilon div' : 1e-6,
                 'tuning' : {
                     'tileSizes' : 32,
-                    'kanadeIter': 10, # 3 
+                    'kanadeIter': 7, # 3 
                     }},
             'merging': {
                 'scale': 2,
@@ -414,7 +414,7 @@ dec_burst = decimate(burst)
 lk_alignment = align_lk(dec_burst, params)
 t1 = time()
 fb_alignment = align_fb(dec_burst)
-print('farneback evalueated : ', time()-t1)
+print('farneback evaluated : ', time()-t1)
 
 
 evaluate_alignment(lk_alignment, flow, label = "LK", imshow=True)
