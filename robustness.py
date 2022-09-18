@@ -221,7 +221,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
             dp[tx] = abs(local_stats_ref[0, tx] - local_stats_comp[0, tx])
             # noise correction
             sigma[tx] = max(sigma_t, local_stats_comp[1, tx])
-            dp[tx] = dp[tx] # *(dp[tx]**2/(dp[tx]**2 + dt**2))
+            dp[tx] = dp[tx] # TODO  *(dp[tx]**2/(dp[tx]**2 + dt**2))
         
         
 
@@ -243,11 +243,12 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
             mini[ty] = 1/0 # + inf
             
         cuda.syncthreads()
+        
         #local min search
-        if 0 <= pixel_idx + tx < rgb_imshape_x and 0<= pixel_idy + ty < imshape_y : #inbound
-            cuda.atomic.min(mini, 0, R[image_index, pixel_idy, pixel_idx, 0])
-            cuda.atomic.min(mini, 1, R[image_index, pixel_idy, pixel_idx, 1])
-            cuda.atomic.min(mini, 2, R[image_index, pixel_idy, pixel_idx, 2])
+        if 0 <= pixel_idx + tx < rgb_imshape_x and 0<= pixel_idy + ty < rgb_imshape_y : #inbound
+            cuda.atomic.min(mini, 0, R[image_index, pixel_idy + ty, pixel_idx + tx, 0])
+            cuda.atomic.min(mini, 1, R[image_index, pixel_idy + ty, pixel_idx + tx, 1])
+            cuda.atomic.min(mini, 2, R[image_index, pixel_idy + ty, pixel_idx + tx, 2])
         
         cuda.syncthreads()
         if tx == 0 and ty >= 0 :

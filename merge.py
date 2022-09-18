@@ -257,7 +257,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                 y = max(0, quad_mat_prod(cov_i, dist))
                 # y can be slightly negative because of numerical precision.
                 # I clamp it to not explode the error with exp
-                w = math.exp(-y/(2*2*SCALE**2))
+                w = math.exp(-y/(2))
                 # kernels are estimated on grey levels, so distances have to
                 # be downscaled to grey coarse level
 

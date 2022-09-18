@@ -138,7 +138,7 @@ params = {'block matching': {
                     's1' : 12,          #12
                     's2' : 2,              # 2
                     'Mt' : 0.8,         # 0.8
-                    'sigma_t' : 10,
+                    'sigma_t' : 30,
                     'dt' : 1e-3},
                     }
             }
@@ -213,6 +213,9 @@ plt.imshow(gamma(base/1023))
 r2 = np.mean(R, axis = 3)
 plt.figure("R histogram")
 plt.hist(r2.reshape(r2.size), bins=25)
+r3 = np.mean(r, axis = 3)
+plt.figure("r histogram")
+plt.hist(r3.reshape(r3.size), bins=25)
 #%%
 def plot_merge(cov_i, D, pos):
     cov_i = cov_i[pos]
@@ -231,6 +234,8 @@ def plot_merge(cov_i, D, pos):
 
 plt.figure('r')
 plt.imshow(r[0]/np.max(r[0], axis=(0,1)))
+plt.figure("accumulated r")
+plt.imshow(np.mean(r[0]/np.max(r[0], axis=(0,1)), axis = 2), cmap = "gray")
 
 plt.figure('R')
 plt.imshow(R[0]/np.max(R[0], axis=(0,1)))
