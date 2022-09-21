@@ -11,7 +11,7 @@ import random
 import cv2
 import matplotlib.pyplot as plt
 from block_matching import alignHdrplus
-from optical_flow import get_closest_flow, lucas_kanade_optical_flow
+from optical_flow import get_closest_flow, lucas_kanade_optical_flow, get_closest_flow_V2, lucas_kanade_optical_flow_V2
 from numba import cuda, float64
 from time import time
 
@@ -233,7 +233,7 @@ def upscale_alignement(alignment, imsize, tile_size):
         im_id, x, y=cuda.grid(3)
         if 0 <= x <imsize[1] and 0 <= y <imsize[0] and 0 <=  im_id < pre_alignment.shape[0]:
             local_flow = cuda.local.array(2, dtype=float64)
-            get_closest_flow(x, y, pre_alignment[im_id], tile_size, imsize, local_flow)
+            get_closest_flow_V2(x, y, pre_alignment[im_id], tile_size, imsize, local_flow)
             upscaled_alignment[im_id, y, x, 0] = local_flow[0]
             upscaled_alignment[im_id, y, x, 1] = local_flow[1]
 
@@ -256,7 +256,7 @@ def align_lk(dec_burst, params):
 
 
 
-    lk_alignment = lucas_kanade_optical_flow(
+    lk_alignment = lucas_kanade_optical_flow_V2(
         dec_burst[0], dec_burst[1:], pre_alignment, options, params['kanade'], debug=True)
     lk_alignment[-1]/=2 #last alignment is multiplied by 2 by the LK flow function
     
@@ -377,7 +377,7 @@ params = {'block matching': {
                 'epsilon div' : 1e-6,
                 'tuning' : {
                     'tileSizes' : 32,
-                    'kanadeIter': 7, # 3 
+                    'kanadeIter': 10, # 3 
                     }},
             'merging': {
                 'scale': 2,
