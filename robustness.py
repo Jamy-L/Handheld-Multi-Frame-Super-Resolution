@@ -25,6 +25,27 @@ DEFAULT_CUDA_FLOAT_TYPE = float32
 DEFAULT_NUMPY_FLOAT_TYPE = np.float32
 
 def compute_robustness(ref_img, comp_imgs, flows, options, params):
+    """
+    Returns the robustnesses of all compared images, based on the provided flow.
+
+    Parameters
+    ----------
+    ref_img : Array[imsize_y, imsize_x]
+        ref image.
+    comp_imgs : Array[n_images, imsize_y, imsize_x]
+        Compared images.
+    flows : Array[n_images, n_patchs_y, n_patchs_y, 2]
+        optical flows
+    options : dict
+        options to pass
+    params : dict
+        parameters
+
+    Returns
+    -------
+    R : Array[n_images, imsize_y/2, imsize_x/2, 3]
+        Robustness map for every image, for the r, g and b channels
+    """
     n_images, imshape_y, imshape_x = comp_imgs.shape
     imsize = ref_img.shape
     
@@ -72,6 +93,24 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
     
     @cuda.jit(device=True)
     def compute_guide_patchs(ref_img, comp_imgs, flows, guide_patch_ref, guide_patch_comp):
+        """
+        Computes the guide patch (the position is ruled by the cuda block ids)
+
+        Parameters
+        ----------
+        ref_img : shared Array[imsize_y, imsize_x]
+            ref image.
+        comp_imgs : shrred Array[n_images, imsize_y, imsize_x]
+            compared images.
+        flows : shared Array[n_images, n_patchs_y, n_patchs_y, 2]
+            optical flows
+        guide_patch_ref : Shared Array[3, 3]
+            empty array which will contain the guide for ref img
+        guide_patch_comp : shared Array[3, 3]
+            empty array which will contain the guide for comp img
+
+
+        """
         image_index, pixel_idy, pixel_idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
         tx, ty = cuda.threadIdx.x -1, cuda.threadIdx.y -1
         
@@ -131,6 +170,24 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
     @cuda.jit(device=True)
     def compute_local_stats(guide_patch_ref, guide_patch_comp,
                             local_stats_ref, local_stats_comp):
+        """
+        Computes the distance and variance associated with the 2 patches
+
+        Parameters
+        ----------
+        ref_img : shared Array[imsize_y, imsize_x]
+            ref image.
+        comp_imgs : shrred Array[n_images, imsize_y, imsize_x]
+            compared images.
+        flows : shared Array[n_images, n_patchs_y, n_patchs_y, 2]
+            optical flows
+        local_stats_ref : shared Array[2]
+            empty array that will contain mu and sigma for the ref image
+        local_stats_comp : shared Array[2]
+            empty Array that will contain mu and sigma for the compared image
+
+
+        """
         tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
         for chan in range(3):
             if not(isnan(guide_patch_ref[ty, tx, chan])):
@@ -147,6 +204,22 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
     
     @cuda.jit(device=True)
     def compute_m(flows, mini, maxi, M):
+        """
+        Computes Mx and My based on the flows 
+
+        Parameters
+        ----------
+        flows : shared Array[n_images, n_patchs_y, n_patchs_x, 2]
+            optical flows
+        mini : shared Array[2]
+            empty shared array used for parallel computation of min 
+        maxi : shared Array[2]
+            empty shared array used for parallel computation of max 
+        M : shared Array[2]
+            empty array that will contain Mx and My.
+
+
+        """
         tx, ty = cuda.threadIdx.x - 1, cuda.threadIdx.y - 1
         image_index, pixel_idy, pixel_idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
         y = pixel_idy*2 + ty
@@ -171,6 +244,22 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
     
     @cuda.jit
     def cuda_compute_robustness(ref_img, comp_imgs, flows, R):
+        """
+        Computes robustness in parralel. Each bloc, computes one coefficient of R,
+        and is made of 9 threads.
+
+        Parameters
+        ----------
+        ref_img : shared Array[imsize_y, imsize_x]
+            ref image.
+        comp_imgs : shared Array[n_images, imsize_y, imsize_x]
+            Compared images.
+        flows : shared Array[n_images, n_patchs_y, n_patchs_y, 2]
+            optical flows
+        R : Array[n_images, imsize_y/2, imsize_x/2, 3]
+            Robustness map for every image, for the r, g and b channels
+
+        """
         guide_patch_ref = cuda.shared.array((3, 3, 3), dtype=DEFAULT_CUDA_FLOAT_TYPE)
         guide_patch_comp = cuda.shared.array((3, 3, 3), dtype=DEFAULT_CUDA_FLOAT_TYPE)
         
@@ -236,6 +325,22 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         
     @cuda.jit
     def compute_local_min(R, r):
+        """
+        For each pixel of R, the minimum in a 5 by 5 window is estimated in parallel
+        and stored in r.
+
+        Parameters
+        ----------
+        R : Array[n_images, imsize_y/2, imsize_x/2, 3]
+            Robustness map for every image, for the r, g and b channels
+        r : Array[n_images, imsize_y/2, imsize_x/2, 3]
+            locally minimised version of R
+
+        Returns
+        -------
+        None.
+
+        """
         image_index, pixel_idy, pixel_idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
         tx, ty = cuda.threadIdx.x - 2, cuda.threadIdx.y - 2
         mini = cuda.shared.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
@@ -275,6 +380,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
 
 @cuda.jit(device=True)
 def fetch_robustness(pos_x, pos_y,image_index, R, channel):
+
     downscaled_posx = int(pos_x//2)
     downscaled_posy = int(pos_y//2)
     

@@ -366,7 +366,7 @@ params = {'block matching': {
                 'mode':'bayer',
                 'tuning': {
                     # WARNING: these parameters are defined fine-to-coarse!
-                    'factors': [1, 2, 4, 4],
+                    'factors': [1, 2, 2, 2],
                     'tileSizes': [16, 16, 16, 8],
                     'searchRadia': [1, 4, 4, 4],
                     'distances': ['L1', 'L2', 'L2', 'L2'],
@@ -398,7 +398,7 @@ params = {'block matching': {
                     }
             }
 
-img = plt.imread("S:/Images/Photos/Usine/20190420_160949.jpg")
+img = plt.imread("P:/DIV2K_valid_HR/DIV2K_valid_HR/0806.png")*255
 transformation_params = {'max_translation':10}
 burst, flow = single2lrburst(img, 5, downsample_factor=2, transformation_params=transformation_params)
 flow = flow[1:].transpose(0, 2, 3, 1)
