@@ -23,19 +23,17 @@ def compute_harris(image, top_left_x, top_left_y, harris):
 
     Parameters
     ----------
-    image : TYPE
-        DESCRIPTION.
-    top_left_x : coordinate of the top left bayer pixel contained in the grey
+    image : shared Array[imsize_y, imsize_x]
+        ref image
+    top_left_x : int
+        coordinate of the top left bayer pixel contained in the grey
         pixel where harris is computed
-        DESCRIPTION.
-    top_left_y : TYPE
-        DESCRIPTION.
-    harris : TYPE
-        DESCRIPTION.
-
-    Returns
-    -------
-    None.
+    top_left_y : int
+        coordinate of the top left bayer pixel contained in the grey
+        pixel where harris is computed
+    harris : shared array[2, 2, 2, 2]
+        zero inited array. harris[0,1] is the harris matrix in the top right 
+        of the 5x5 grey patch
 
     """
     imshape_y, imshape_x = image.shape
@@ -118,6 +116,32 @@ def compute_harris(image, top_left_x, top_left_y, harris):
 @cuda.jit(device=True)
 def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
                           k_shrink):
+    """
+    Computes k1 and k2 based on lambda1, lambda2 and the constants
+
+    Parameters
+    ----------
+    l1 : float
+        lambda1
+    l2 : float
+        lambda2
+    k : shared Array[2]
+        empty vector where k1 and k2 are stored
+    k_detail : TYPE
+        DESCRIPTION.
+    k_denoise : TYPE
+        DESCRIPTION.
+    D_th : TYPE
+        DESCRIPTION.
+    D_tr : TYPE
+        DESCRIPTION.
+    k_stretch : TYPE
+        DESCRIPTION.
+    k_shrink : TYPE
+        DESCRIPTION.
+
+
+    """
     A = 1+sqrt((l1 - l2)/(l1 + l2))
     D = clamp(1 - sqrt(l1)/D_tr+D_th, 0, 1)
     k_1 = k_detail*k_stretch*A
@@ -140,12 +164,12 @@ def dispatch_threads_cov():
 
     Returns
     -------
-    TYPE
-        DESCRIPTION.
-    TYPE
-        DESCRIPTION.
-    TYPE
-        DESCRIPTION.
+    x : int
+        thread idx
+    y : int
+        thread idy
+    z : int
+        thread idz
 
     """
     tx = cuda.threadIdx.x
@@ -171,8 +195,7 @@ def compute_kernel_covs(image, center_pos_x, center_pos_y, covs,
                        k_detail, k_denoise, D_th, D_tr, k_stretch,
                        k_shrink, DEBUG_E1, DEBUG_E2, DEBUG_L):
     """
-    Returns the covariance of the kernel centered in the middle of the 2x2 bayer
-    cell, of which one of the 4 pixels corrdinates is given
+    Computes the 4 covariance matrix around the given coordinates
 
     Parameters
     ----------
@@ -183,11 +206,8 @@ def compute_kernel_covs(image, center_pos_x, center_pos_y, covs,
     center_pos_y : uint
         vertical position of the center of the Bayer 3x3 patch 
     covs : array[2, 2, 2, 2]
-        Covariance matrix of the patch to be returned
+        empty arrays that will containt the covariance matrixes
 
-    Returns
-    -------
-    None
 
     """
     tx = cuda.threadIdx.x
@@ -256,34 +276,19 @@ def compute_interpolated_kernel_cov(image, fine_center_pos, cov_i,
                                     k_detail, k_denoise, D_th, D_tr, k_stretch,
                                     k_shrink, DEBUG_E1, DEBUG_E2, DEBUG_L):
     """
-    
+    Computes the invert of the inteprolated covariance matrix, at a
+    sub-pixel position
 
     Parameters
     ----------
-    image : TYPE
-        DESCRIPTION.
-    fine_center_pos : float Array[2]
-        DESCRIPTION.
-    cov_i : TYPE
-        DESCRIPTION.
-    k_detail : TYPE
-        DESCRIPTION.
-    k_denoise : TYPE
-        DESCRIPTION.
-    D_th : TYPE
-        DESCRIPTION.
-    D_tr : TYPE
-        DESCRIPTION.
-    k_stretch : TYPE
-        DESCRIPTION.
-    k_shrink : TYPE
-        DESCRIPTION.
-    DEBUG_E1 : TYPE
-        DESCRIPTION.
-    DEBUG_E2 : TYPE
-        DESCRIPTION.
-    DEBUG_L : TYPE
-        DESCRIPTION.
+    image : shared Array[imsize_y, imsize_x]
+        image containing the patch
+    fine_center_pos : shared array[2]
+        y, x : subpixel position where the covariance matrix must be interpolated
+    cov_i : shared array[2, 2]
+        empty array that will contain the invert of the covariance matrix at
+        the given position
+
 
     Returns
     -------

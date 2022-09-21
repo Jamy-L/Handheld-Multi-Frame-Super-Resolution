@@ -135,8 +135,8 @@ params = {'block matching': {
                     'k_stretch' : 4,   # 4
                     'k_shrink' : 2,    # 2
                     't' : 0,            # 0.12
-                    's1' : 12,          #12
-                    's2' : 2,              # 2
+                    's1' : 2,          #12
+                    's2' : 12,              # 2
                     'Mt' : 0.8,         # 0.8
                     'sigma_t' : 30,
                     'dt' : 1e-3},
@@ -206,8 +206,8 @@ base[:,:,0] = ref_img[0::2, 1::2]
 base[:,:,1] = (ref_img[::2, ::2] + ref_img[1::2, 1::2])/2
 base[:,:,2] = ref_img[1::2, ::2]
 
-plt.figure("original")
-plt.imshow(gamma(base/1023))
+plt.figure("original bicubic")
+plt.imshow(cv2.resize(gamma(base/1023), None, fx = 2, fy = 2, interpolation=cv2.INTER_CUBIC))
 
 
 r2 = np.mean(R, axis = 3)
