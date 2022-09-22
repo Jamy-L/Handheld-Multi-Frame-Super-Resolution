@@ -433,7 +433,7 @@ def lucas_kanade_optical_flow_V2(ref_img_bayer, comp_img_bayer, pre_alignment_ba
         current_time, ' -- Arrays moved to GPU')
     
     for iter_index in range(n_iter):
-        lucas_kanade_optical_flow_iteration(
+        lucas_kanade_optical_flow_iteration_V2(
             cuda_ref_img, cuda_gradsx, cuda_gradsy, cuda_comp_img, cuda_alignment,
             options, params, iter_index)
         if debug :
@@ -495,12 +495,12 @@ def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, al
         
         
         image_index, patch_idy, patch_idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
-        pixel_local_idx = cuda.threadIdx.x
+        pixel_local_idx = cuda.threadIdx.x # Position relative to the patch
         pixel_local_idy = cuda.threadIdx.y
         
         inbound = (0 <= pixel_local_idx < tile_size) and (0 <= pixel_local_idy < tile_size)
         
-        pixel_global_idx = tile_size//2 * patch_idx + pixel_local_idx
+        pixel_global_idx = tile_size//2 * patch_idx + pixel_local_idx # global position on the coarse black and white grid
         pixel_global_idy = tile_size//2 * patch_idy + pixel_local_idy
         
         ATA = cuda.shared.array((6,6), dtype = DEFAULT_CUDA_FLOAT_TYPE)
@@ -514,7 +514,7 @@ def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, al
   
         
         
-        inbound = inbound and  (0 <= pixel_global_idx < imsize_x) and (0 <= pixel_global_idy < imsize_y)
+        inbound = inbound and (0 <= pixel_global_idx < imsize_x) and (0 <= pixel_global_idy < imsize_y)
     
         if inbound :
             # Warp I with W(x; p) to compute I(W(x; p))
@@ -538,7 +538,7 @@ def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, al
             cuda.atomic.add(ATB, 0, -pixel_global_idx*gradx*gradt)
             cuda.atomic.add(ATB, 1, -pixel_global_idx*grady*gradt)
             cuda.atomic.add(ATB, 2, -pixel_global_idy*gradx*gradt)
-            cuda.atomic.add(ATB, 3, -pixel_global_idx*grady*gradt)
+            cuda.atomic.add(ATB, 3, -pixel_global_idy*grady*gradt)
             cuda.atomic.add(ATB, 4, -gradx*gradt)
             cuda.atomic.add(ATB, 5, -grady*gradt)
             
@@ -569,15 +569,24 @@ def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, al
                     
                     cuda.atomic.add(ATA, (i, j), _)
                         
-                
+        # TODO is there a clever initialisation for delta p ?
+        # Zero init of delta p
+        alignment_step = cuda.shared.array(6, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        if cuda.threadIdx.x <= 5 and cuda.threadIdx.y == 0:    
+            alignment_step[cuda.threadIdx.x] = 0
+            
+        cuda.syncthreads()
+        solvable = solve_6x6_krylov(ATA, ATB, alignment_step, 7) 
+        alignment[image_index, patch_idy, patch_idx]
+        # We cannot know in advance if the system is solvable. If it is not, the 
+        # flow is not updated                     
+        if solvable and cuda.threadIdx.x <= 5 and cuda.threadIdx.y == 0:
+            # No racing condition, one thread for on id
+            alignment[image_index, patch_idy, patch_idx, cuda.threadIdx.x] += alignment_step[cuda.threadIdx.x]
+        
         cuda.syncthreads()
         if pixel_local_idx == 0 and pixel_local_idy == 0: # single threaded section
-            # TODO what happens when syst cannot be solved ?
-            solve_6x6_krylov(ATA, ATB, alignment, 7) # by calling krylov with alignment,
-                                                    # we use a good initialisation and refine it
-            
             if last_it : #uspcaling because grey img is 2x smaller
-            # TODO How to properly upscale this type of transform ??
                 alignment[image_index, patch_idy, patch_idx, 4] *= 2
                 alignment[image_index, patch_idy, patch_idx, 5] *= 2
     
@@ -712,13 +721,13 @@ def get_closest_flow_V2(idx_sub, idy_sub, optical_flows, tile_size, imsize, loca
     else:
         # Averaging patches
         flow_x = (warp_flow_x(pos, optical_flows[patch_idy_top, patch_idx_left]) +
-                warp_flow_x(pos, optical_flows[patch_idy_top, patch_idx_right]) +
-                warp_flow_x(pos, optical_flows[patch_idy_bottom, patch_idx_left]) +
-                warp_flow_x(pos, optical_flows[patch_idy_bottom, patch_idx_right]))/4
+                  warp_flow_x(pos, optical_flows[patch_idy_top, patch_idx_right]) +
+                  warp_flow_x(pos, optical_flows[patch_idy_bottom, patch_idx_left]) +
+                  warp_flow_x(pos, optical_flows[patch_idy_bottom, patch_idx_right]))/4
         flow_y = (warp_flow_y(pos, optical_flows[patch_idy_top, patch_idx_left]) +
-                warp_flow_y(pos, optical_flows[patch_idy_top, patch_idx_right]) +
-                warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_left]) +
-                warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_right]))/4
+                  warp_flow_y(pos, optical_flows[patch_idy_top, patch_idx_right]) +
+                  warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_left]) +
+                  warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_right]))/4
     
  
     local_flow[0] = flow_x

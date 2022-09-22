@@ -10,6 +10,8 @@ from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, 
 from math import sqrt, isnan, isinf, copysign
 
 DEFAULT_CUDA_FLOAT_TYPE = float32
+
+
 @cuda.jit(device=True)
 def clamp(x, min_, max_):   
     if x < min_ :
@@ -52,16 +54,19 @@ def solve_6x6_krylov(A, B, X, n_iter):
     Parameters
     ----------
     A : Array[6,6]
-        positive definite array
+        Definite array
     B : Array[6]
+        
     X : Array[6]
-        initialisation of solutoon 
+        initialisation of solution 
     n_iter : int
         number of iterations. 6 is necessary to get the right solution in theory,
         but you may want to take a bit more to compensate numerical inaccuracies
+
     Returns
     -------
-    None
+    Success : Bool
+        True if the array has been succesfully inverted. Else False
 
     """
     i = cuda.threadIdx.x
@@ -115,6 +120,8 @@ def solve_6x6_krylov(A, B, X, n_iter):
         if i <= 5 and j == 0 :
             cuda.atomic.add(delta_new, 0 ,r[i]**2)
         cuda.syncthreads()
+        if isnan(delta_new[0]/delta[0]): # if A is Definite, then this is impossible. Since A is positive, this case can only happen is A is not invertible
+            return False
         # updating d
         beta = (delta_new[0]/delta[0])
         if i<= 5 and j == 6 :
@@ -122,6 +129,7 @@ def solve_6x6_krylov(A, B, X, n_iter):
         # updating delta
         if i == 0 and j == 0 : 
             delta[0] = delta_new[0]
+    return True
     
 
 @cuda.jit(device=True)
