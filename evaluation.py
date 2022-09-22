@@ -85,7 +85,7 @@ def single2lrburst(image, burst_size, downsample_factor=1, transformation_params
         if i == 0:
             # For base image, do not apply any random transformations. We only translate the image to center the
             # sampling grid
-            shift = (downsample_factor / 2.0) - 0.5# I dont understant this line
+            shift = (downsample_factor / 2.0) - 0.5
             translation = (shift, shift)
             theta = 0.0
             shear_factor = (0.0, 0.0)
@@ -225,7 +225,7 @@ def get_im_mse(burst, alignment):
     return im_mse.copy_to_host()
 
 
-def upscale_alignement(alignment, imsize, tile_size):
+def upscale_alignement(alignment, imsize, tile_size, v2=False):
     upscaled_alignment = cuda.device_array(((alignment.shape[0],)+imsize+(2,)))
     cuda_alignment = cuda.to_device(np.ascontiguousarray(alignment))
     @cuda.jit
@@ -247,7 +247,7 @@ def upscale_alignement(alignment, imsize, tile_size):
     get_flow[blockspergrid, threadsperblock](upscaled_alignment, cuda_alignment)
     return upscaled_alignment.copy_to_host()
 
-def align_lk(dec_burst, params):
+def align_lk(dec_burst, params, v2=False):
 
     options = {'verbose' : 3}
     pre_alignment, aligned_tiles = alignHdrplus(dec_burst[0], dec_burst[1:],params['block matching'], options)
@@ -255,24 +255,35 @@ def align_lk(dec_burst, params):
     tile_size = aligned_tiles.shape[-1]
 
 
-
-    lk_alignment = lucas_kanade_optical_flow_V2(
-        dec_burst[0], dec_burst[1:], pre_alignment, options, params['kanade'], debug=True)
-    lk_alignment[-1]/=2 #last alignment is multiplied by 2 by the LK flow function
-    
-    for i,x in enumerate(lk_alignment):
-        lk_alignment[i] = 2*x
+    if v2 : 
+        lk_alignment = lucas_kanade_optical_flow_V2(
+            dec_burst[0], dec_burst[1:], pre_alignment, options, params['kanade'], debug=True)
+        lk_alignment[-1][ :, :, :, -2:]/=2 #last alignment is multiplied by 2 by the LK flow function
+        for i,x in enumerate(lk_alignment):
+            lk_alignment[i][ :, :, :, -2:] = 2*x[:, :, :, -2:]
         
-    lk_alignment.insert(0, pre_alignment)
+        augmented_pre_alignment = np.zeros(lk_alignment[0].shape) #from pure translation to complex homography
+        augmented_pre_alignment[:,:,:,-2:] = pre_alignment
+        lk_alignment.insert(0, augmented_pre_alignment)
+        
+    else:
+        lk_alignment = lucas_kanade_optical_flow(
+            dec_burst[0], dec_burst[1:], pre_alignment, options, params['kanade'], debug=True)
+        lk_alignment[-1]/=2 #last alignment is multiplied by 2 by the LK flow function
+    
+        for i,x in enumerate(lk_alignment):
+            lk_alignment[i] = 2*x
+        
+        lk_alignment.insert(0, pre_alignment)
 
     imsize = (dec_burst.shape[1], dec_burst.shape[2])
     
     upscaled = np.empty((len(lk_alignment), dec_burst.shape[0]-1, dec_burst.shape[1], dec_burst.shape[2], 2))
     for i in range(len(lk_alignment)):
-        upscaled[i] = upscale_alignement(np.array(lk_alignment[i]), imsize, tile_size)
+        upscaled[i] = upscale_alignement(np.array(lk_alignment[i]), imsize, tile_size, v2=v2)
     # we need to upscale because estimated_al is patchwise
 
-    return upscaled
+    return lk_alignment, upscaled
 
 def align_fb(dec_burst):
     ref_grey = np.empty((int(dec_burst.shape[1]/2), int(dec_burst.shape[2]/2)))
@@ -377,7 +388,7 @@ params = {'block matching': {
                 'epsilon div' : 1e-6,
                 'tuning' : {
                     'tileSizes' : 32,
-                    'kanadeIter': 10, # 3 
+                    'kanadeIter': 25, # 3 
                     }},
             'merging': {
                 'scale': 2,
@@ -399,7 +410,8 @@ params = {'block matching': {
             }
 
 img = plt.imread("P:/DIV2K_valid_HR/DIV2K_valid_HR/0806.png")*255
-transformation_params = {'max_translation':10}
+transformation_params = {'max_translation':10,
+                         'max_shear': 0.}
 burst, flow = single2lrburst(img, 5, downsample_factor=2, transformation_params=transformation_params)
 flow = flow[1:].transpose(0, 2, 3, 1)
 
@@ -411,17 +423,17 @@ plt.imshow(burst[1]/255)
 
 dec_burst = decimate(burst)
 
-lk_alignment = align_lk(dec_burst, params)
+raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, v2 = True)
 t1 = time()
 fb_alignment = align_fb(dec_burst)
 print('farneback evaluated : ', time()-t1)
 
 
-evaluate_alignment(lk_alignment, flow, label = "LK", imshow=True)
+evaluate_alignment(upscaled_lk_alignment, flow, label = "LK", imshow=True)
 
 evaluate_alignment(fb_alignment[None], flow, label = "FarneBack", imshow=True)
 
 origin = flow[0]
-lk = lk_alignment[-1, 0]
+lk = upscaled_lk_alignment[-1, 0]
 fb = fb_alignment[0]
 
