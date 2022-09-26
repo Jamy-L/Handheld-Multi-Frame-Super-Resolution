@@ -233,7 +233,10 @@ def upscale_alignement(alignment, imsize, tile_size, v2=False):
         im_id, x, y=cuda.grid(3)
         if 0 <= x <imsize[1] and 0 <= y <imsize[0] and 0 <=  im_id < pre_alignment.shape[0]:
             local_flow = cuda.local.array(2, dtype=float64)
-            get_closest_flow_V2(x, y, pre_alignment[im_id], tile_size, imsize, local_flow)
+            if v2 : 
+                get_closest_flow_V2(x, y, pre_alignment[im_id], tile_size, imsize, local_flow)
+            else :
+                get_closest_flow(x, y, pre_alignment[im_id], tile_size, imsize, local_flow)
             upscaled_alignment[im_id, y, x, 0] = local_flow[0]
             upscaled_alignment[im_id, y, x, 1] = local_flow[1]
 
@@ -334,32 +337,39 @@ def evaluate_alignment(alignment, ground_truth, label="", imshow=False):
 
 
     EQ = flow_quad_error(ground_truth, alignment)
+    last_MSE = np.mean(EQ[-1])
     if alignment.shape[0] > 1:
         plt.figure("flow MSE")
-        plt.plot([i for i in range(len(EQ))], np.mean(EQ, axis=(1,2,3)))
+        plt.plot([i for i in range(len(EQ))], np.mean(EQ, axis=(1,2,3)), label=label)
         plt.xlabel('lk iteration')
         plt.ylabel('MSE on flow')
+        plt.legend()
     
         plt.figure("flow norm")
-        plt.plot([np.mean(np.linalg.norm(alignment[i], axis=3)) for i in range(alignment.shape[0])])
+        plt.plot([np.mean(np.linalg.norm(alignment[i], axis=3)) for i in range(alignment.shape[0])], label=label)
         plt.xlabel('lk iteration')
         plt.ylabel('mean norm of optical flow')
+        plt.legend()
     
         plt.figure("flow step")
-        plt.plot([np.mean(np.linalg.norm(2*alignment[i+1] - 2*alignment[i], axis=3)) for i in range(alignment.shape[0]-1)])
+        plt.plot([np.mean(np.linalg.norm(2*alignment[i+1] - 2*alignment[i], axis=3)) for i in range(alignment.shape[0]-1)], label=label)
         plt.xlabel('lk iteration')
         plt.ylabel('mean norm of optical flow step for each iteration')
-        
+        plt.legend()
+    else : #Farneback
+        plt.figure("flow MSE")
+        plt.plot([8], [last_MSE], marker = 'x', label = "Farneback")
+        plt.legend()
     print("Last mean norm of optical flow on {} : {}".format(label, np.mean(np.linalg.norm(alignment[-1], axis=3))))
         
         
     if imshow : 
         for i, e in enumerate(EQ):
             plt.figure("{} alignment, step {}".format(label, i))
-            plt.imshow(np.mean(e, axis = 0), vmin=0, vmax =3, cmap = "Reds")
+            plt.imshow(np.mean(e, axis = 0),vmin=0, vmax=100, cmap = "Reds")
             plt.colorbar()
 
-    print("Last flow MSE on {} : {}".format(label, np.mean(EQ[-1])))
+    print("Last flow MSE on {} : {}".format(label, last_MSE))
     
     #im_mse = get_im_mse(burst, np.array(lk_alignment))
 
@@ -388,7 +398,7 @@ params = {'block matching': {
                 'epsilon div' : 1e-6,
                 'tuning' : {
                     'tileSizes' : 32,
-                    'kanadeIter': 25, # 3 
+                    'kanadeIter': 8, # 3 
                     }},
             'merging': {
                 'scale': 2,
@@ -410,9 +420,11 @@ params = {'block matching': {
             }
 
 img = plt.imread("P:/DIV2K_valid_HR/DIV2K_valid_HR/0806.png")*255
-transformation_params = {'max_translation':10,
-                         'max_shear': 0.}
-burst, flow = single2lrburst(img, 5, downsample_factor=2, transformation_params=transformation_params)
+transformation_params = {'max_translation':30,
+                         'max_shear': 0,
+                         'max_ar_factor': -0.5,
+                         'max_rotation': 20}
+burst, flow = single2lrburst(img, 30, downsample_factor=2, transformation_params=transformation_params)
 flow = flow[1:].transpose(0, 2, 3, 1)
 
 
@@ -423,13 +435,15 @@ plt.imshow(burst[1]/255)
 
 dec_burst = decimate(burst)
 
-raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, v2 = True)
+raw_lk_alignment_V2, upscaled_lk_alignment_V2 = align_lk(dec_burst, params, v2 = True)
+raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, v2 = False)
 t1 = time()
 fb_alignment = align_fb(dec_burst)
 print('farneback evaluated : ', time()-t1)
 
 
 evaluate_alignment(upscaled_lk_alignment, flow, label = "LK", imshow=True)
+evaluate_alignment(upscaled_lk_alignment_V2, flow, label = "LK V2", imshow=True)
 
 evaluate_alignment(fb_alignment[None], flow, label = "FarneBack", imshow=True)
 
