@@ -5,7 +5,7 @@ Created on Mon Aug  1 18:38:07 2022
 @author: jamyl
 """
 
-from optical_flow import lucas_kanade_optical_flow, get_closest_flow
+from optical_flow import get_closest_flow_V2
 from hdrplus_python.package.algorithm.imageUtils import getTiles, getAlignedTiles
 from hdrplus_python.package.algorithm.merging import depatchifyOverlap
 from hdrplus_python.package.algorithm.genericUtils import getTime
@@ -177,7 +177,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                     patch_center_pos[0] = coarse_ref_sub_pos[0]
 
                 else:
-                    get_closest_flow(coarse_ref_sub_pos[1], # flow is x, y and pos is y, x
+                    get_closest_flow_V2(coarse_ref_sub_pos[1], # flow is x, y and pos is y, x
                                       coarse_ref_sub_pos[0],
                                       alignments[image_index - 1],
                                       TILE_SIZE,

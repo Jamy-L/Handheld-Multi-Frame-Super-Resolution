@@ -5,7 +5,7 @@ Created on Mon Sep 12 11:34:02 2022
 @author: jamyl
 """
 
-from optical_flow import lucas_kanade_optical_flow, get_closest_flow
+from optical_flow import lucas_kanade_optical_flow_V2, get_closest_flow_V2
 from hdrplus_python.package.algorithm.imageUtils import getTiles, getAlignedTiles
 from hdrplus_python.package.algorithm.merging import depatchifyOverlap
 from hdrplus_python.package.algorithm.genericUtils import getTime
@@ -54,7 +54,7 @@ def main(ref_img, comp_imgs, options, params):
         current_time, 'Arrays moved to GPU')
     
     
-    cuda_final_alignment = lucas_kanade_optical_flow(
+    cuda_final_alignment = lucas_kanade_optical_flow_V2(
         ref_img, comp_imgs, pre_alignment, options, params['kanade'])
 
     current_time = time()

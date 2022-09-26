@@ -5,7 +5,7 @@ Created on Fri Sep  9 09:00:17 2022
 @author: jamyl
 """
 
-from optical_flow import lucas_kanade_optical_flow, get_closest_flow
+from optical_flow import get_closest_flow_V2
 from hdrplus_python.package.algorithm.imageUtils import getTiles, getAlignedTiles
 from hdrplus_python.package.algorithm.merging import depatchifyOverlap
 from hdrplus_python.package.algorithm.genericUtils import getTime
@@ -118,7 +118,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         top_left_ref_x = pixel_idx*2 +2*tx
         
         flow = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-        get_closest_flow(top_left_ref_x, top_left_ref_y, flows[image_index], tile_size, imsize, flow)
+        get_closest_flow_V2(top_left_ref_x, top_left_ref_y, flows[image_index], tile_size, imsize, flow)
         if (0 <= top_left_ref_y < imshape_y -1) and (0 <= top_left_ref_x < imshape_x -1): # ref inbounds
             # We need to init because green is accumulating
             guide_patch_ref[ty + 1, tx + 1, 0] = 0 
@@ -227,7 +227,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         
         if 0 <= x < imshape_x and 0 <= y < imshape_y: #inbounds
             flow = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) #local array, each threads manipulates a different flow
-            get_closest_flow(x, y, flows[image_index], tile_size, imsize, flow)
+            get_closest_flow_V2(x, y, flows[image_index], tile_size, imsize, flow)
             
             #local max search
             cuda.atomic.max(maxi, 0, flow[0])
