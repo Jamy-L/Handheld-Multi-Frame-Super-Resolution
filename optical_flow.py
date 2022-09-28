@@ -500,7 +500,7 @@ def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, al
         
         inbound = (0 <= pixel_local_idx < tile_size) and (0 <= pixel_local_idy < tile_size)
         
-        pixel_global_idx = tile_size//2 * patch_idx + pixel_local_idx # global position on the coarse black and white grid
+        pixel_global_idx = tile_size//2 * patch_idx + pixel_local_idx # global position on the coarse grey grid
         pixel_global_idy = tile_size//2 * patch_idy + pixel_local_idy
         
         ATA = cuda.shared.array((6,6), dtype = DEFAULT_CUDA_FLOAT_TYPE)
@@ -545,29 +545,29 @@ def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, al
             # Compute the Hessian matrix
             for i in range(6):
                 for j in range(6):
-                    _ = 1
+                    a = 1
                     if i<= 1:
-                        _*= pixel_global_idx
+                        a*= pixel_global_idx
                     elif i<= 3:
-                        _*= pixel_global_idy
+                        a*= pixel_global_idy
                     
                     if i%2 == 0:
-                        _*=gradx
+                        a*=gradx
                     else:
-                        _*=grady
+                        a*=grady
                         
                         
                     if j<= 1:
-                        _*= pixel_global_idx
+                        a*= pixel_global_idx
                     elif j<= 3:
-                        _*= pixel_global_idy
+                        a*= pixel_global_idy
                     
                     if j%2 == 0:
-                        _*=gradx
+                        a*=gradx
                     else:
-                        _*=grady
+                        a*=grady
                     
-                    cuda.atomic.add(ATA, (i, j), _)
+                    cuda.atomic.add(ATA, (i, j), a)
                         
         # TODO is there a clever initialisation for delta p ?
         # Zero init of delta p
@@ -576,12 +576,11 @@ def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, al
             alignment_step[cuda.threadIdx.x] = 0
             
         cuda.syncthreads()
-        solvable = solve_6x6_krylov(ATA, ATB, alignment_step, 7) 
-        alignment[image_index, patch_idy, patch_idx]
+        solvable = solve_6x6_krylov(ATA, ATB, alignment_step, 7)
         # We cannot know in advance if the system is solvable. If it is not, the 
         # flow is not updated                     
         if solvable and cuda.threadIdx.x <= 5 and cuda.threadIdx.y == 0:
-            # No racing condition, one thread for on id
+            # No racing condition, one thread for one id
             alignment[image_index, patch_idy, patch_idx, cuda.threadIdx.x] += alignment_step[cuda.threadIdx.x]
         
         cuda.syncthreads()

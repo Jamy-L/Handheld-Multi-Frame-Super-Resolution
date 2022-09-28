@@ -66,7 +66,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
     CFA_pattern = params['exif']['CFA Pattern']
     
     TILE_SIZE = params['tuning']['tileSizes']
-    k_detail =params['tuning']['tileSizes']
+    k_detail =params['tuning']['k_detail']
     k_denoise = params['tuning']['k_denoise']
     D_th = params['tuning']['D_th']
     D_tr = params['tuning']['D_tr']

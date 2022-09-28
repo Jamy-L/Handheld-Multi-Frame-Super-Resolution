@@ -54,8 +54,6 @@ def alignHdrplus(referenceImage, alternateImages, params, options):
         tileSize = 2 * tileSizes[0]
     else:
         raise NotImplementedError('Use bayer input raw images please')
-        # imRef = referenceImage
-        # tileSize = tileSizes[0]
 
     # tiles overlap by half in each spatial dimension
     refTiles = getTiles(referenceImage, tileSize, tileSize // 2)
