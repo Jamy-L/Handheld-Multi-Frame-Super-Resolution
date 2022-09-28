@@ -76,11 +76,10 @@ def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer
     gradsy = np.empty_like(comp_img)
     
     # Estimating gradients with cv2 sobel filters
-    # Data format is very important. default 8uint is bad, because we use negative
-    # Values, and because may go higher. We need signed int16
+    # Data format is very important. default 8uint is bad, because we use floats
     for i in range(n_images):
-        gradsx[i] = cv2.Sobel(comp_img[i], cv2.CV_16S, dx=1, dy=0)
-        gradsy[i] = cv2.Sobel(comp_img[i], cv2.CV_16S, dx=0, dy=1)
+        gradsx[i] = cv2.Sobel(comp_img[i], cv2.CV_32F, dx=1, dy=0)
+        gradsy[i] = cv2.Sobel(comp_img[i], cv2.CV_32F, dx=0, dy=1)
 
     if verbose:
         current_time = getTime(
@@ -190,8 +189,8 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
             # Warp the gradient of I with W(x; p)
             gradx = gradsx[image_index, new_idy, new_idx]
             grady = gradsy[image_index, new_idy, new_idx]
-            # Images are of unsigned type for speeding up transfers. We need to sign them before substracting
-            gradt = int16(comp_img[image_index, new_idy, new_idx]) - int16(ref_img[pixel_global_idy, pixel_global_idx])
+
+            gradt = comp_img[image_index, new_idy, new_idx] - ref_img[pixel_global_idy, pixel_global_idx]
             
             cuda.atomic.add(ATB, 0, -gradx*gradt)
             cuda.atomic.add(ATB, 1, -grady*gradt)
@@ -407,11 +406,10 @@ def lucas_kanade_optical_flow_V2(ref_img_bayer, comp_img_bayer, pre_alignment_ba
     gradsy = np.empty_like(comp_img)
     
     # Estimating gradients with cv2 sobel filters
-    # Data format is very important. default 8uint is bad, because we use negative
-    # Values, and because may go higher. We need signed int16
+    # Data format is very important. default 8uint is bad, because we use floats
     for i in range(n_images):
-        gradsx[i] = cv2.Sobel(comp_img[i], cv2.CV_16S, dx=1, dy=0)
-        gradsy[i] = cv2.Sobel(comp_img[i], cv2.CV_16S, dx=0, dy=1)
+        gradsx[i] = cv2.Sobel(comp_img[i], cv2.CV_64F, dx=1, dy=0)
+        gradsy[i] = cv2.Sobel(comp_img[i], cv2.CV_64F, dx=0, dy=1)
 
     if verbose:
         current_time = getTime(
@@ -533,7 +531,7 @@ def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, al
             gradx = gradsx[image_index, new_idy, new_idx]
             grady = gradsy[image_index, new_idy, new_idx]
             # Images are of unsigned type for speeding up transfers. We need to sign them before substracting
-            gradt = int16(comp_img[image_index, new_idy, new_idx]) - int16(ref_img[pixel_global_idy, pixel_global_idx])
+            gradt = comp_img[image_index, new_idy, new_idx] - ref_img[pixel_global_idy, pixel_global_idx]
             
             cuda.atomic.add(ATB, 0, -pixel_global_idx*gradx*gradt)
             cuda.atomic.add(ATB, 1, -pixel_global_idx*grady*gradt)

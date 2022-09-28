@@ -224,7 +224,7 @@ def compute_kernel_covs(image, center_pos_x, center_pos_y, covs,
     downsampled_center_pos_y = center_pos_y - center_pos_y%2
     
     
-    # Switching the thread indexing from 3x3 to 2x2x2
+    # Switching the thread indexing from 3x3 to 2x2x2 (+1)
     # txp, typ indicate to  which cov the thread is contributiong. tzp : each cov has 2 dedicated threads
     txp, typ, tzp = dispatch_threads_cov()
     

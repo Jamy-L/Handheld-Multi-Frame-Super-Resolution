@@ -85,7 +85,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
     output_size = (SCALE*native_im_size[0], SCALE*native_im_size[1])
     output_img = cuda.device_array(output_size+(31,), dtype = DEFAULT_NUMPY_FLOAT_TYPE) #third dim for rgb channel
     # TODO 3 channels are enough, the rest is for debugging
-    # we may also chose uint16 for output img, but float is nice for debugging
+
 
     # specifying the block size
     # 1 block per output pixel, 9 threads per block
@@ -255,9 +255,10 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                 
 
                 y = max(0, quad_mat_prod(cov_i, dist))
+                # y = (dist[0]**2 + dist[1]**2)*math.sqrt(2)
                 # y can be slightly negative because of numerical precision.
                 # I clamp it to not explode the error with exp
-                w = math.exp(-y/2)
+                w = math.exp(-y/(2*4*SCALE))
                 # kernels are estimated on grey levels, so distances have to
                 # be downscaled to grey coarse level
 

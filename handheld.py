@@ -33,6 +33,7 @@ import exifread
 import os
 import glob
 
+DEFAULT_NUMPY_FLOAT_TYPE = np.float32
 
 def gamma(image):
     return image**(1/2.2)
@@ -87,7 +88,7 @@ def process(burst_path, options, params):
             if index != ref_id :
                 
                 raw_comp.append(rawObject.raw_image.copy())  # copy otherwise image data is lost when the rawpy object is closed
-         
+    raw_comp = np.array(raw_comp)
     # Reference image selection and metadata         
     ref_raw = rawpy.imread(raw_path_list[ref_id]).raw_image.copy()
     with open(raw_path_list[ref_id], 'rb') as raw_file:
@@ -96,15 +97,23 @@ def process(burst_path, options, params):
     if not 'exif' in params['merging'].keys(): 
         params['merging']['exif'] = {}
         
-    params['merging']['exif']['white level'] = str(tags['Image Tag 0xC61D'])
+    params['merging']['exif']['white level'] = int(str(tags['Image Tag 0xC61D']))
     CFA = str((tags['Image CFAPattern']))[1:-1].split(sep=', ')
     CFA = np.array([int(x) for x in CFA]).reshape(2,2)
     params['merging']['exif']['CFA Pattern'] = CFA
     
     if verbose:
         currentTime = getTime(currentTime, ' -- Read raw files')
-
-    return main(ref_raw, np.array(raw_comp), options, params)
+    
+    # casting type fom int to float if necessary. Normalisation into [0, 1]
+    if np.issubdtype(type(ref_raw[0,0]), np.integer):
+        print(type(ref_raw))
+        print(type(params['merging']['exif']['white level']))
+        ref_raw = (ref_raw/params['merging']['exif']['white level']).astype(DEFAULT_NUMPY_FLOAT_TYPE)
+    if np.issubdtype(type(raw_comp[0,0,0]), np.integer):
+        raw_comp = (raw_comp/params['merging']['exif']['white level']).astype(DEFAULT_NUMPY_FLOAT_TYPE)
+        
+    return main(ref_raw, raw_comp, options, params)
 
 #%%
 params = {'block matching': {
@@ -138,29 +147,29 @@ params = {'block matching': {
                     's1' : 2,          #12
                     's2' : 12,              # 2
                     'Mt' : 0.8,         # 0.8
-                    'sigma_t' : 30,
+                    'sigma_t' : 0.03,
                     'dt' : 1e-3},
                     }
             }
 
 options = {'verbose' : 3}
-burst_path = 'P:/0001/Samsung'
+burst_path = 'P:/0000/Samsung'
 
 output, R, r = process(burst_path, options, params)
 
 
 #%%
 
-raw_ref_img = rawpy.imread('P:/0001/Samsung/im_00.dng')
-exif_tags = open('P:/0001/Samsung/im_00.dng', 'rb')
+raw_ref_img = rawpy.imread(burst_path + '/im_00.dng')
+exif_tags = open(burst_path + '/im_00.dng', 'rb')
 tags = exifread.process_file(exif_tags)
 ref_img = raw_ref_img.raw_image.copy()
 
 
 comp_images = rawpy.imread(
-    'P:/0001/Samsung/im_01.dng').raw_image.copy()[None]
+    burst_path + '/im_01.dng').raw_image.copy()[None]
 for i in range(2, 10):
-    comp_images = np.append(comp_images, rawpy.imread('P:/0001/Samsung/im_0{}.dng'.format(i)
+    comp_images = np.append(comp_images, rawpy.imread('{}/im_0{}.dng'.format(burst_path, i)
                                                       ).raw_image.copy()[None], axis=0)
 
 
@@ -200,14 +209,14 @@ print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 
 plt.figure("output")
-plt.imshow(gamma(output_img/1023))
+plt.imshow(gamma(output_img))
 base = np.empty((int(ref_img.shape[0]/2), int(ref_img.shape[1]/2), 3))
 base[:,:,0] = ref_img[0::2, 1::2]
 base[:,:,1] = (ref_img[::2, ::2] + ref_img[1::2, 1::2])/2
 base[:,:,2] = ref_img[1::2, ::2]
 
 plt.figure("original bicubic")
-plt.imshow(cv2.resize(gamma(base/1023), None, fx = 2, fy = 2, interpolation=cv2.INTER_CUBIC))
+plt.imshow(cv2.resize(gamma(base/1023), None, fx = 2*1, fy = 2*1, interpolation=cv2.INTER_CUBIC))
 
 
 r2 = np.mean(R, axis = 3)
@@ -220,14 +229,16 @@ plt.hist(r3.reshape(r3.size), bins=25)
 def plot_merge(cov_i, D, pos):
     cov_i = cov_i[pos]
     D = D[pos]
-    L = np.linspace(-10, 10, 100)
+    L = np.linspace(-5, 5, 100)
     Xm, Ym = np.meshgrid(L,L)
     Z = np.empty_like(Xm)
     Z = cov_i[0,0] * Xm**2 + (cov_i[1, 0] + cov_i[0, 1])*Xm*Ym + cov_i[1, 1]*Ym**2
-    plt.figure()
+    plt.figure("merge in (x = {}, y = {})".format(pos[1],pos[0]))
     plt.pcolor(Xm, Ym, np.exp(-Z/2), vmin = 0, vmax=1)
     plt.gca().invert_yaxis()
+    plt.scatter([0], [0], c='g', marker ='o')
     plt.scatter(D[:,:,0].reshape(9), D[:,:,1].reshape(9), c='r', marker ='x')
+
     # for i in range(9):
     #     plt.quiver(D[:,:,0].reshape(9)[i], -D[:,:,1].reshape(9)[i], scale=1, scale_units = "xy")
     plt.colorbar()
