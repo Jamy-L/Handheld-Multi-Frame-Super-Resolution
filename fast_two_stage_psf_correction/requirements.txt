@@ -1,7 +1,0 @@
-numpy
-scipy
-scikit-image
-rawpy
-torch
-kornia
-tqdm
