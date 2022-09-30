@@ -1,162 +1,18 @@
-"""hdrplus burst alignment functions.
-Copyright (c) 2021 Antoine Monod
-
-This program is free software: you can redistribute it and/or modify it
-under the terms of the GNU Affero General Public License
-as published by the Free Software Foundation, either version 3 of the License,
-or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
-without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-See the GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License along with this program.
-If not, see <http://www.gnu.org/licenses/>.
-
-This file implements an algorithm possibly linked to the patent US9077913B2.
-This file is made available for the exclusive aim of serving as scientific tool
-to verify the soundness and completeness of the algorithm description.
-Compilation, execution and redistribution of this file may violate patents rights in certain countries.
-The situation being different for every country and changing over time,
-it is your responsibility to determine which patent rights restrictions apply to you
-before you compile, use, modify, or redistribute this file.
-A patent lawyer is qualified to make this determination.
-If and only if they don't conflict with any patent terms,
-you can benefit from the following license terms attached to this file.
+# -*- coding: utf-8 -*-
 """
+Created on Mon Sep 12 11:31:38 2022
 
-# imports
-import time
-import cv2
+@author: jamyl
+"""
+from time import time
+
 import numpy as np
-import os
-import shutil
-import glob
-import rawpy
-# package-specific imports
-# from 'package.algorithm'
-from .imageUtils import *
-from .genericUtils import getTime, isTypeInt
-# from 'package'
-from ..visualization.vis import addMotionField
+from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda, int32
+
+from .utils import getTime, isTypeInt
+from .utils_image import getTiles, getAlignedTiles, downsample,computeTilesDistanceL1_, computeDistance, subPixelMinimum
 
 
-def selectReference(burstPath, imageList, options):
-    '''Selects the reference image inside a burst (Section 3.1 of the article)'''
-    if options['mode'] == 'full' or options['mode'] == 'align':
-        if options['referenceIndex'] == -1:
-            # reference image index is stored in a .txt file in burstPath
-            refTxt = glob.glob(os.path.join(
-                burstPath, 'reference_frame.txt'))[0]
-            with open(refTxt, 'r') as refTxtFile:
-                refIdx = int(refTxtFile.read())
-        elif type(options['referenceIndex']) == int and options['referenceIndex'] >= 0 and options['referenceIndex'] < len(imageList):
-            # reference image is user-defined
-            refIdx = options['referenceIndex']
-        else:
-            print(
-                'WARNING: incorrect reference image index. Defaulting to the first image.')
-            refIdx = 0
-    else:
-        # defaulting to the first image
-        refIdx = 0
-    if options['verbose'] > 1:
-        print('reference image index = {}'.format(refIdx))
-    return refIdx
-
-
-def alignBurst(burstPath, rawPathList, images, refIdx, params, options):
-    '''Estimate motion between the reference and other images of the burst, and return a set of aligned tiles.'''
-    # Initialization.
-    currentTime, verbose = time.time(), options['verbose'] > 1
-    # height and width should be identical for all images
-    h, w = images[refIdx].shape
-
-    if params['mode'] == 'bayer':
-        tileSize = 2 * params['tuning']['tileSizes'][0]
-    else:
-        tileSize = params['tuning']['tileSizes'][0]
-    # if needed, pad images with zeros so that getTiles contains all image pixels
-    paddingPatchesHeight = (tileSize - h % (tileSize)) * (h % (tileSize) != 0)
-    paddingPatchesWidth = (tileSize - w % (tileSize)) * (w % (tileSize) != 0)
-    # additional zero padding to prevent artifacts on image edges due to overlapped patches in each spatial dimension
-    paddingOverlapHeight = paddingOverlapWidth = tileSize // 2
-    # combine the two to get the total padding
-    paddingTop = paddingOverlapHeight
-    paddingBottom = paddingOverlapHeight + paddingPatchesHeight
-    paddingLeft = paddingOverlapWidth
-    paddingRight = paddingOverlapWidth + paddingPatchesWidth
-    # pad all images (by mirroring image edges)
-    imagesPadded = [np.pad(im, ((paddingTop, paddingBottom),
-                           (paddingLeft, paddingRight)), 'symmetric') for im in images]
-
-    # separate reference and alternate images
-    imRef = imagesPadded[refIdx]
-    alternateImages = [image for i, image in enumerate(
-        imagesPadded) if i != refIdx]
-
-    # call the HDR+ tile-based alignment function
-    motionVectors, alignedTiles = alignHdrplus(
-        imRef, alternateImages, params, options)
-
-    if params['writeMotionFields']:
-        burstName = os.path.basename(burstPath)
-        alignedFolder = os.path.join(options['outputFolder'], burstName)
-        if not os.path.isdir(alignedFolder):
-            os.mkdir(alignedFolder)
-        with rawpy.imread(rawPathList[refIdx]) as rawReference:
-            # process the raw reference image into a sRGB matrix (demosaicking, white balance, tone mapping, gamma curve)
-            referenceImage = rawReference.postprocess(**params['rawpyArgs'])
-        outputName = os.path.join(alignedFolder, os.path.splitext(
-            os.path.basename(rawPathList[refIdx]))[0] + '.jpg')
-        cv2.imwrite(outputName, cv2.cvtColor(referenceImage, cv2.COLOR_RGB2BGR), [
-                    cv2.IMWRITE_JPEG_QUALITY, 100])
-
-        unpadVectorsTop = paddingTop // (tileSize // 2)
-        unpadVectorsBottom = paddingBottom // (tileSize // 2)
-        unpadVectorsLeft = paddingLeft // (tileSize // 2)
-        unpadVectorsRight = paddingRight // (tileSize // 2)
-        unpaddedMotionVectors = motionVectors[:, unpadVectorsTop:-
-                                              unpadVectorsBottom, unpadVectorsLeft:-unpadVectorsRight]
-
-        filename = options['outputFolder'] + '/unpaddedMotionVectors'
-        np.save(filename, unpaddedMotionVectors)
-
-        alternateRaws = [raw for i, raw in enumerate(
-            rawPathList) if i != refIdx]
-        for i, raw in enumerate(alternateRaws):
-            with rawpy.imread(raw) as rawImage:
-                # process the alternate image into a sRGB matrix
-                alternateImage = rawImage.postprocess(**params['rawpyArgs'])
-            alternateImage = addMotionField(
-                alternateImage, tileSize, unpaddedMotionVectors[i])
-            outputName = os.path.join(alignedFolder, os.path.splitext(
-                os.path.basename(raw))[0] + '_motion.jpg')
-            cv2.imwrite(outputName, cv2.cvtColor(alternateImage, cv2.COLOR_RGB2BGR), [
-                        cv2.IMWRITE_JPEG_QUALITY, 100])
-        if verbose:
-            currentTime = getTime(
-                currentTime, ' -- Post-processed images w/ motion vectors')
-
-    padding = (paddingTop, paddingBottom, paddingLeft, paddingRight)
-
-    if params['writeAlignedTiles']:
-        burstName = os.path.basename(burstPath)
-        alignedFolder = os.path.join(options['outputFolder'], burstName)
-        if not os.path.isdir(alignedFolder):
-            os.mkdir(alignedFolder)
-        # copy the reference image .dng file
-        shutil.copy2(rawPathList[refIdx], os.path.join(
-            alignedFolder, os.path.basename(rawPathList[refIdx])))
-        # save padding and aligned tiles as .npy files
-        np.save(os.path.join(alignedFolder, burstName + '_padding'), padding)
-        np.save(os.path.join(alignedFolder, burstName +
-                '_aligned_tiles'), alignedTiles)
-        if verbose:
-            currentTime = getTime(
-                currentTime, ' -- Dumped aligned tiles and padding')
-
-    return alignedTiles, padding
 
 
 def alignHdrplus(referenceImage, alternateImages, params, options):
@@ -168,7 +24,7 @@ def alignHdrplus(referenceImage, alternateImages, params, options):
             options: dict containing options extracted from the script command (input/output path, mode, verbose)
     '''
     # For convenience
-    currentTime, verbose = time.time(), options['verbose'] > 2
+    currentTime, verbose = time(), options['verbose'] > 2
     # factors, tileSizes, distances, searchRadia and subpixels are described fine-to-coarse
     factors = params['tuning']['factors']
     tileSizes = params['tuning']['tileSizes']
@@ -187,8 +43,7 @@ def alignHdrplus(referenceImage, alternateImages, params, options):
             currentTime = getTime(currentTime, ' --- Ref Bayer downsampling')
         tileSize = 2 * tileSizes[0]
     else:
-        imRef = referenceImage
-        tileSize = tileSizes[0]
+        raise NotImplementedError('Use bayer input raw images please')
 
     # tiles overlap by half in each spatial dimension
     refTiles = getTiles(referenceImage, tileSize, tileSize // 2)
@@ -213,6 +68,7 @@ def alignHdrplus(referenceImage, alternateImages, params, options):
                 currentTime = getTime(
                     currentTime, ' --- Alt Bayer downsampling')
         else:
+            raise NotImplementedError('Use bayer input raw images please')
             imAlt = alternateImage
 
         # 4-level coarse-to fine pyramid of alternate image
@@ -235,9 +91,7 @@ def alignHdrplus(referenceImage, alternateImages, params, options):
                 subpixels[-lv - 1],
                 alignments
             )
-            filename = options['outputFolder'] + '/alignments/' +\
-                'img_{}_alignment_level_{}'.format(i+1, lv)
-            np.save(filename, alignments)
+            
         if verbose:
             currentTime = getTime(currentTime, ' --- Align pyramid')
 
@@ -378,7 +232,7 @@ def alignOnALevel(referencePyramidLevel, alternatePyramidLevel, options, upsampl
             previousAlignments: None / 2d array of 2d arrays, can be used to update the initial guess
     '''
     # For convenience
-    verbose, currentTime = options['verbose'] > 3, time.time()
+    verbose, currentTime = options['verbose'] > 3, time()
 
     # Distances shall be computed over float32 values.
     # By casting the input images here, this save the casting of much more data afterwards

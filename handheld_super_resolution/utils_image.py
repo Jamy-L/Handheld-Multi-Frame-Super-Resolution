@@ -1,3 +1,4 @@
+
 """ Utility functions that work on images / arrays of images.
 Copyright (c) 2021 Antoine Monod
 
@@ -25,14 +26,14 @@ If and only if they don't conflict with any patent terms,
 you can benefit from the following license terms attached to this file.
 """
 
-# imports
 import math
+
 import numpy as np
 from scipy import signal
 from scipy.ndimage import gaussian_filter
-# package-specific imports (Package named 'package.algorithm')
-from .genericUtils import getSigned, isTypeInt
 from numba import vectorize, guvectorize, uint8, uint16, float32, float64
+
+from .utils import getSigned, isTypeInt
 
 
 @vectorize([uint8(float32), uint8(float64)], target='parallel')
@@ -67,10 +68,10 @@ def downsample(image, kernel='gaussian', factor=2):
 	# Filter the image before downsampling it
 	if kernel is None:
 		filteredImage = image
-	elif kernel is 'gaussian':
+	elif kernel == 'gaussian':
 		# gaussian kernel std is proportional to downsampling factor
 		filteredImage = gaussian_filter(image, sigma=factor * 0.5, order=0, output=None, mode='reflect')
-	elif kernel is 'bayer':
+	elif kernel == 'bayer':
 		# Bayer means that a simple 2x2 aggregation is required
 		if isTypeInt(image):
 			return umean4_(image[0::2, 0::2], image[1::2, 0::2], image[0::2, 1::2], image[1::2, 1::2])
