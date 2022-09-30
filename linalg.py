@@ -5,8 +5,8 @@ Created on Thu Sep  1 08:41:58 2022
 @author: jamyl
 """
 
-import numpy as np
-from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda
+
+from numba import uint8, uint16, float32, float64, jit, njit, cuda
 from math import sqrt, isnan, isinf, copysign
 
 DEFAULT_CUDA_FLOAT_TYPE = float32

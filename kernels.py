@@ -267,8 +267,7 @@ def compute_kernel_covs(image, center_pos_x, center_pos_y, covs,
 
         for i in range(2):
             for j in range(2):
-                covs[typ, txp, i, j] = k[1]*e1[j]*e1[i] + k[0]*e2[j]*e2[i] # TODO k are inverted. What is going on ??
-            
+                covs[typ, txp, i, j] = k[1]*e1[j]*e1[i] + k[0]*e2[j]*e2[i] # TODO k are inverted
         
 
 @cuda.jit(device=True) 

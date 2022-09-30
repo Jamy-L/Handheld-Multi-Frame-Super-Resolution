@@ -6,26 +6,16 @@ Created on Mon Aug  1 18:38:07 2022
 """
 
 from optical_flow import get_closest_flow_V2
-from hdrplus_python.package.algorithm.imageUtils import getTiles, getAlignedTiles
-from hdrplus_python.package.algorithm.merging import depatchifyOverlap
 from hdrplus_python.package.algorithm.genericUtils import getTime
 from kernels import compute_interpolated_kernel_cov
 from linalg import quad_mat_prod
-from robustness import fetch_robustness, compute_robustness
+from robustness import fetch_robustness
 
-import cv2
 import numpy as np
-import rawpy
-import matplotlib.pyplot as plt
-from tqdm import tqdm
-from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda, int32
+from numba import uint8, uint16, float32, float64, jit, njit, cuda, int32
 from time import time
-import cupy as cp
-from scipy.interpolate import interp2d
-import math
-from torch import from_numpy
 
-from fast_two_stage_psf_correction.fast_optics_correction.raw2rgb import process_isp
+import math
 
 EPSILON = 1e-6
 DEFAULT_CUDA_FLOAT_TYPE = float32
@@ -258,7 +248,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                 # y = (dist[0]**2 + dist[1]**2)*math.sqrt(2)
                 # y can be slightly negative because of numerical precision.
                 # I clamp it to not explode the error with exp
-                w = math.exp(-y/(2*4*SCALE))
+                w = math.exp(-y/(2*4*SCALE**2))
                 # kernels are estimated on grey levels, so distances have to
                 # be downscaled to grey coarse level
 

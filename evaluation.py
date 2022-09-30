@@ -206,7 +206,7 @@ def upscale_alignement(alignment, imsize, tile_size, v2=False):
 
 def align_lk(dec_burst, params, v2=False):
 
-    options = {'verbose' : 3}
+    options = {'verbose' : 2}
     pre_alignment, aligned_tiles = alignHdrplus(dec_burst[0], dec_burst[1:],params['block matching'], options)
     pre_alignment = pre_alignment[:, :, :, ::-1]
     tile_size = aligned_tiles.shape[-1]
@@ -408,7 +408,7 @@ burst, flow = single2lrburst(img, 5, downsample_factor=2, transformation_params=
 # flow is unussable because it is pointing from moving frame to ref. We would need the opposite
 
 
-dec_burst = decimate(burst)
+dec_burst = (decimate(burst)/255).astype(np.float32)
 
 raw_lk_alignment_V2, upscaled_lk_alignment_V2 = align_lk(dec_burst, params, v2 = True)
 raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, v2 = False)

@@ -5,28 +5,19 @@ Created on Mon Sep 12 11:34:02 2022
 @author: jamyl
 """
 
-from optical_flow import lucas_kanade_optical_flow_V2, get_closest_flow_V2
-from hdrplus_python.package.algorithm.imageUtils import getTiles, getAlignedTiles
-from hdrplus_python.package.algorithm.merging import depatchifyOverlap
+from optical_flow import lucas_kanade_optical_flow_V2
 from hdrplus_python.package.algorithm.genericUtils import getTime
 
-from linalg import quad_mat_prod
-from robustness import fetch_robustness, compute_robustness
+from robustness import compute_robustness
 from merge import merge
 from block_matching import alignHdrplus
-from kernels import plot_kernel
 
 import cv2
 import numpy as np
 import rawpy
 import matplotlib.pyplot as plt
-from tqdm import tqdm
 from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda, int32
 from time import time
-import cupy as cp
-from scipy.interpolate import interp2d
-import math
-from torch import from_numpy
 
 from fast_two_stage_psf_correction.fast_optics_correction.raw2rgb import process_isp
 import exifread
@@ -43,27 +34,38 @@ def flat(x):
 
 
 def main(ref_img, comp_imgs, options, params):
-    t1 = time()
+    verbose = options['verbose'] > 1
+    verbose_2 = options['verbose'] >2
     
+    
+    t1 = time()
+    if verbose :
+        print('Beginning block matching')
     pre_alignment, aligned_tiles = alignHdrplus(ref_img, comp_imgs,params['block matching'], options)
     pre_alignment = pre_alignment[:, :, :, ::-1] # swapping x and y direction (x must be first)
+    if verbose : 
+        current_time = getTime(t1, 'Block Matching')
     
-    current_time = time()
+
     cuda_ref_img = cuda.to_device(ref_img)
     cuda_comp_imgs = cuda.to_device(comp_imgs)
-    current_time = getTime(
-        current_time, 'Arrays moved to GPU')
+    
+    if verbose_2 : 
+        current_time = getTime(
+            current_time, 'Arrays moved to GPU')
     
     
     cuda_final_alignment = lucas_kanade_optical_flow_V2(
         ref_img, comp_imgs, pre_alignment, options, params['kanade'])
-
-    current_time = time()
+    
+    if verbose : 
+        current_time = time()
+        
     cuda_Robustness, cuda_robustness = compute_robustness(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment,
-                                         options, params['merging'])
-
-    current_time = getTime(
-        current_time, 'Robustness estimated')
+                                             options, params['merging'])
+    if verbose : 
+        current_time = getTime(
+            current_time, 'Robustness estimated')
     
     output = merge(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment, cuda_robustness, {"verbose": 3}, params['merging'])
     print('\nTotal ellapsed time : ', time() - t1)
@@ -72,7 +74,7 @@ def main(ref_img, comp_imgs, options, params):
 #%%
 
 def process(burst_path, options, params):
-    currentTime, verbose = time(), options['verbose'] > 1
+    currentTime, verbose = time(), options['verbose'] > 2
     
 
     ref_id = 0 #TODO get ref id
@@ -107,8 +109,6 @@ def process(burst_path, options, params):
     
     # casting type fom int to float if necessary. Normalisation into [0, 1]
     if np.issubdtype(type(ref_raw[0,0]), np.integer):
-        print(type(ref_raw))
-        print(type(params['merging']['exif']['white level']))
         ref_raw = (ref_raw/params['merging']['exif']['white level']).astype(DEFAULT_NUMPY_FLOAT_TYPE)
     if np.issubdtype(type(raw_comp[0,0,0]), np.integer):
         raw_comp = (raw_comp/params['merging']['exif']['white level']).astype(DEFAULT_NUMPY_FLOAT_TYPE)
@@ -134,7 +134,7 @@ params = {'block matching': {
                     'kanadeIter': 6, # 3 
                     }},
             'merging': {
-                'scale': 1,
+                'scale': 2,
                 'tuning': {
                     'tileSizes': 32,
                     'k_detail' : 0.33, # [0.25, ..., 0.33]
@@ -152,8 +152,8 @@ params = {'block matching': {
                     }
             }
 
-options = {'verbose' : 3}
-burst_path = 'P:/0000/Samsung'
+options = {'verbose' : 2}
+burst_path = 'P:/0001/Samsung'
 
 output, R, r = process(burst_path, options, params)
 
@@ -216,7 +216,7 @@ base[:,:,1] = (ref_img[::2, ::2] + ref_img[1::2, 1::2])/2
 base[:,:,2] = ref_img[1::2, ::2]
 
 plt.figure("original bicubic")
-plt.imshow(cv2.resize(gamma(base/1023), None, fx = 2*1, fy = 2*1, interpolation=cv2.INTER_CUBIC))
+plt.imshow(cv2.resize(gamma(base/1023), None, fx = 2*2, fy = 2*2, interpolation=cv2.INTER_CUBIC))
 
 
 r2 = np.mean(R, axis = 3)
