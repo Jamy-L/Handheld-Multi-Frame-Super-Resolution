@@ -5,17 +5,20 @@ Created on Mon Sep 12 10:14:52 2022
 @author: jamyl
 """
 
-import numpy as np
-import torch
-import random
-import cv2
-from tqdm import tqdm
-import matplotlib.pyplot as plt
-from block_matching import alignHdrplus
-from optical_flow import get_closest_flow, lucas_kanade_optical_flow, get_closest_flow_V2, lucas_kanade_optical_flow_V2
-from numba import cuda, float64
+
 from time import time
+from tqdm import tqdm
+import random
+
+import numpy as np
+from numba import cuda, float64
+import torch
+import cv2
+import matplotlib.pyplot as plt
 from skimage.transform import warp 
+
+from handheld_super_resolution.block_matching import alignHdrplus
+from handheld_super_resolution.optical_flow import get_closest_flow, lucas_kanade_optical_flow, get_closest_flow_V2, lucas_kanade_optical_flow_V2
 
 
 
@@ -104,8 +107,8 @@ def single2lrburst(image, burst_size, downsample_factor=1, transformation_params
                                 random.uniform(-max_translation, max_translation))
 
             max_rotation = transformation_params.get('max_rotation', 0.0)
-            theta = 10
-            #theta = random.uniform(-max_rotation, max_rotation)
+
+            theta = random.uniform(-max_rotation, max_rotation)
 
             max_shear = transformation_params.get('max_shear', 0.0)
             shear_x = random.uniform(-max_shear, max_shear)
@@ -403,7 +406,7 @@ img = plt.imread("P:/DIV2K_valid_HR/DIV2K_valid_HR/0900.png")*255
 transformation_params = {'max_translation':10,
                          'max_shear': 0,
                          'max_ar_factor': 0,
-                         'max_rotation': 30}
+                         'max_rotation': 3}
 burst, flow = single2lrburst(img, 5, downsample_factor=2, transformation_params=transformation_params)
 # flow is unussable because it is pointing from moving frame to ref. We would need the opposite
 
