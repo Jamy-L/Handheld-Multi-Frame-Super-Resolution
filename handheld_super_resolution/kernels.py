@@ -5,16 +5,16 @@ Created on Sat Aug  6 17:26:48 2022
 @author: jamyl
 """
 
+from math import sqrt
 
 import numpy as np
-
-from numba import uint8, uint16, float32, float64, cuda
-from math import sqrt
-from linalg import get_eighen_elmts_2x2, invert_2x2, clamp, interpolate_cov
 import matplotlib.pyplot as plt
+from numba import uint8, uint16, float32, float64, cuda
 
-DEFAULT_CUDA_FLOAT_TYPE = float32
-DEFAULT_NUMPY_FLOAT_TYPE = np.float32
+from .linalg import get_eighen_elmts_2x2, invert_2x2, interpolate_cov
+from .utils import clamp
+
+from . import DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
 
 @cuda.jit(device=True)
 def compute_harris(image, top_left_x, top_left_y, harris):

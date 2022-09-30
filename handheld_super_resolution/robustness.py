@@ -4,16 +4,16 @@ Created on Fri Sep  9 09:00:17 2022
 
 @author: jamyl
 """
-
-from optical_flow import get_closest_flow_V2
-from hdrplus_python.package.algorithm.genericUtils import getTime
-import numpy as np
-from numba import uint8, uint16, float32, float64, jit, njit, cuda, int32
 from time import time
 from math import isnan, sqrt, exp
 
-DEFAULT_CUDA_FLOAT_TYPE = float32
-DEFAULT_NUMPY_FLOAT_TYPE = np.float32
+import numpy as np
+from numba import uint8, uint16, float32, float64, jit, njit, cuda, int32
+
+from .optical_flow import get_closest_flow_V2
+from .utils import getTime
+
+from . import DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
 
 def compute_robustness(ref_img, comp_imgs, flows, options, params):
     """

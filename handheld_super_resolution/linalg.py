@@ -5,21 +5,11 @@ Created on Thu Sep  1 08:41:58 2022
 @author: jamyl
 """
 
-
-from numba import uint8, uint16, float32, float64, jit, njit, cuda
 from math import sqrt, isnan, isinf, copysign
 
-DEFAULT_CUDA_FLOAT_TYPE = float32
+from numba import uint8, uint16, float32, float64, jit, njit, cuda
 
-
-@cuda.jit(device=True)
-def clamp(x, min_, max_):   
-    if x < min_ :
-        return min_
-    elif x > max_:
-        return max_
-    else:
-        return x
+from . import DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
 
 @cuda.jit(device=True)
 def solve_2x2(A, B, X):

@@ -5,21 +5,19 @@ Created on Mon Aug  1 18:38:07 2022
 @author: jamyl
 """
 
-from optical_flow import get_closest_flow_V2
-from hdrplus_python.package.algorithm.genericUtils import getTime
-from kernels import compute_interpolated_kernel_cov
-from linalg import quad_mat_prod
-from robustness import fetch_robustness
+
+from time import time
+import math
 
 import numpy as np
 from numba import uint8, uint16, float32, float64, jit, njit, cuda, int32
-from time import time
 
-import math
-
-EPSILON = 1e-6
-DEFAULT_CUDA_FLOAT_TYPE = float32
-DEFAULT_NUMPY_FLOAT_TYPE = np.float32
+from .optical_flow import get_closest_flow_V2
+from .utils import getTime
+from .kernels import compute_interpolated_kernel_cov
+from .linalg import quad_mat_prod
+from .robustness import fetch_robustness
+from handheld_super_resolution import DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, EPSILON
 
 
 def merge(ref_img, comp_imgs, alignments, r, options, params):

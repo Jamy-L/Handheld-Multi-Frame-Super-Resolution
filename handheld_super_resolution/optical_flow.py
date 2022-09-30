@@ -5,17 +5,16 @@ Created on Sun Jul 31 00:00:36 2022
 @author: jamyl
 """
 
-from hdrplus_python.package.algorithm.genericUtils import getTime
-from linalg import solve_2x2, solve_6x6_krylov
-
-import cv2
-import numpy as np
 from time import time
 
+import numpy as np
+import cv2
 from numba import cuda, float32, float64, int16
 
-DEFAULT_CUDA_FLOAT_TYPE = float32
-DEFAULT_NUMPY_FLOAT_TYPE = np.float32
+from .utils import getTime
+from .linalg import solve_2x2, solve_6x6_krylov
+
+from . import DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
 
 def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer, options, params, debug = False):
     """
