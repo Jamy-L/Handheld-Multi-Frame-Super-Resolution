@@ -4,18 +4,14 @@ Created on Sun Jul 31 00:00:36 2022
 
 @author: jamyl
 """
-import matplotlib
-import matplotlib.pyplot as plt
-from hdrplus_python.package.algorithm.imageUtils import getTiles, getAlignedTiles
+
 from hdrplus_python.package.algorithm.genericUtils import getTime
 from linalg import solve_2x2, solve_6x6_krylov
 
 import cv2
 import numpy as np
 from time import time
-import cupy as cp
-import rawpy
-from tqdm import tqdm
+
 from numba import cuda, float32, float64, int16
 
 DEFAULT_CUDA_FLOAT_TYPE = float32
@@ -51,7 +47,7 @@ def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer
     if debug : 
         debug_list = []
         
-    current_time, verbose = time(), options['verbose'] > 2
+    current_time, verbose, verbose_2 = time(), options['verbose'] > 1, options['verbose'] > 2
     n_iter = params['tuning']['kanadeIter']
 
     n_images, n_patch_y, n_patch_x, _ \
@@ -140,7 +136,7 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
             The adjusted tile alignment
 
     """
-    verbose = options['verbose']
+    verbose_2 = options['verbose'] > 2
     n_iter = params['tuning']['kanadeIter']
     tile_size = int(params['tuning']['tileSizes']/2) #grey tiles are twice as small
     EPSILON =  params['epsilon div']
@@ -222,7 +218,7 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
     get_new_flow[[(n_images, n_patch_y, n_patch_x), (tile_size, tile_size)]
         ](ref_img, comp_img, gradsx, gradsy, alignment, (n_iter - 1) == iter_index)
     
-    if verbose:
+    if verbose_2:
         current_time = getTime(
             current_time, ' --- Systems calculated and solved')
 
@@ -381,7 +377,7 @@ def lucas_kanade_optical_flow_V2(ref_img_bayer, comp_img_bayer, pre_alignment_ba
     if debug : 
         debug_list = []
         
-    current_time, verbose = time(), options['verbose'] > 2
+    current_time, verbose, verbose_2 = time(), options['verbose'] > 1, options['verbose'] > 2
     n_iter = params['tuning']['kanadeIter']
 
     n_images, n_patch_y, n_patch_x, _ \
@@ -397,7 +393,7 @@ def lucas_kanade_optical_flow_V2(ref_img_bayer, comp_img_bayer, pre_alignment_ba
     comp_img = (comp_img_bayer[:,::2, ::2] + comp_img_bayer[:,1::2, 1::2] + comp_img_bayer[:,::2, 1::2] + comp_img_bayer[:,1::2, ::2])/4
     pre_alignment = pre_alignment_bayer/2 # dividing by 2 because grey image twice smaller
 
-    if verbose:
+    if verbose_2:
         current_time = getTime(
             current_time, ' -- Grey Image estimated')
 
@@ -411,7 +407,7 @@ def lucas_kanade_optical_flow_V2(ref_img_bayer, comp_img_bayer, pre_alignment_ba
         gradsx[i] = cv2.Sobel(comp_img[i], cv2.CV_64F, dx=1, dy=0)
         gradsy[i] = cv2.Sobel(comp_img[i], cv2.CV_64F, dx=0, dy=1)
 
-    if verbose:
+    if verbose_2:
         current_time = getTime(
             current_time, ' -- Gradients estimated')
     
@@ -426,9 +422,9 @@ def lucas_kanade_optical_flow_V2(ref_img_bayer, comp_img_bayer, pre_alignment_ba
     cuda_comp_img = cuda.to_device(np.ascontiguousarray(comp_img))
     cuda_gradsx = cuda.to_device(gradsx)
     cuda_gradsy = cuda.to_device(gradsy)
-    
-    current_time = getTime(
-        current_time, ' -- Arrays moved to GPU')
+    if verbose_2 : 
+        current_time = getTime(
+            current_time, ' -- Arrays moved to GPU')
     
     for iter_index in range(n_iter):
         lucas_kanade_optical_flow_iteration_V2(
@@ -476,15 +472,15 @@ def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, al
             The adjusted tile alignment
 
     """
-    verbose = options['verbose']
+    verbose_2 = options['verbose'] > 2
     n_iter = params['tuning']['kanadeIter']
     tile_size = int(params['tuning']['tileSizes']/2) #grey tiles are twice as small
     EPSILON =  params['epsilon div']
     n_images, n_patch_y, n_patch_x, _ \
         = alignment.shape
     _, imsize_y, imsize_x = comp_img.shape
-
-    print(" -- Lucas-Kanade iteration {}".format(iter_index))
+    if verbose_2 : 
+        print(" -- Lucas-Kanade iteration {}".format(iter_index))
 
 
         
@@ -592,7 +588,7 @@ def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, al
     get_new_flow_V2[[(n_images, n_patch_y, n_patch_x), (tile_size, tile_size)]
         ](ref_img, comp_img, gradsx, gradsy, alignment, (n_iter - 1) == iter_index)
     
-    if verbose:
+    if verbose_2:
         current_time = getTime(
             current_time, ' --- Systems calculated and solved')
 

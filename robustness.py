@@ -6,17 +6,9 @@ Created on Fri Sep  9 09:00:17 2022
 """
 
 from optical_flow import get_closest_flow_V2
-from hdrplus_python.package.algorithm.imageUtils import getTiles, getAlignedTiles
-from hdrplus_python.package.algorithm.merging import depatchifyOverlap
 from hdrplus_python.package.algorithm.genericUtils import getTime
-
-from linalg import quad_mat_prod
-
 import numpy as np
-import rawpy
-import matplotlib.pyplot as plt
-from tqdm import tqdm
-from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda, int32
+from numba import uint8, uint16, float32, float64, jit, njit, cuda, int32
 from time import time
 from math import isnan, sqrt, exp
 
@@ -358,7 +350,10 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         if tx == 0 and ty >= 0 :
             r[image_index, pixel_idy, pixel_idx, ty] = mini[ty]
         
-    if VERBOSE > 2:
+        
+        
+        
+    if VERBOSE > 1:
         current_time = time()
         print("Estimating Robustness")
         
