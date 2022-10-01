@@ -63,7 +63,7 @@ def fft_1d_radix2_rbi(arr, direct=True):
 
 
 @nb.njit(fastmath=True)
-def fft_1d_arb(arr, fft_1d_r2=fft_1d_radix2_rbi):
+def fft_1d_arb(arr, fft_1d_r2=fft_1d_radix2_rbi, direct=True):
     """1D FFT for arbitrary inputs using chirp z-transform"""
     arr = np.asarray(arr, dtype=DEFAULT_NUMPY_COMPLEX_TYPE)
     n = len(arr)
@@ -76,37 +76,67 @@ def fft_1d_arb(arr, fft_1d_r2=fft_1d_radix2_rbi):
     coeff = np.zeros_like(result)
     coeff[:n] = e_arr.conjugate()
     coeff[-n + 1:] = e_arr[:0:-1].conjugate()
-    return fft_convolve(result, coeff, fft_1d_r2)[:n] * e_arr / m
-
-
-@nb.njit(fastmath=True)
-def fft_convolve(a_arr, b_arr, fft_1d_r2=fft_1d_radix2_rbi):
-    return fft_1d_r2(fft_1d_r2(a_arr) * fft_1d_r2(b_arr), False)
-
-
-@nb.njit(fastmath=True)
-def fft_1d(arr):
-    """Main function"""
-    n = len(arr)
-    if not n & (n-1):
-        return fft_1d_radix2_rbi(arr)
+    if direct:
+        return fft_convolve(result, coeff, fft_1d_r2, not direct)[:n] * e_arr / m
     else:
-        return fft_1d_arb(arr)
+        arr = fft_convolve(result, coeff, fft_1d_r2, not direct)[:n] * e_arr / m
+        arr[1:] = arr[:0:-1]
+        return arr / n # do normalization in backward pass
+
+
+@nb.njit(fastmath=True)
+def fft_convolve(a_arr, b_arr, fft_1d_r2=fft_1d_radix2_rbi, direct=False):
+    return fft_1d_r2(fft_1d_r2(a_arr, direct=not direct) * fft_1d_r2(b_arr, direct=not direct), direct)
+
+
+@nb.njit(fastmath=True)
+def fft(arr, axis=-1):
+    n = arr.shape[axis]
+    if not n & (n-1):
+        return fft_1d_radix2_rbi(arr, direct=True)
+    else:
+        return fft_1d_arb(arr, direct=True)
+
+
+@nb.njit(fastmath=True)
+def ifft(arr, axis=-1):
+    n = arr.shape[axis]
+    if not n & (n-1):
+        return fft_1d_radix2_rbi(arr, direct=False)
+    else:
+        return fft_1d_arb(arr, direct=False)
+
+
+@nb.njit(fastmath=True)
+def fft2(arr, axes=(-1,-2)):
+    return fft(fft(arr, axis=axes[0]), axis=axes[1])
+
+
+@nb.njit(fastmath=True)
+def ifft2(arr, axes=(-1,-2)):
+    return ifft(ifft(arr, axis=axes[1]), axis=axes[0])
 
 
 if __name__ == '__main__':
     import time
-    arr = np.arange(30)
+    arr = np.arange(9)
+    # arr = np.arange(10)
+    print('arr', arr)
     
     start = time.time()
     res_np = np.fft.fft(arr)
     print('numpy', res_np)
     print(time.time() - start)
     
-    fft_1d(arr)
+    fft(arr)
     start = time.time()
-    res_nb = fft_1d(arr)
+    res_nb = fft(arr)
     print('numba', res_nb)
     print(time.time() - start)
 
     print('diff', np.linalg.norm(res_nb - res_np))
+
+
+    arr_nb = np.real(ifft(res_nb))
+    print('arr_nb', arr_nb)
+    print('diff res', np.linalg.norm(arr_nb - arr))
