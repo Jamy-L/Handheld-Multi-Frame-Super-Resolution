@@ -117,45 +117,75 @@ def ifft(arr, axis=-1):
 @nb.njit(fastmath=True)
 def fft2(arr):
     arr = fft(arr)
-    arr = np.transpose((-1,-2))
+    arr = arr.transpose( )
     arr = fft(arr)
-    arr = np.transpose((-1,-2))
+    arr = arr.transpose( )
     return arr
 
 
-@nb.njit(fastmath=True)
+@nb.njit(fastmath=True) 
 def ifft2(arr):
     arr = ifft(arr)
-    arr = np.transpose((-1,-2))
-    arr = iifft(arr)
-    arr = np.transpose((-1,-2))
+    arr = arr.transpose( )
+    arr = ifft(arr)
+    arr = arr.transpose( )
     return arr
 
 
 if __name__ == '__main__':
     import time
-    # arr = np.arange(9)
-    # arr = np.arange(9)[None,:]
-    arr = np.arange(10)
-    arr = np.stack([arr, arr], axis=0)
-    arr = arr[None]
+
+
+    # # arr = np.arange(9)
+    # # arr = np.arange(9)[None,:]
+    # arr = np.arange(10)
+    # arr = np.stack([arr, arr], axis=0)
+    # arr = arr[None]
+    # print('arr.shape', arr.shape)
+    # print('arr', arr)
+    # 
+    # start = time.time()
+    # res_np = np.fft.fft(arr)
+    # print('FFT time np', time.time() - start)
+    # # print('numpy', res_np)
+    # 
+    # fft(arr)
+    # start = time.time()
+    # res_nb = fft(arr)
+    # print('FFT time nb:', time.time() - start)
+    # # print('numba', res_nb)
+    # print('FFT diff', np.linalg.norm(res_nb - res_np))
+
+    # ifft(arr)
+    # start = time.time()
+    # arr_nb = np.real(ifft(res_nb))
+    # print('IFFT time nb', time.time() - start)
+    # # print('arr_nb', arr_nb)
+    # print('IFFT diff res', np.linalg.norm(arr_nb - arr))
+
+
+
+
+    arr = np.arange(9)
+    arr = arr[:, None] * arr[None, :]
     print('arr.shape', arr.shape)
     print('arr', arr)
-    
+
     start = time.time()
-    res_np = np.fft.fft(arr)
-    print('numpy', res_np)
-    print(time.time() - start)
+    res_np = np.fft.fft2(arr)
+    print('FFT2 time np', time.time() - start)
+    # print('numpy', res_np)
     
-    fft(arr)
+    fft2(arr)
     start = time.time()
-    res_nb = fft(arr)
-    print('numba', res_nb)
-    print(time.time() - start)
+    res_nb = fft2(arr)
+    print('FFT2 time nb', time.time() - start)
+    # print('numba', res_nb)
+    print('FFT2 diff', np.linalg.norm(res_nb - res_np))
 
-    print('diff', np.linalg.norm(res_nb - res_np))
-
-
-    arr_nb = np.real(ifft(res_nb))
-    print('arr_nb', arr_nb)
-    print('diff res', np.linalg.norm(arr_nb - arr))
+    ifft2(res_nb)
+    start = time.time()
+    arr_nb = ifft2(res_nb)
+    print('IFFT2 time nb', time.time() - start)
+    # print('arr_nb', arr_nb)
+    print('IFFT2 diff res', np.linalg.norm(arr_nb - arr))
