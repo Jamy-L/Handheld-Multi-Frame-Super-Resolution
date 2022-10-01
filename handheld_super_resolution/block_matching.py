@@ -13,8 +13,6 @@ from .utils import getTime, isTypeInt
 from .utils_image import getTiles, getAlignedTiles, downsample, computeTilesDistanceL1_, computeDistance, subPixelMinimum
 
 
-
-
 def alignHdrplus(referenceImage, alternateImages, params, options):
     '''Implements the coarse-to-fine alignment on 4-level gaussian pyramids
     as defined in Algorithm 1 of Section 3 of the IPOL article.

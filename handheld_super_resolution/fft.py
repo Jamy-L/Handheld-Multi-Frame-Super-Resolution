@@ -117,18 +117,18 @@ def ifft(arr, axis=-1):
 @nb.njit(fastmath=True)
 def fft2(arr):
     arr = fft(arr)
-    arr = arr.transpose( )
+    arr = np.swapaxes(arr, arr.ndim-1, arr.ndim-2)
     arr = fft(arr)
-    arr = arr.transpose( )
+    arr = np.swapaxes(arr, arr.ndim-1, arr.ndim-2)
     return arr
 
 
 @nb.njit(fastmath=True) 
 def ifft2(arr):
     arr = ifft(arr)
-    arr = arr.transpose( )
+    arr = np.swapaxes(arr, arr.ndim-1, arr.ndim-2)
     arr = ifft(arr)
-    arr = arr.transpose( )
+    arr = np.swapaxes(arr, arr.ndim-1, arr.ndim-2)
     return arr
 
 
@@ -168,6 +168,7 @@ if __name__ == '__main__':
 
     arr = np.arange(9)
     arr = arr[:, None] * arr[None, :]
+    arr = arr[None]
     print('arr.shape', arr.shape)
     print('arr', arr)
 
@@ -183,7 +184,8 @@ if __name__ == '__main__':
     # print('numba', res_nb)
     print('FFT2 diff', np.linalg.norm(res_nb - res_np))
 
-    ifft2(res_nb)
+    # ifft2(res_nb)
+    ifft2(res_nb.astype(np.complex64))  # ifft2 has to be compiled with np.complex64 input
     start = time.time()
     arr_nb = ifft2(res_nb)
     print('IFFT2 time nb', time.time() - start)
