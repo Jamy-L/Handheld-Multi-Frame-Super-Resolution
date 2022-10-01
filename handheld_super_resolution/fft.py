@@ -37,15 +37,18 @@ def reverse_bits(val, width):
 @nb.njit(fastmath=True)
 def fft_1d_radix2_rbi(arr, direct=True):
     arr = np.asarray(arr, dtype=DEFAULT_NUMPY_COMPLEX_TYPE)
-    n = len(arr)
+    n = arr.shape[-1]
     levels = ilog2(n)
-    e_arr = np.empty_like(arr)
+
+    e_arr = np.empty(n, dtype=DEFAULT_NUMPY_COMPLEX_TYPE)
     coeff = (-2j if direct else 2j) * cmath.pi / n
     for i in range(n):
         e_arr[i] = cmath.exp(coeff * i)
+
     result = np.empty_like(arr)
     for i in range(n):
-        result[i] = arr[reverse_bits(i, levels)]
+        result[..., i] = arr[..., reverse_bits(i, levels)]
+
     # Radix-2 decimation-in-time FFT
     size = 2
     while size <= n:
@@ -54,9 +57,9 @@ def fft_1d_radix2_rbi(arr, direct=True):
         for i in range(0, n, size):
             k = 0
             for j in range(i, i + half_size):
-                temp = result[j + half_size] * e_arr[k]
-                result[j + half_size] = result[j] - temp
-                result[j] += temp
+                temp = result[..., j + half_size] * e_arr[k]
+                result[..., j + half_size] = result[..., j] - temp
+                result[..., j] += temp
                 k += step
         size *= 2
     return result
@@ -66,21 +69,25 @@ def fft_1d_radix2_rbi(arr, direct=True):
 def fft_1d_arb(arr, fft_1d_r2=fft_1d_radix2_rbi, direct=True):
     """1D FFT for arbitrary inputs using chirp z-transform"""
     arr = np.asarray(arr, dtype=DEFAULT_NUMPY_COMPLEX_TYPE)
-    n = len(arr)
+    n = arr.shape[-1]
     m = 1 << (ilog2(n) + 2)
+
     e_arr = np.empty(n, dtype=DEFAULT_NUMPY_COMPLEX_TYPE)
     for i in range(n):
         e_arr[i] = cmath.exp(-1j * cmath.pi * (i*i) / n)
-    result = np.zeros(m, dtype=DEFAULT_NUMPY_COMPLEX_TYPE)
-    result[:n] = arr * e_arr
+
+    result = np.zeros((*arr.shape[:-1], m), dtype=DEFAULT_NUMPY_COMPLEX_TYPE)
+    result[..., :n] = arr * e_arr
+
     coeff = np.zeros_like(result)
-    coeff[:n] = e_arr.conjugate()
-    coeff[-n + 1:] = e_arr[:0:-1].conjugate()
+    coeff[..., :n] = e_arr.conjugate()
+    coeff[..., -n + 1:] = e_arr[:0:-1].conjugate()
+
     if direct:
-        return fft_convolve(result, coeff, fft_1d_r2, not direct)[:n] * e_arr / m
+        return fft_convolve(result, coeff, fft_1d_r2, not direct)[..., :n] * e_arr / m
     else:
-        arr = fft_convolve(result, coeff, fft_1d_r2, not direct)[:n] * e_arr / m
-        arr[1:] = arr[:0:-1]
+        arr = fft_convolve(result, coeff, fft_1d_r2, not direct)[..., :n] * e_arr / m
+        arr[..., 1:] = arr[..., :0:-1]
         return arr / n # do normalization in backward pass
 
 
@@ -90,8 +97,8 @@ def fft_convolve(a_arr, b_arr, fft_1d_r2=fft_1d_radix2_rbi, direct=False):
 
 
 @nb.njit(fastmath=True)
-def fft(arr, axis=-1):
-    n = arr.shape[axis]
+def fft(arr):
+    n = arr.shape[-1]
     if not n & (n-1):
         return fft_1d_radix2_rbi(arr, direct=True)
     else:
@@ -108,19 +115,31 @@ def ifft(arr, axis=-1):
 
 
 @nb.njit(fastmath=True)
-def fft2(arr, axes=(-1,-2)):
-    return fft(fft(arr, axis=axes[0]), axis=axes[1])
+def fft2(arr):
+    arr = fft(arr)
+    arr = np.transpose((-1,-2))
+    arr = fft(arr)
+    arr = np.transpose((-1,-2))
+    return arr
 
 
 @nb.njit(fastmath=True)
-def ifft2(arr, axes=(-1,-2)):
-    return ifft(ifft(arr, axis=axes[1]), axis=axes[0])
+def ifft2(arr):
+    arr = ifft(arr)
+    arr = np.transpose((-1,-2))
+    arr = iifft(arr)
+    arr = np.transpose((-1,-2))
+    return arr
 
 
 if __name__ == '__main__':
     import time
-    arr = np.arange(9)
-    # arr = np.arange(10)
+    # arr = np.arange(9)
+    # arr = np.arange(9)[None,:]
+    arr = np.arange(10)
+    arr = np.stack([arr, arr], axis=0)
+    arr = arr[None]
+    print('arr.shape', arr.shape)
     print('arr', arr)
     
     start = time.time()
