@@ -154,3 +154,6 @@ hdrplus_python/Original/payload_N000.png
 *.png
 *.npy
 *.jpg
+
+# VIM
+**/*.swp
