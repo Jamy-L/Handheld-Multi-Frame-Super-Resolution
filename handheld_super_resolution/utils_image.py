@@ -166,6 +166,16 @@ def computeL1Distance_(win, ref, dum, res):
 				res[n, i, j] = sum
 
 
+
+
+
+
+
+
+####### HERE ##############
+
+
+
 @guvectorize(['void(float32[:, :, :], float32[:, :, :], float32[:, :, :], float32[:, :, :])'], '(n, w, w), (n, p, p), (n, t, t) -> (n, t, t)')
 def computeL2Distance_(win, ref, dum, res):
 	# Dummy array dum only here to know the output size. Won't be used.
@@ -183,6 +193,16 @@ def computeL2Distance_(win, ref, dum, res):
 						sum += (win[n, i + p, j + q] - ref[n, p, q])**2
 				# Store the distance
 				res[n, i, j] = sum
+
+
+
+
+
+
+
+
+
+####### END ##############
 
 
 def computeDistance(refPatch, searchArea, distance='L2'):
