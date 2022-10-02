@@ -15,7 +15,7 @@ import exifread
 import rawpy
 import matplotlib.pyplot as plt
 
-from handheld_super_resolution.super_resolution import process
+from handheld_super_resolution import process
 
 def gamma(image):
     return image**(1/2.2)

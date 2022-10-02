@@ -15,12 +15,11 @@ import exifread
 import rawpy
 import matplotlib.pyplot as plt
 
-from handheld_super_resolution.merge import merge
-from handheld_super_resolution.block_matching import alignHdrplus
-from handheld_super_resolution.optical_flow import lucas_kanade_optical_flow_V2
-from handheld_super_resolution.utils import getTime
-from handheld_super_resolution.robustness import compute_robustness
-from handheld_super_resolution import DEFAULT_NUMPY_FLOAT_TYPE
+from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE
+from .merge import merge
+from .block_matching import alignHdrplus
+from .optical_flow import lucas_kanade_optical_flow_V2
+from .robustness import compute_robustness
 
 
 def main(ref_img, comp_imgs, options, params):
