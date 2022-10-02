@@ -9,7 +9,7 @@ from math import sqrt, isnan, isinf, copysign
 
 from numba import uint8, uint16, float32, float64, jit, njit, cuda
 
-from . import DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
+from .utils import DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
 
 @cuda.jit(device=True)
 def solve_2x2(A, B, X):

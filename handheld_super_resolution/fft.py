@@ -3,11 +3,7 @@ import cmath
 import numpy as np
 import numba as nb
 
-
-DEFAULT_CUDA_FLOAT_TYPE = nb.float32
-DEFAULT_CUDA_COMPLEX_TYPE = nb.complex64
-DEFAULT_NUMPY_FLOAT_TYPE = np.float32
-DEFAULT_NUMPY_COMPLEX_TYPE = nb.complex64
+from .utils import  DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_CUDA_COMPLEX_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_NUMPY_COMPLEX_TYPE
 
 
 # According to the colab sheet here
