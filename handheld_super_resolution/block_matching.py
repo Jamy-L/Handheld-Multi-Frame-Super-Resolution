@@ -10,9 +10,7 @@ import numpy as np
 from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda, int32
 
 from .utils import getTime, isTypeInt
-from .utils_image import getTiles, getAlignedTiles, downsample,computeTilesDistanceL1_, computeDistance, subPixelMinimum
-
-
+from .utils_image import getTiles, getAlignedTiles, downsample, computeTilesDistanceL1_, computeDistance, subPixelMinimum
 
 
 def alignHdrplus(referenceImage, alternateImages, params, options):
@@ -218,7 +216,8 @@ def upsampleAlignments(referencePyramidLevel, alternatePyramidLevel, previousAli
     return newAlignments
 
 
-def alignOnALevel(referencePyramidLevel, alternatePyramidLevel, options, upsamplingFactor=1, tileSize=16, previousTileSize=None, searchRadius=4, distance='L2', subpixel=True, previousAlignments=None):
+def alignOnALevel(referencePyramidLevel, alternatePyramidLevel, options, upsamplingFactor=1, tileSize=16, 
+                  previousTileSize=None, searchRadius=4, distance='L2', subpixel=True, previousAlignments=None):
     '''motion estimation performed at a single Gaussian pyramid level.
     Args:
             referencePyramidLevel / alternatePyramidLevel: images at the current pyramid level on which motion is estimated
@@ -323,3 +322,4 @@ def alignOnALevel(referencePyramidLevel, alternatePyramidLevel, options, upsampl
         currentTime = getTime(currentTime, ' ---- Deduce positions')
 
     return levelOffsets
+
