@@ -45,3 +45,7 @@ def clamp(x, min_, max_):
         return max_
     else:
         return x
+
+
+def mse(im1, im2):
+    return np.linalg.norm(im1 - im2) / np.prod(im1.shape)

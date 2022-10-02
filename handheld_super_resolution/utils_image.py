@@ -167,18 +167,9 @@ def computeL1Distance_(win, ref, dum, res):
     	        res[n, i, j] = sum
 
 
-
-
-
-
-
-
-####### HERE ##############
-
-
-
+# ## NOTE: old implementation.
 # @guvectorize(['void(float32[:, :, :], float32[:, :, :], float32[:, :, :], float32[:, :, :])'], '(n, w, w), (n, p, p), (n, t, t) -> (n, t, t)')
-# def computeL2Distance_(win, ref, dum, res):
+# def computeL2Distance__(win, ref, dum, res):
 #     # Dummy array dum only here to know the output size. Won't be used.
 #     # Get the shapes
 #     hw, sW, sP, sT = win.shape[0], win.shape[1], ref.shape[1], win.shape[1] - ref.shape[1] + 1
@@ -186,37 +177,34 @@ def computeL1Distance_(win, ref, dum, res):
 #     for n in range(hw):
 #         # Extract all the generic patches in the current searching windows
 #         for i in range(sT):
-#     	    for j in range(sT):
-#     	    	# Distance computation
-#     	    	sum = 0
-#     	    	for p in range(sP):
+#             for j in range(sT):
+#                 # Distance computation
+#                 sum = 0
+#                 for p in range(sP):
 #                     for q in range(sP):
 #                         sum += (win[n, i + p, j + q] - ref[n, p, q])**2
 #                 # Store the distance
 #                 res[n, i, j] = sum
 
 
-
+## Note: FFT-based L2 distance computation. It may be slow anyway because of homemade numba FFT.
 @guvectorize(['void(float32[:, :, :], float32[:, :, :], float32[:, :, :], float32[:, :, :])'], '(n, w, w), (n, p, p), (n, t, t) -> (n, t, t)')
-## TODO: why not just do cross-correlation here to find the translations?
-## At each scale, you just realign with the current predicted shift
 def computeL2Distance_(win, ref, dum, res):
     # Dummy array dum only here to know the output size. Won't be used.
     # Get the shapes: sW = m, sP = n, sT = m-n+1
     hw, sW, sP, sT = win.shape[0], win.shape[1], ref.shape[1], win.shape[1] - ref.shape[1] + 1
+    # Compute the norm of T once -> globally summed squared entries of T
+    for n in range(hw):
+        res[n] = np.sum(ref[n] * ref[n])
     # FFT-based box filtering of I -> slided summed squared entries of I
     # FFT and IFFT are done on the two last entries of the arrays (cf .fft.py)
-    box = np.zeros((hW, sW), dtype=win.dtype)
-    box[:sP, :sP] = np.ones((sT, sT), dtype=win.dtype)
-    res = -2 * ifft2(fft2(box) * fft2(win * win)).real[..., sP-1:sP-1+sT, sP-1:sP-1+sT]  # (n,t,t)
+    box = np.zeros((sW, sW), dtype=win.dtype)
+    box[:sP, :sP] = np.ones((sP, sP), dtype=win.dtype)
+    res += ifft2(fft2(box) * fft2(win * win)).real[..., sP-1:sP-1+sT, sP-1:sP-1+sT]  # (n,t,t)
     # FFT-based cross-correlation between T and I
-    res = res + ifft2(fft2(ref).conjugate() * fft2(win)).real[..., :sT, :sT]  # (n,t,t) -- ref must be conjugated since it is the "filter"
-    # Compute the norm of T once -> globally summed squared entries of T
-    res = res + np.sum(ref * ref, axis=(1, 2), keepdims=True)  # (n,1,1)
-
-
-
-####### END ##############
+    ref_padded = np.zeros_like(win)
+    ref_padded[..., :sP, :sP] = ref  # do zero-padding to fit win's size
+    res -= 2 * ifft2(fft2(ref_padded).conjugate() * fft2(win)).real[..., :sT, :sT]  # (n,t,t) -- ref must be conjugated since it is the "filter"
 
 
 def computeDistance(refPatch, searchArea, distance='L2'):
@@ -354,6 +342,7 @@ def computePSNR(image, noisyImage):
         return None
 
 
+## NOTE: this returns a (h,w,H,W) tile collections, each size (H,W)
 def getTiles(a, window, steps=None, axis=None):
     '''
     Create a windowed view over `n`-dimensional input that uses an
@@ -419,3 +408,38 @@ def getTiles(a, window, steps=None, axis=None):
     strides = tuple(astr * stp) + tuple(astr)
 
     return np.squeeze(np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides))
+
+
+
+if __name__ == '__main__':
+    from skimage import data, img_as_float32
+    import time
+    img = img_as_float32(data.astronaut())
+    img = img.mean(-1)
+    image1 = img[100:130, 100:145]
+    image2 = np.roll(img, (2,3))[100:130, 100:145]
+    win = 16
+    radius = 4
+
+    tiles1 = getTiles(image1, win +2*radius)
+    tiles1 = tiles1[...,radius:-radius, radius:-radius]
+    tiles2 = getTiles(image2, win +2*radius)
+    print(tiles1.shape, tiles2.shape)
+
+    # for convinience
+    h, w, sP, sP2 = tiles1.shape
+    hs, ws, sW, sW2 = tiles2.shape
+
+    # Reshape the input
+    win = tiles2.reshape(h * w, sW, sW)
+    ref = tiles1.reshape(h * w, sP, sP)
+    # Dummy input just to pass the output dimension to numba
+    dum = np.empty((h * w, sW - sP + 1, sW - sP + 1), dtype=ref.dtype)
+
+    # Compute the distance between the reference patch and all patches in the searching area
+    n = 1
+    # n = h*w
+    dst_fft = computeL2Distance_(win[:n], ref[:n], dum[:n])  # new implementation: based on FFT
+    # dst_direct = computeL2Distance_(win[:n], ref[:n], dum[:n])  # old implementation: nested for loops
+
+    print(np.linalg.norm(dst_direct - dst_fft) / np.prod(dst_fft.shape))

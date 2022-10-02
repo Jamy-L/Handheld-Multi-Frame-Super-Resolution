@@ -166,7 +166,8 @@ if __name__ == '__main__':
 
 
 
-    arr = np.arange(9)
+    # arr = np.arange(9)
+    arr = np.arange(24)
     arr = arr[:, None] * arr[None, :]
     arr = arr[None]
     print('arr.shape', arr.shape)
@@ -182,12 +183,12 @@ if __name__ == '__main__':
     res_nb = fft2(arr)
     print('FFT2 time nb', time.time() - start)
     # print('numba', res_nb)
-    print('FFT2 diff', np.linalg.norm(res_nb - res_np))
+    print('FFT2 diff', np.linalg.norm(res_nb - res_np) / np.prod(arr.shape))
 
     # ifft2(res_nb)
     ifft2(res_nb.astype(np.complex64))  # ifft2 has to be compiled with np.complex64 input
     start = time.time()
-    arr_nb = ifft2(res_nb)
+    arr_nb = ifft2(res_nb).real
     print('IFFT2 time nb', time.time() - start)
-    # print('arr_nb', arr_nb)
-    print('IFFT2 diff res', np.linalg.norm(arr_nb - arr))
+    print('arr_nb', arr_nb)
+    print('IFFT2 diff res', np.linalg.norm(arr_nb - arr) / np.prod(arr.shape))
