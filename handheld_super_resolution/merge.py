@@ -12,12 +12,11 @@ import math
 import numpy as np
 from numba import uint8, uint16, float32, float64, jit, njit, cuda, int32
 
+from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, EPSILON
 from .optical_flow import get_closest_flow_V2
-from .utils import getTime
 from .kernels import compute_interpolated_kernel_cov
 from .linalg import quad_mat_prod
 from .robustness import fetch_robustness
-from handheld_super_resolution import DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, EPSILON
 
 
 def merge(ref_img, comp_imgs, alignments, r, options, params):

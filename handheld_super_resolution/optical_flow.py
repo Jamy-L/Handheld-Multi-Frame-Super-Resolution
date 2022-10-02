@@ -11,10 +11,9 @@ import numpy as np
 import cv2
 from numba import cuda, float32, float64, int16
 
-from .utils import getTime
+from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
 from .linalg import solve_2x2, solve_6x6_krylov
 
-from . import DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
 
 def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer, options, params, debug = False):
     """
