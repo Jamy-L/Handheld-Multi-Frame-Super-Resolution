@@ -10,6 +10,8 @@ import numba as nb
 # from .super_resolution import process
 
 DEFAULT_CUDA_FLOAT_TYPE = nb.float32
+DEFAULT_CUDA_COMPLEX_TYPE = nb.complex64
 DEFAULT_NUMPY_FLOAT_TYPE = np.float32
+DEFAULT_NUMPY_FLOAT_TYPE = nb.complex64
 EPSILON = 1e-6
 
