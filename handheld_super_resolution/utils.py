@@ -13,7 +13,7 @@ from numba import uint8, uint16, float32, float64, complex64, cuda
 DEFAULT_CUDA_FLOAT_TYPE = float32
 DEFAULT_CUDA_COMPLEX_TYPE = complex64
 DEFAULT_NUMPY_FLOAT_TYPE = np.float32
-DEFAULT_NUMPY_FLOAT_TYPE = nb.complex64
+DEFAULT_NUMPY_COMPLEX_TYPE = np.complex64
 EPSILON = 1e-6
 
 

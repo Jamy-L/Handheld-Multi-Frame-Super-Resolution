@@ -51,8 +51,11 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
     SCALE = params['scale']
     
     CFA_pattern = params['exif']['CFA Pattern']
-    
-    TILE_SIZE = params['tuning']['tileSizes']
+    bayer_mode = params['mode'] == 'bayer'
+    if bayer_mode : 
+        TILE_SIZE = params['tuning']['tileSizes']*2
+    else:
+        TILE_SIZE = params['tuning']['tileSizes']
     k_detail =params['tuning']['k_detail']
     k_denoise = params['tuning']['k_denoise']
     D_th = params['tuning']['D_th']
@@ -101,7 +104,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
         return uint8(CFA_pattern[patch_pixel_idy%2, patch_pixel_idx%2])
       
     @cuda.jit
-    def accumulate(ref_img, comp_imgs, alignments, r, output_img):
+    def accumulate(ref_img, comp_imgs, alignments, r, bayer_mode, output_img):
         """
         Cuda kernel, each block represents an output pixel. Each block contains
         a 3 by 3 neighborhood for each moving image. A single threads takes
@@ -134,8 +137,12 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
         output_size_y, output_size_x, _ = output_img.shape
         input_size_y, input_size_x = ref_img.shape
         
-        acc = cuda.shared.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-        val = cuda.shared.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        if bayer_mode:
+            acc = cuda.shared.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+            val = cuda.shared.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        else:
+            acc = cuda.shared.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+            val = cuda.shared.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         
         coarse_ref_sub_pos = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) # y, x
         
@@ -146,12 +153,14 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
             coarse_ref_sub_pos[1] = output_pixel_idx / SCALE
             
             acc[0] = 0
-            acc[1] = 0
-            acc[2] = 0
+            if bayer_mode : 
+                acc[1] = 0
+                acc[2] = 0
 
             val[0] = 0
-            val[1] = 0
-            val[2] = 0
+            if bayer_mode:
+                val[1] = 0
+                val[2] = 0
 
         patch_center_pos = cuda.shared.array(2, uint16) # y, x
         local_optical_flow = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
@@ -189,7 +198,10 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
             thread_pixel_idy = uint16(patch_center_pos[0]) + ty  
             
             # checking if pixel is r, g or b
-            channel = get_channel(thread_pixel_idx, thread_pixel_idy)
+            if bayer_mode : 
+                channel = get_channel(thread_pixel_idx, thread_pixel_idy)
+            else:
+                channel = 0
 
             if image_index == 0:
                 compute_interpolated_kernel_cov(ref_img, patch_center_pos, cov_i,
@@ -204,8 +216,11 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                 
                 # robustness
                 if 0 <= thread_pixel_idx < input_size_x and 0 <= thread_pixel_idy < input_size_y: # inbound
-                    local_r = fetch_robustness(thread_pixel_idx, thread_pixel_idy, image_index - 1, r, channel) # r is a local variable : different for every thread
-
+                    if bayer_mode : 
+                        local_r = fetch_robustness(thread_pixel_idx, thread_pixel_idy, image_index - 1, r, channel) # r is a local variable : different for every thread
+                    else:
+                        # pos is divided by 2 during fetching, because grey is twice smaller.
+                        local_r = fetch_robustness(thread_pixel_idx * 2, thread_pixel_idy * 2, image_index - 1, r, 0)
                 
 
             # We need to wait the calculation of R and kernel
@@ -273,14 +288,14 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
             # the next image, because sharred arrays will be overwritten
             cuda.syncthreads()
         if tx == 0 and ty == 0:
-            for chan in range(3):
+            for chan in range(r.shape[3]): # 3 or 1 if bayer or not
                 output_img[output_pixel_idy, output_pixel_idx, chan] = val[chan]/(acc[chan] + EPSILON) 
 
                     
     current_time = time()
 
     accumulate[blockspergrid, threadsperblock](
-        ref_img, comp_imgs, alignments, r, output_img)
+        ref_img, comp_imgs, alignments, r, bayer_mode, output_img)
     cuda.synchronize()
 
     if VERBOSE > 2:

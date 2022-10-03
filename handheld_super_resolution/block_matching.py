@@ -12,6 +12,33 @@ from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, 
 from .utils import getTime, isTypeInt
 from .utils_image import getTiles, getAlignedTiles, downsample, computeTilesDistanceL1_, computeDistance, subPixelMinimum
 
+def alignBurst(ref_img, comp_imgs, params, options):
+	'''Estimate motion between the reference and other images of the burst, and return a set of aligned tiles.'''
+	# Initialization.
+	h, w = ref_img.shape  # height and width should be identical for all images
+
+	if params['mode'] == 'bayer':
+		tileSize = 2 * params['tuning']['tileSizes'][0]
+	else:
+		tileSize = params['tuning']['tileSizes'][0]
+	# if needed, pad images with zeros so that getTiles contains all image pixels
+	paddingPatchesHeight = (tileSize - h % (tileSize)) * (h % (tileSize) != 0)
+	paddingPatchesWidth = (tileSize - w % (tileSize)) * (w % (tileSize) != 0)
+	# additional zero padding to prevent artifacts on image edges due to overlapped patches in each spatial dimension
+	paddingOverlapHeight = paddingOverlapWidth = tileSize // 2
+	# combine the two to get the total padding
+	paddingTop = paddingOverlapHeight
+	paddingBottom = paddingOverlapHeight + paddingPatchesHeight
+	paddingLeft = paddingOverlapWidth
+	paddingRight = paddingOverlapWidth + paddingPatchesWidth
+    
+	# pad all images (by mirroring image edges)
+	# separate reference and alternate images
+	ref_img_padded = np.pad(ref_img, ((paddingTop, paddingBottom), (paddingLeft, paddingRight)), 'symmetric')
+	comp_imgs_padded = [np.pad(im, ((paddingTop, paddingBottom), (paddingLeft, paddingRight)), 'symmetric') for im in comp_imgs]
+
+	# call the HDR+ tile-based alignment function
+	return alignHdrplus(ref_img_padded, comp_imgs_padded, params, options)
 
 def alignHdrplus(referenceImage, alternateImages, params, options):
     '''Implements the coarse-to-fine alignment on 4-level gaussian pyramids
@@ -41,7 +68,8 @@ def alignHdrplus(referenceImage, alternateImages, params, options):
             currentTime = getTime(currentTime, ' --- Ref Bayer downsampling')
         tileSize = 2 * tileSizes[0]
     else:
-        raise NotImplementedError('Use bayer input raw images please')
+        imRef = referenceImage
+        tileSize = tileSizes[0]
 
     # tiles overlap by half in each spatial dimension
     refTiles = getTiles(referenceImage, tileSize, tileSize // 2)
@@ -66,7 +94,6 @@ def alignHdrplus(referenceImage, alternateImages, params, options):
                 currentTime = getTime(
                     currentTime, ' --- Alt Bayer downsampling')
         else:
-            raise NotImplementedError('Use bayer input raw images please')
             imAlt = alternateImage
 
         # 4-level coarse-to fine pyramid of alternate image

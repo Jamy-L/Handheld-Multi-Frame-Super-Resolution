@@ -168,43 +168,43 @@ def computeL1Distance_(win, ref, dum, res):
 
 
 # ## NOTE: old implementation.
-# @guvectorize(['void(float32[:, :, :], float32[:, :, :], float32[:, :, :], float32[:, :, :])'], '(n, w, w), (n, p, p), (n, t, t) -> (n, t, t)')
-# def computeL2Distance__(win, ref, dum, res):
-#     # Dummy array dum only here to know the output size. Won't be used.
-#     # Get the shapes
-#     hw, sW, sP, sT = win.shape[0], win.shape[1], ref.shape[1], win.shape[1] - ref.shape[1] + 1
-#     # Loop over all the pixels of the image
-#     for n in range(hw):
-#         # Extract all the generic patches in the current searching windows
-#         for i in range(sT):
-#             for j in range(sT):
-#                 # Distance computation
-#                 sum = 0
-#                 for p in range(sP):
-#                     for q in range(sP):
-#                         sum += (win[n, i + p, j + q] - ref[n, p, q])**2
-#                 # Store the distance
-#                 res[n, i, j] = sum
+@guvectorize(['void(float32[:, :, :], float32[:, :, :], float32[:, :, :], float32[:, :, :])'], '(n, w, w), (n, p, p), (n, t, t) -> (n, t, t)')
+def computeL2Distance__(win, ref, dum, res):
+    # Dummy array dum only here to know the output size. Won't be used.
+    # Get the shapes
+    hw, sW, sP, sT = win.shape[0], win.shape[1], ref.shape[1], win.shape[1] - ref.shape[1] + 1
+    # Loop over all the pixels of the image
+    for n in range(hw):
+        # Extract all the generic patches in the current searching windows
+        for i in range(sT):
+            for j in range(sT):
+                # Distance computation
+                sum = 0
+                for p in range(sP):
+                    for q in range(sP):
+                        sum += (win[n, i + p, j + q] - ref[n, p, q])**2
+                # Store the distance
+                res[n, i, j] = sum
 
 
 ## Note: FFT-based L2 distance computation. It may be slow anyway because of homemade numba FFT.
-@guvectorize(['void(float32[:, :, :], float32[:, :, :], float32[:, :, :], float32[:, :, :])'], '(n, w, w), (n, p, p), (n, t, t) -> (n, t, t)')
-def computeL2Distance_(win, ref, dum, res):
-    # Dummy array dum only here to know the output size. Won't be used.
-    # Get the shapes: sW = m, sP = n, sT = m-n+1
-    hw, sW, sP, sT = win.shape[0], win.shape[1], ref.shape[1], win.shape[1] - ref.shape[1] + 1
-    # Compute the norm of T once -> globally summed squared entries of T
-    for n in range(hw):
-        res[n] = np.sum(ref[n] * ref[n])
-    # FFT-based box filtering of I -> slided summed squared entries of I
-    # FFT and IFFT are done on the two last entries of the arrays (cf .fft.py)
-    box = np.zeros((sW, sW), dtype=win.dtype)
-    box[:sP, :sP] = np.ones((sP, sP), dtype=win.dtype)
-    res += ifft2(fft2(box) * fft2(win * win)).real[..., sP-1:sP-1+sT, sP-1:sP-1+sT]  # (n,t,t)
-    # FFT-based cross-correlation between T and I
-    ref_padded = np.zeros_like(win)
-    ref_padded[..., :sP, :sP] = ref  # do zero-padding to fit win's size
-    res -= 2 * ifft2(fft2(ref_padded).conjugate() * fft2(win)).real[..., :sT, :sT]  # (n,t,t) -- ref must be conjugated since it is the "filter"
+# @guvectorize(['void(float32[:, :, :], float32[:, :, :], float32[:, :, :], float32[:, :, :])'], '(n, w, w), (n, p, p), (n, t, t) -> (n, t, t)')
+# def computeL2Distance_(win, ref, dum, res):
+#     # Dummy array dum only here to know the output size. Won't be used.
+#     # Get the shapes: sW = m, sP = n, sT = m-n+1
+#     hw, sW, sP, sT = win.shape[0], win.shape[1], ref.shape[1], win.shape[1] - ref.shape[1] + 1
+#     # Compute the norm of T once -> globally summed squared entries of T
+#     for n in range(hw):
+#         res[n] = np.sum(ref[n] * ref[n])
+#     # FFT-based box filtering of I -> slided summed squared entries of I
+#     # FFT and IFFT are done on the two last entries of the arrays (cf .fft.py)
+#     box = np.zeros((sW, sW), dtype=win.dtype)
+#     box[:sP, :sP] = np.ones((sP, sP), dtype=win.dtype)
+#     res += ifft2(fft2(box) * fft2(win * win)).real[..., sP-1:sP-1+sT, sP-1:sP-1+sT]  # (n,t,t)
+#     # FFT-based cross-correlation between T and I
+#     ref_padded = np.zeros_like(win)
+#     ref_padded[..., :sP, :sP] = ref  # do zero-padding to fit win's size
+#     res -= 2 * ifft2(fft2(ref_padded).conjugate() * fft2(win)).real[..., :sT, :sT]  # (n,t,t) -- ref must be conjugated since it is the "filter"
 
 
 def computeDistance(refPatch, searchArea, distance='L2'):
@@ -226,7 +226,7 @@ def computeDistance(refPatch, searchArea, distance='L2'):
     if distance == 'L1':
         dst = computeL1Distance_(win, ref, dum)
     elif distance == 'L2':
-        dst = computeL2Distance_(win, ref, dum)
+        dst = computeL2Distance__(win, ref, dum)
     else:
         print('Unknown distance ' + distance + '. Abort.')
         exit()
