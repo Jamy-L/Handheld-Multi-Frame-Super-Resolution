@@ -15,6 +15,7 @@ from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
 from .linalg import solve_2x2, solve_6x6_krylov
 
 
+# TODO LK V1 is outdated and does not support non bayer images.
 def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer, options, params, debug = False):
     """
     Computes the displacement based on a naive implementation of
@@ -345,7 +346,7 @@ def get_closest_flow(idx_sub, idy_sub, optical_flows, tile_size, imsize, local_f
 
 #%% New optical flow with 9 paramaters
 
-def lucas_kanade_optical_flow_V2(ref_img_bayer, comp_img_bayer, pre_alignment_bayer, options, params, debug = False):
+def lucas_kanade_optical_flow_V2(ref_img, comp_img, pre_alignment, options, params, debug = False):
     """
     Computes the displacement based on a naive implementation of
     Lucas-Kanade optical flow (https://www.cs.cmu.edu/~16385/s15/lectures/Lecture21.pdf)
@@ -354,11 +355,11 @@ def lucas_kanade_optical_flow_V2(ref_img_bayer, comp_img_bayer, pre_alignment_ba
 
     Parameters
     ----------
-    ref_img_Bayer : Array[imsize_y, imsize_x]
+    ref_img : Array[imsize_y, imsize_x]
         The reference image
-    comp_img_Bayer : Array[n_images, imsize_y, imsize_x]
+    comp_img : Array[n_images, imsize_y, imsize_x]
         The images to rearrange and compare to the reference
-    pre_alignment_bayer : Array[n_images, n_tiles_y, n_tiles_x, 2]
+    pre_alignment : Array[n_images, n_tiles_y, n_tiles_x, 2]
         The alignment vectors obtained by the coarse to fine pyramid search.
     options : Dict
         Options to pass
@@ -379,31 +380,35 @@ def lucas_kanade_optical_flow_V2(ref_img_bayer, comp_img_bayer, pre_alignment_ba
     n_iter = params['tuning']['kanadeIter']
 
     n_images, n_patch_y, n_patch_x, _ \
-        = pre_alignment_bayer.shape
+        = pre_alignment.shape
         
     if verbose:
         t1 = time()
         current_time = time()
         print("Estimating Lucas-Kanade's optical flow")
-
-    # grey level
-    ref_img = (ref_img_bayer[::2, ::2] + ref_img_bayer[1::2, 1::2] + ref_img_bayer[::2, 1::2] + ref_img_bayer[1::2, ::2])/4
-    comp_img = (comp_img_bayer[:,::2, ::2] + comp_img_bayer[:,1::2, 1::2] + comp_img_bayer[:,::2, 1::2] + comp_img_bayer[:,1::2, ::2])/4
-    pre_alignment = pre_alignment_bayer/2 # dividing by 2 because grey image twice smaller
+    
+    if params["mode"] == "bayer" : 
+        # grey level
+        ref_img_grey = (ref_img[::2, ::2] + ref_img[1::2, 1::2] + ref_img[::2, 1::2] + ref_img[1::2, ::2])/4
+        comp_img_grey = (comp_img[:,::2, ::2] + comp_img[:,1::2, 1::2] + comp_img[:,::2, 1::2] + comp_img[:,1::2, ::2])/4
+        pre_alignment = pre_alignment/2 # dividing by 2 because grey image twice smaller
+    else : 
+        ref_img_grey = ref_img # no need to copy now, they will be copied to gpu later.
+        comp_img_grey = comp_img
 
     if verbose_2:
         current_time = getTime(
             current_time, ' -- Grey Image estimated')
 
         
-    gradsx = np.empty_like(comp_img)
-    gradsy = np.empty_like(comp_img)
+    gradsx = np.empty_like(comp_img_grey)
+    gradsy = np.empty_like(comp_img_grey)
     
     # Estimating gradients with cv2 sobel filters
     # Data format is very important. default 8uint is bad, because we use floats
     for i in range(n_images):
-        gradsx[i] = cv2.Sobel(comp_img[i], cv2.CV_64F, dx=1, dy=0)
-        gradsy[i] = cv2.Sobel(comp_img[i], cv2.CV_64F, dx=0, dy=1)
+        gradsx[i] = cv2.Sobel(comp_img_grey[i], cv2.CV_64F, dx=1, dy=0)
+        gradsy[i] = cv2.Sobel(comp_img_grey[i], cv2.CV_64F, dx=0, dy=1)
 
     if verbose_2:
         current_time = getTime(
@@ -416,8 +421,8 @@ def lucas_kanade_optical_flow_V2(ref_img_bayer, comp_img_bayer, pre_alignment_ba
     
     cuda_alignment = cuda.to_device(alignment)
     
-    cuda_ref_img = cuda.to_device(np.ascontiguousarray(ref_img))
-    cuda_comp_img = cuda.to_device(np.ascontiguousarray(comp_img))
+    cuda_ref_img_grey = cuda.to_device(np.ascontiguousarray(ref_img_grey))
+    cuda_comp_img_grey = cuda.to_device(np.ascontiguousarray(comp_img_grey))
     cuda_gradsx = cuda.to_device(gradsx)
     cuda_gradsy = cuda.to_device(gradsy)
     if verbose_2 : 
@@ -426,7 +431,7 @@ def lucas_kanade_optical_flow_V2(ref_img_bayer, comp_img_bayer, pre_alignment_ba
     
     for iter_index in range(n_iter):
         lucas_kanade_optical_flow_iteration_V2(
-            cuda_ref_img, cuda_gradsx, cuda_gradsy, cuda_comp_img, cuda_alignment,
+            cuda_ref_img_grey, cuda_gradsx, cuda_gradsy, cuda_comp_img_grey, cuda_alignment,
             options, params, iter_index)
         if debug :
             debug_list.append(cuda_alignment.copy_to_host())
@@ -436,7 +441,7 @@ def lucas_kanade_optical_flow_V2(ref_img_bayer, comp_img_bayer, pre_alignment_ba
         print('\n')
     if debug:
         return debug_list
-    return alignment
+    return cuda_alignment
 
 
 def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, alignment, options, params, iter_index):
@@ -472,7 +477,9 @@ def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, al
     """
     verbose_2 = options['verbose'] > 2
     n_iter = params['tuning']['kanadeIter']
-    tile_size = int(params['tuning']['tileSizes']/2) #grey tiles are twice as small
+    
+    tile_size = params['tuning']['tileSizes']
+
     EPSILON =  params['epsilon div']
     n_images, n_patch_y, n_patch_x, _ \
         = alignment.shape
@@ -483,7 +490,7 @@ def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, al
 
         
     @cuda.jit
-    def get_new_flow_V2(ref_img, comp_img, gradsx, gradsy, alignment, last_it):
+    def get_new_flow_V2(ref_img, comp_img, gradsx, gradsy, alignment, upscaled_flow):
         
         
         image_index, patch_idy, patch_idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
@@ -577,14 +584,18 @@ def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, al
         
         cuda.syncthreads()
         if pixel_local_idx == 0 and pixel_local_idy == 0: # single threaded section
-            if last_it : #uspcaling because grey img is 2x smaller
+            if upscaled_flow : #uspcaling because grey img is 2x smaller
                 alignment[image_index, patch_idy, patch_idx, 4] *= 2
                 alignment[image_index, patch_idy, patch_idx, 5] *= 2
     
     current_time = time()
     
     get_new_flow_V2[[(n_images, n_patch_y, n_patch_x), (tile_size, tile_size)]
-        ](ref_img, comp_img, gradsx, gradsy, alignment, (n_iter - 1) == iter_index)
+        ](ref_img, comp_img, gradsx, gradsy, alignment, 
+            ((n_iter - 1) == iter_index) and (params['mode'] == 'bayer'))
+            # last 2 components (fixed translation) must be doubled during the
+            # last iteration in bayer mode, because the real image is twice as big
+            # as grey image.
     
     if verbose_2:
         current_time = getTime(
@@ -605,7 +616,10 @@ def warp_flow_y(pos, local_flow):
 def get_closest_flow_V2(idx_sub, idy_sub, optical_flows, tile_size, imsize, local_flow):
     """
     Returns the estimated optical flow for a subpixel (or a pixel), based on
-    the tile based estimated optical flow.
+    the tile based estimated optical flow. Note that this function can be called
+    either by giving id's relative to a grey scale, with tile_size being the
+    number of grey pixels on the side of a tile, or by giving id's relative to a bayer
+    scale, with tile_size being the number of bayer pixels on the side of a tile.
 
     Parameters
     ----------

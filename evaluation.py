@@ -269,17 +269,19 @@ def align_fb(dec_burst):
     upscaled_fb[:, 1::2, 1::2, :] = farnback_flow
     return upscaled_fb*2 # greys are twice smaller
 
-def warp_flow(image, flow):
+def warp_flow(image, flow, rgb=False):
     Y = np.linspace(0, image.shape[0] - 1, image.shape[0])
     X = np.linspace(0, image.shape[1] - 1, image.shape[1])
     Xm, Ym = np.meshgrid(X, Y)
     Z = np.stack((Xm, Ym)) #[2, imshape], X first, Y second
     Z = (Z + flow.transpose(2,0,1))[::-1,:,:] #[2, imshape], Y first X second
-    
-    r = warp(image[:,:,0], inverse_map=Z)
-    g = warp(image[:,:,1], inverse_map=Z)
-    b = warp(image[:,:,2], inverse_map=Z)
-    warped = np.stack((r,g,b)).transpose(1,2,0)
+    if rgb : 
+        r = warp(image[:,:,0], inverse_map=Z)
+        g = warp(image[:,:,1], inverse_map=Z)
+        b = warp(image[:,:,2], inverse_map=Z)
+        warped = np.stack((r,g,b)).transpose(1,2,0)
+    else:
+        warped = warp(image[:,:], inverse_map=Z)
     return warped
 
 def im_SE(ground_truth, warped):
@@ -314,7 +316,7 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
     for image_index in tqdm(range(comp_alignment.shape[1])):
         for iteration in range(comp_alignment.shape[0]):
             warped_images[iteration, image_index] = warp_flow(comp_imgs[image_index],
-                                                              comp_alignment[iteration, image_index])
+                                                              comp_alignment[iteration, image_index], rgb=True)
             im_EQ[iteration, image_index] = im_SE(ref_img,
                                                   warped_images[iteration, image_index])
 
@@ -366,82 +368,82 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
     return warped_images, im_EQ 
 
 #%%
-params = {'block matching': {
-                'mode':'bayer',
-                'tuning': {
-                    # WARNING: these parameters are defined fine-to-coarse!
-                    'factors': [1, 2, 2, 2],
-                    'tileSizes': [16, 16, 16, 8],
-                    'searchRadia': [4, 4, 8, 8],
-                    'distances': ['L1', 'L2', 'L2', 'L2'],
-                    # if you want to compute subpixel tile alignment at each pyramid level
-                    'subpixels': [False, True, True, True]
-                    }},
-            'kanade' : {
-                'epsilon div' : 1e-6,
-                'tuning' : {
-                    'tileSizes' : 32,
-                    'kanadeIter': 8, # 3 
-                    }},
-            'merging': {
-                'scale': 2,
-                'tuning': {
-                    'tileSizes': 32,
-                    'k_detail' : 0.3,  # [0.25, ..., 0.33]
-                    'k_denoise': 4,    # [3.0, ...,5.0]
-                    'D_th': 0.05,      # [0.001, ..., 0.010]
-                    'D_tr': 0.014,     # [0.006, ..., 0.020]
-                    'k_stretch' : 4,   # 4
-                    'k_shrink' : 2,    # 2
-                    't' : 0.12,        # 0.12
-                    's1' : 2,
-                    's2' : 2,
-                    'Mt' : 0.8,
-                    'sigma_t' : 2,
-                    'dt' : 15},
-                    }
-            }
+# params = {'block matching': {
+#                 'mode':'bayer',
+#                 'tuning': {
+#                     # WARNING: these parameters are defined fine-to-coarse!
+#                     'factors': [1, 2, 2, 2],
+#                     'tileSizes': [16, 16, 16, 8],
+#                     'searchRadia': [4, 4, 8, 8],
+#                     'distances': ['L1', 'L2', 'L2', 'L2'],
+#                     # if you want to compute subpixel tile alignment at each pyramid level
+#                     'subpixels': [False, True, True, True]
+#                     }},
+#             'kanade' : {
+#                 'epsilon div' : 1e-6,
+#                 'tuning' : {
+#                     'tileSizes' : 32,
+#                     'kanadeIter': 8, # 3 
+#                     }},
+#             'merging': {
+#                 'scale': 2,
+#                 'tuning': {
+#                     'tileSizes': 32,
+#                     'k_detail' : 0.3,  # [0.25, ..., 0.33]
+#                     'k_denoise': 4,    # [3.0, ...,5.0]
+#                     'D_th': 0.05,      # [0.001, ..., 0.010]
+#                     'D_tr': 0.014,     # [0.006, ..., 0.020]
+#                     'k_stretch' : 4,   # 4
+#                     'k_shrink' : 2,    # 2
+#                     't' : 0.12,        # 0.12
+#                     's1' : 2,
+#                     's2' : 2,
+#                     'Mt' : 0.8,
+#                     'sigma_t' : 2,
+#                     'dt' : 15},
+#                     }
+#             }
 
-img = plt.imread("P:/DIV2K_valid_HR/DIV2K_valid_HR/0900.png")*255
-transformation_params = {'max_translation':10,
-                         'max_shear': 0,
-                         'max_ar_factor': 0,
-                         'max_rotation': 3}
-burst, flow = single2lrburst(img, 5, downsample_factor=2, transformation_params=transformation_params)
-# flow is unussable because it is pointing from moving frame to ref. We would need the opposite
-
-
-dec_burst = (decimate(burst)/255).astype(np.float32)
-
-raw_lk_alignment_V2, upscaled_lk_alignment_V2 = align_lk(dec_burst, params, v2 = True)
-raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, v2 = False)
-t1 = time()
-fb_alignment = align_fb(dec_burst)
-print('farneback evaluated : ', time()-t1)
-
-#%%
-lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:], burst[0],  label = "LK", imshow=False)
-lkV2_warped_images, lkV2_im_EQ = evaluate_alignment(upscaled_lk_alignment_V2, burst[1:], burst[0], label = "LK V2", imshow=False)
-
-fb_warped_images, fb_im_EQ = evaluate_alignment(fb_alignment[None], burst[1:], burst[0], label = "FarneBack", imshow=True)
+# img = plt.imread("P:/DIV2K_valid_HR/DIV2K_valid_HR/0900.png")*255
+# transformation_params = {'max_translation':10,
+#                           'max_shear': 0,
+#                           'max_ar_factor': 0,
+#                           'max_rotation': 3}
+# burst, flow = single2lrburst(img, 5, downsample_factor=2, transformation_params=transformation_params)
+# # flow is unussable because it is pointing from moving frame to ref. We would need the opposite
 
 
-#%%
-plt.figure("ref")
-plt.imshow(burst[0]/255)
-for i in range(4):
-    plt.figure("{}".format(i))
-    plt.imshow(burst[i+1]/255)
+# dec_burst = (decimate(burst)/255).astype(np.float32)
 
-#%%
-plt.figure("LK Translation")
-plt.imshow(warp_flow(burst[1], upscaled_lk_alignment[-1,0])/255)
-plt.figure("LK V2")
-plt.imshow(warp_flow(burst[1], upscaled_lk_alignment_V2[-1,0])/255)
-plt.figure("Farneback")
-plt.imshow(warp_flow(burst[1], fb_alignment[0])/255)
-plt.figure("Block Matching")
-plt.imshow(warp_flow(burst[1], upscaled_lk_alignment[1,0])/255)
+# raw_lk_alignment_V2, upscaled_lk_alignment_V2 = align_lk(dec_burst, params, v2 = True)
+# raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, v2 = False)
+# t1 = time()
+# fb_alignment = align_fb(dec_burst)
+# print('farneback evaluated : ', time()-t1)
+
+# #%%
+# lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:], burst[0],  label = "LK", imshow=False)
+# lkV2_warped_images, lkV2_im_EQ = evaluate_alignment(upscaled_lk_alignment_V2, burst[1:], burst[0], label = "LK V2", imshow=True)
+
+# fb_warped_images, fb_im_EQ = evaluate_alignment(fb_alignment[None], burst[1:], burst[0], label = "FarneBack", imshow=True)
+
+
+# #%%
+# plt.figure("ref")
+# plt.imshow(burst[0]/255)
+# for i in range(4):
+#     plt.figure("{}".format(i))
+#     plt.imshow(burst[i+1]/255)
+
+# #%%
+# plt.figure("LK Translation")
+# plt.imshow(warp_flow(burst[1], upscaled_lk_alignment[-1,0], rgb=True)/255)
+# plt.figure("LK V2")
+# plt.imshow(warp_flow(burst[1], upscaled_lk_alignment_V2[-1,0], rgb=True)/255)
+# plt.figure("Farneback")
+# plt.imshow(warp_flow(burst[1], fb_alignment[0], rgb=True)/255)
+# plt.figure("Block Matching")
+# plt.imshow(warp_flow(burst[1], upscaled_lk_alignment[1,0], rgb=True)/255)
 
 
 

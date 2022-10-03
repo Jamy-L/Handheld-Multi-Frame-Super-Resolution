@@ -16,6 +16,7 @@ import rawpy
 import matplotlib.pyplot as plt
 
 from handheld_super_resolution import process
+from evaluation import warp_flow, upscale_alignement
 
 def gamma(image):
     return image**(1/2.2)
@@ -25,6 +26,8 @@ def flat(x):
 
 
 #%%
+
+# Warning : tileSize is expressed in terms of grey pixels.
 params = {'block matching': {
                 'mode':'bayer',
                 'tuning': {
@@ -37,34 +40,42 @@ params = {'block matching': {
                     'subpixels': [False, True, True, True]
                     }},
             'kanade' : {
+                'mode':'bayer',
                 'epsilon div' : 1e-6,
                 'tuning' : {
-                    'tileSizes' : 32,
+                    'tileSizes' : 16,
                     'kanadeIter': 6, # 3 
                     }},
+            'robustness' : {
+                'mode':'bayer',
+                'tuning' : {
+                    'tileSizes': 16,
+                    't' : 0,            # 0.12
+                    's1' : 2,          #12
+                    's2' : 12,              # 2
+                    'Mt' : 0.8,         # 0.8
+                    'sigma_t' : 0.03,
+                    'dt' : 1e-3,
+                    }
+                },
             'merging': {
+                'mode':'bayer',
                 'scale': 2,
                 'tuning': {
-                    'tileSizes': 32,
+                    'tileSizes': 16,
                     'k_detail' : 0.33, # [0.25, ..., 0.33]
                     'k_denoise': 5,    # [3.0, ...,5.0]
                     'D_th': 0.05,      # [0.001, ..., 0.010]
                     'D_tr': 0.014,     # [0.006, ..., 0.020]
                     'k_stretch' : 4,   # 4
                     'k_shrink' : 2,    # 2
-                    't' : 0,            # 0.12
-                    's1' : 2,          #12
-                    's2' : 12,              # 2
-                    'Mt' : 0.8,         # 0.8
-                    'sigma_t' : 0.03,
-                    'dt' : 1e-3},
                     }
-            }
+                }}
 
-options = {'verbose' : 2}
+options = {'verbose' : 3}
 burst_path = 'P:/0001/Samsung'
 
-output, R, r = process(burst_path, options, params)
+output, R, r, alignment = process(burst_path, options, params)
 
 
 #%%
@@ -127,14 +138,35 @@ base[:,:,2] = ref_img[1::2, ::2]
 plt.figure("original bicubic")
 plt.imshow(cv2.resize(gamma(base/1023), None, fx = 2*2, fy = 2*2, interpolation=cv2.INTER_CUBIC))
 
+#%% warp optical flow
+ref_grey_image = (ref_img[::2, ::2] + ref_img[1::2, ::2] +
+                  ref_img[::2, 1::2] + ref_img[1::2, 1::2])/4
 
+comp_grey_images = (comp_images[:, ::2, ::2] + comp_images[:,1::2, ::2] +
+                    comp_images[:,::2, 1::2] + comp_images[:,1::2, 1::2])/4
+
+upscaled_al = upscale_alignement(alignment, ref_grey_image.shape[:2], 16, v2=True) # half tile size cause grey
+for image_index in range(comp_images.shape[0]):
+    warped = warp_flow(comp_grey_images[image_index]/1023, upscaled_al[image_index], rgb = False)
+    plt.figure("image {}".format(image_index))
+    plt.imshow(warped, cmap = 'gray')
+    plt.figure("EQ {}".format(image_index))
+    plt.imshow(np.log10((ref_grey_image/1023 - warped)**2),vmin = -5, vmax =0 , cmap="Reds")
+    plt.colorbar()
+    
+    print("Im {}, EQM = {}".format(image_index, np.mean((ref_grey_image/1023 - warped)**2)))
+    
+plt.figure('ref grey')    
+plt.imshow(ref_grey_image, cmap= 'gray')    
+
+#%% histograms
 r2 = np.mean(R, axis = 3)
 plt.figure("R histogram")
 plt.hist(r2.reshape(r2.size), bins=25)
 r3 = np.mean(r, axis = 3)
 plt.figure("r histogram")
 plt.hist(r3.reshape(r3.size), bins=25)
-#%%
+#%% kernels
 def plot_merge(cov_i, D, pos):
     cov_i = cov_i[pos]
     D = D[pos]
@@ -152,6 +184,7 @@ def plot_merge(cov_i, D, pos):
     #     plt.quiver(D[:,:,0].reshape(9)[i], -D[:,:,1].reshape(9)[i], scale=1, scale_units = "xy")
     plt.colorbar()
 
+#%% robustness
 plt.figure('r')
 plt.imshow(r[0]/np.max(r[0], axis=(0,1)))
 plt.figure("accumulated r")
@@ -161,6 +194,7 @@ plt.figure('R')
 plt.imshow(R[0]/np.max(R[0], axis=(0,1)))
 
 
+#%% eighen vectors
 # # quivers for eighenvectors
 # # Lower res because pyplot's quiver is really not made for that (=slow)
 # plt.figure('quiver')
