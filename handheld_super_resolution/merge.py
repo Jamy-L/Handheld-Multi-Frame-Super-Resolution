@@ -72,7 +72,8 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
         current_time = time()
 
     native_im_size = ref_img.shape
-    output_size = (SCALE*native_im_size[0], SCALE*native_im_size[1])
+    # casting to integer to account for floating scale
+    output_size = (int(SCALE*native_im_size[0]), int(SCALE*native_im_size[1]))
     output_img = cuda.device_array(output_size+(31,), dtype = DEFAULT_NUMPY_FLOAT_TYPE) #third dim for rgb channel
     # TODO 3 channels are enough, the rest is for debugging
 
@@ -264,7 +265,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                 else : 
                     w = math.exp(-y/(2*SCALE**2))
                 # kernels are estimated on grey levels, so distances have to
-                # be downscaled to grey coarse level
+                # be downscaled to grey coarse level if distances are on bayer level
 
 
                 cuda.atomic.add(val, channel, c*w*local_r)
