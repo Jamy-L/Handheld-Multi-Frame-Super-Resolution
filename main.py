@@ -54,8 +54,6 @@ params = {'block matching': {
                     's1' : 2,          #12
                     's2' : 12,              # 2
                     'Mt' : 0.8,         # 0.8
-                    'sigma_t' : 0.03,
-                    'dt' : 1e-3,
                     }
                 },
             'merging': {
@@ -63,7 +61,7 @@ params = {'block matching': {
                 'scale': 2,
                 'tuning': {
                     'tileSizes': 16,
-                    'k_detail' : 0.33, # [0.25, ..., 0.33]
+                    'k_detail' : 0.25, # [0.25, ..., 0.33]
                     'k_denoise': 5,    # [3.0, ...,5.0]
                     'D_th': 0.05,      # [0.001, ..., 0.010]
                     'D_tr': 0.014,     # [0.006, ..., 0.020]
@@ -139,25 +137,28 @@ plt.figure("original bicubic")
 plt.imshow(cv2.resize(gamma(base/1023), None, fx = 2*2, fy = 2*2, interpolation=cv2.INTER_CUBIC))
 
 #%% warp optical flow
+
 ref_grey_image = (ref_img[::2, ::2] + ref_img[1::2, ::2] +
                   ref_img[::2, 1::2] + ref_img[1::2, 1::2])/4
+plt.figure('ref grey')    
+plt.imshow(ref_grey_image, cmap= 'gray')  
 
 comp_grey_images = (comp_images[:, ::2, ::2] + comp_images[:,1::2, ::2] +
                     comp_images[:,::2, 1::2] + comp_images[:,1::2, 1::2])/4
-
-upscaled_al = upscale_alignement(alignment, ref_grey_image.shape[:2], 16, v2=True) # half tile size cause grey
+grey_al = alignment.copy()
+grey_al[:,:,:,-2:]*=0.5 # pure translation are downgraded from bayer to grey
+upscaled_al = upscale_alignement(grey_al, ref_grey_image.shape[:2], 16, v2=True) # half tile size cause grey
 for image_index in range(comp_images.shape[0]):
     warped = warp_flow(comp_grey_images[image_index]/1023, upscaled_al[image_index], rgb = False)
     plt.figure("image {}".format(image_index))
     plt.imshow(warped, cmap = 'gray')
     plt.figure("EQ {}".format(image_index))
-    plt.imshow(np.log10((ref_grey_image/1023 - warped)**2),vmin = -3, vmax =0 , cmap="Reds")
+    plt.imshow(np.log10((ref_grey_image/1023 - warped)**2),vmin = -4, vmax =0 , cmap="Reds")
     plt.colorbar()
     
     print("Im {}, EQM = {}".format(image_index, np.mean((ref_grey_image/1023 - warped)**2)))
     
-plt.figure('ref grey')    
-plt.imshow(ref_grey_image, cmap= 'gray')    
+  
 
 #%% histograms
 r2 = np.mean(R, axis = 3)

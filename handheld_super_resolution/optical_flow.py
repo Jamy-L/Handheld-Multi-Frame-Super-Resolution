@@ -15,7 +15,7 @@ from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
 from .linalg import solve_2x2, solve_6x6_krylov
 
 
-# TODO LK V1 is outdated and does not support non bayer images.
+# TODO LK V1 is outdated and does not support non bayer images. This must be removed
 def lucas_kanade_optical_flow(ref_img_bayer, comp_img_bayer, pre_alignment_bayer, options, params, debug = False):
     """
     Computes the displacement based on a naive implementation of
