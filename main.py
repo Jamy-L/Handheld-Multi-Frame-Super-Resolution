@@ -134,7 +134,7 @@ base[:,:,1] = (ref_img[::2, ::2] + ref_img[1::2, 1::2])/2
 base[:,:,2] = ref_img[1::2, ::2]
 
 plt.figure("original bicubic")
-plt.imshow(cv2.resize(gamma(base/1023), None, fx = 2*2, fy = 2*2, interpolation=cv2.INTER_CUBIC))
+plt.imshow(cv2.resize(gamma(base/1023), None, fx = 2*params["merging"]['scale'], fy = 2*params["merging"]['scale'], interpolation=cv2.INTER_CUBIC))
 
 #%% warp optical flow
 
