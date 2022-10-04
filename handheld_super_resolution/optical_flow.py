@@ -391,8 +391,10 @@ def lucas_kanade_optical_flow_V2(ref_img, comp_img, pre_alignment, options, para
         # grey level
         ref_img_grey = (ref_img[::2, ::2] + ref_img[1::2, 1::2] + ref_img[::2, 1::2] + ref_img[1::2, ::2])/4
         comp_img_grey = (comp_img[:,::2, ::2] + comp_img[:,1::2, 1::2] + comp_img[:,::2, 1::2] + comp_img[:,1::2, ::2])/4
-        pre_alignment = pre_alignment/2 # dividing by 2 because grey image twice smaller
-    else : 
+        pre_alignment = pre_alignment/2 # dividing by 2 because grey image is twice smaller than bayer
+        # and blockmatching in bayer mode returnsaignment to bayer scale
+    else :
+        # in non bayer mode, BM returns alignment to grey scale
         ref_img_grey = ref_img # no need to copy now, they will be copied to gpu later.
         comp_img_grey = comp_img
 
@@ -479,11 +481,12 @@ def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, al
     n_iter = params['tuning']['kanadeIter']
     
     tile_size = params['tuning']['tileSizes']
-
+        
     EPSILON =  params['epsilon div']
     n_images, n_patch_y, n_patch_x, _ \
         = alignment.shape
     _, imsize_y, imsize_x = comp_img.shape
+    
     if verbose_2 : 
         print(" -- Lucas-Kanade iteration {}".format(iter_index))
 
@@ -497,15 +500,13 @@ def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, al
         pixel_local_idx = cuda.threadIdx.x # Position relative to the patch
         pixel_local_idy = cuda.threadIdx.y
         
-        inbound = (0 <= pixel_local_idx < tile_size) and (0 <= pixel_local_idy < tile_size)
-        
         pixel_global_idx = tile_size//2 * patch_idx + pixel_local_idx # global position on the coarse grey grid
         pixel_global_idy = tile_size//2 * patch_idy + pixel_local_idy
         
         ATA = cuda.shared.array((6,6), dtype = DEFAULT_CUDA_FLOAT_TYPE)
         ATB = cuda.shared.array(6, dtype = DEFAULT_CUDA_FLOAT_TYPE)
         
-        # parralel init
+        # parallel init
         if cuda.threadIdx.x <= 5 and cuda.threadIdx.y <=5 :
             ATA[cuda.threadIdx.y, cuda.threadIdx.x] = 0
         if cuda.threadIdx.y == 6 and cuda.threadIdx.x <= 5 :
@@ -513,7 +514,7 @@ def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, al
   
         
         
-        inbound = inbound and (0 <= pixel_global_idx < imsize_x) and (0 <= pixel_global_idy < imsize_y)
+        inbound = (0 <= pixel_global_idx < imsize_x) and (0 <= pixel_global_idy < imsize_y)
     
         if inbound :
             # Warp I with W(x; p) to compute I(W(x; p))
@@ -592,7 +593,7 @@ def lucas_kanade_optical_flow_iteration_V2(ref_img, gradsx, gradsy, comp_img, al
     
     get_new_flow_V2[[(n_images, n_patch_y, n_patch_x), (tile_size, tile_size)]
         ](ref_img, comp_img, gradsx, gradsy, alignment, 
-            ((n_iter - 1) == iter_index) and (params['mode'] == 'bayer'))
+            ((n_iter - 1) == iter_index) and (params['mode'] == 'bayer'))   
             # last 2 components (fixed translation) must be doubled during the
             # last iteration in bayer mode, because the real image is twice as big
             # as grey image.
@@ -619,7 +620,8 @@ def get_closest_flow_V2(idx_sub, idy_sub, optical_flows, tile_size, imsize, loca
     the tile based estimated optical flow. Note that this function can be called
     either by giving id's relative to a grey scale, with tile_size being the
     number of grey pixels on the side of a tile, or by giving id's relative to a bayer
-    scale, with tile_size being the number of bayer pixels on the side of a tile.
+    scale, with tile_size being the number of bayer pixels on the side of a tile. Imsize simply needs 
+    to be coherent with the choice.
 
     Parameters
     ----------

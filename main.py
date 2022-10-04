@@ -27,7 +27,7 @@ def flat(x):
 
 #%%
 
-# Warning : tileSize is expressed in terms of grey pixels.
+# Warning : tileSize is expressed at grey pixel scale.
 params = {'block matching': {
                 'mode':'bayer',
                 'tuning': {
