@@ -36,13 +36,9 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         Robustness map for every image, for the r, g and b channels
     """
     n_images, imshape_y, imshape_x = comp_imgs.shape
-    bayer_mode = params['mode']=='bayer'
-    imsize = ref_img.shape
-    if bayer_mode : 
-        grey_imsize = (int(imsize[0]/2), int(imsize[1]/2))
-    else:
-        grey_imsize = imsize
+    imsize = (imshape_y, imshape_x)
     
+    bayer_mode = params['mode']=='bayer'
     VERBOSE = options['verbose']
     
     CFA_pattern = params['exif']['CFA Pattern']
@@ -64,9 +60,11 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         R = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x, 3))
     else:
         rgb_imshape_y, rgb_imshape_x = imshape_y, imshape_x
+
         
         r = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x, 1))
         R = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x, 1))
+    rgb_imshape = (rgb_imshape_y, rgb_imshape_x)
     
     
     @cuda.jit(device=True)
@@ -171,8 +169,8 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
             ref_x = pixel_idx + tx
             
             flow = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-            # coordinates are given in grey referential, so tile size is not doubled
-            get_closest_flow_V2(ref_x, ref_y, flows[image_index], tile_size, grey_imsize, flow)
+            # coordinates are given in rgb referential (and not bayer), so tile size is not doubled
+            get_closest_flow_V2(ref_x, ref_y, flows[image_index], tile_size, rgb_imshape, flow)
             # Moving. We do not divide flow by 2 because image was already grey
             top_left_m_x = round(ref_x + flow[0])
             top_left_m_y = round(ref_y + flow[1])

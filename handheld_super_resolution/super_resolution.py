@@ -35,8 +35,6 @@ def main(ref_img, comp_imgs, options, params):
     pre_alignment, aligned_tiles = alignBurst(ref_img, comp_imgs,params['block matching'], options)
     pre_alignment = pre_alignment[:, :, :, ::-1] # swapping x and y direction (x must be first)
 
-    for i in range(comp_imgs.shape[0]):
-        print(np.mean(pre_alignment[i]))
     if verbose : 
         current_time = getTime(t1, 'Block Matching')
     

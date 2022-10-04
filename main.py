@@ -151,7 +151,7 @@ for image_index in range(comp_images.shape[0]):
     plt.figure("image {}".format(image_index))
     plt.imshow(warped, cmap = 'gray')
     plt.figure("EQ {}".format(image_index))
-    plt.imshow(np.log10((ref_grey_image/1023 - warped)**2),vmin = -5, vmax =0 , cmap="Reds")
+    plt.imshow(np.log10((ref_grey_image/1023 - warped)**2),vmin = -3, vmax =0 , cmap="Reds")
     plt.colorbar()
     
     print("Im {}, EQM = {}".format(image_index, np.mean((ref_grey_image/1023 - warped)**2)))
