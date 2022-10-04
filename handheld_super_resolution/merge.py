@@ -257,10 +257,12 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                 
 
                 y = max(0, quad_mat_prod(cov_i, dist))
-                # y = (dist[0]**2 + dist[1]**2)*math.sqrt(2)
                 # y can be slightly negative because of numerical precision.
                 # I clamp it to not explode the error with exp
-                w = math.exp(-y/(2*4*SCALE**2))
+                if bayer_mode : 
+                    w = math.exp(-y/(2*4*SCALE**2))
+                else : 
+                    w = math.exp(-y/(2*SCALE**2))
                 # kernels are estimated on grey levels, so distances have to
                 # be downscaled to grey coarse level
 
