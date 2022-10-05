@@ -117,7 +117,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
             
             flow = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
             # coordinates are given in bayer referential, so tile size is doubled
-            get_closest_flow_V2(top_left_ref_x, top_left_ref_y, flows[image_index], tile_size*2, imsize, flow)
+            get_closest_flow(top_left_ref_x, top_left_ref_y, flows[image_index], tile_size*2, imsize, flow)
             if (0 <= top_left_ref_y < imshape_y -1) and (0 <= top_left_ref_x < imshape_x -1): # ref inbounds
                 # We need to init because green is accumulating
                 guide_patch_ref[ty + 1, tx + 1, 0] = 0 
@@ -170,7 +170,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
             
             flow = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
             # coordinates are given in rgb referential (and not bayer), so tile size is not doubled
-            get_closest_flow_V2(ref_x, ref_y, flows[image_index], tile_size, rgb_imshape, flow)
+            get_closest_flow(ref_x, ref_y, flows[image_index], tile_size, rgb_imshape, flow)
             # Moving. We do not divide flow by 2 because image was already grey
             top_left_m_x = round(ref_x + flow[0])
             top_left_m_y = round(ref_y + flow[1])
@@ -244,7 +244,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         
         if inbound:
             flow = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) #local array, each threads manipulates a different flow
-            get_closest_flow_V2(x, y, flows[image_index], tile_size, imsize, flow)# x and y are on grey scale and tile_size is expressed in grey pixels
+            get_closest_flow(x, y, flows[image_index], tile_size, imsize, flow)# x and y are on grey scale and tile_size is expressed in grey pixels
             
             #local max search
             cuda.atomic.max(maxi, 0, flow[0])
