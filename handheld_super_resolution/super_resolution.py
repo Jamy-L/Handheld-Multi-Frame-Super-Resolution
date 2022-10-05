@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE
 from .merge import merge
 from .block_matching import alignBurst
-from .optical_flow import lucas_kanade_optical_flow_V2
+from .optical_flow import lucas_kanade_optical_flow
 from .robustness import compute_robustness
 
 NOISE_MODEL_PATH = Path(os.getcwd()) / 'data' 

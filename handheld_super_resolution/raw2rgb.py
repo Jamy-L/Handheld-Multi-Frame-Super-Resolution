@@ -192,7 +192,8 @@ def process_isp(raw, img=None, do_color_correction=True, do_tonemapping=True, do
     else:
         ## Color matrix
         if do_color_correction:
-            rgb2cam = get_color_matrix(raw)
+            # rgb2cam = get_color_matrix(raw)
+            rgb2cam = raw.color_matrix[:3, :3]
             cam2rgb = np.linalg.inv(rgb2cam)
             img = apply_ccm(img, cam2rgb)
             img = np.clip(img, 0.0, 1.0)

@@ -51,8 +51,8 @@ params = {'block matching': {
                 'tuning' : {
                     'tileSizes': 16,
                     't' : 0,            # 0.12
-                    's1' : 2,          #12
-                    's2' : 12,              # 2
+                    's1' : 2,           # 12
+                    's2' : 12,          # 2
                     'Mt' : 0.8,         # 0.8
                     }
                 },
@@ -71,7 +71,7 @@ params = {'block matching': {
                 }}
 
 options = {'verbose' : 3}
-burst_path = 'P:/0001/Samsung'
+burst_path = 'P:/0000/Samsung'
 
 output, R, r, alignment = process(burst_path, options, params)
 

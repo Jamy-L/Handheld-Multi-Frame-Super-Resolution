@@ -10,7 +10,7 @@ from math import isnan, sqrt, exp
 import numpy as np
 from numba import uint8, uint16, float32, float64, jit, njit, cuda, int32
 
-from .optical_flow import get_closest_flow_V2
+from .optical_flow import get_closest_flow
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
 
 def compute_robustness(ref_img, comp_imgs, flows, options, params):
