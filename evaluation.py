@@ -175,11 +175,19 @@ def single2lrburst(image, burst_size, downsample_factor=1, transformation_params
 
 
 def decimate(burst):
-    output = np.empty((burst.shape[0], burst.shape[1], burst.shape[2]), dtype = np.uint16)
-    output[:,::2,::2] = burst[:,::2,::2,2] #b
-    output[:,::2,1::2] = burst[:,::2,1::2,1] #g 01
-    output[:,1::2,::2] = burst[:,1::2,::2,1] #g10
-    output[:,1::2,1::2] = burst[:,1::2,1::2,0] #r
+    if burst.shape[1]%2 == 0:
+        croped_burst = burst
+    else:
+        croped_burst = burst[:, :-1, :,:]
+    if burst.shape[2]%2 == 1:
+        croped_burst = croped_burst[:,:,:-1,:]
+        
+
+    output = np.empty((croped_burst.shape[0], croped_burst.shape[1], croped_burst.shape[2]), dtype = np.uint16)
+    output[:,::2,::2] = croped_burst[:,::2,::2,2] #b
+    output[:,::2,1::2] = croped_burst[:,::2,1::2,1] #g 01
+    output[:,1::2,::2] = croped_burst[:,1::2,::2,1] #g10
+    output[:,1::2,1::2] = croped_burst[:,1::2,1::2,0] #r
     return output
 
 
@@ -370,14 +378,14 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
     return warped_images, im_EQ 
 
 #%%
-# Warning : tileSize is expressed in terms of grey pixels.
+# #Warning : tileSize is expressed in terms of grey pixels.
 # CFA = np.array([[2, 1], [1, 0]])
 
 # params = {'block matching': {
 #                 'mode':'bayer2',
 #                 'tuning': {
 #                     # WARNING: these parameters are defined fine-to-coarse!
-#                     'factors': [1, 2, 2, 4],
+#                     'factors': [1, 2, 2, 2],
 #                     'tileSizes': [16, 16, 16, 8],
 #                     'searchRadia': [1, 4, 4, 4],
 #                     'distances': ['L1', 'L2', 'L2', 'L2'],
@@ -389,7 +397,7 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 #                 'epsilon div' : 1e-6,
 #                 'tuning' : {
 #                     'tileSizes' : 16,
-#                     'kanadeIter': 25, # 3 
+#                     'kanadeIter': 6, # 3 
 #                     }},
 #             'robustness' : {
 #                 'exif':{'CFA Pattern':CFA},
@@ -422,12 +430,13 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 # params['robustness']['diff_curve'] = np.load('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/data/noise_model_diff_ISO_50.npy')
 # options = {'verbose' : 3}
 
-# img = plt.imread("P:/DIV2K_valid_HR/DIV2K_valid_HR/0900.png")*255
+# #img = plt.imread("P:/DIV2K_valid_HR/DIV2K_valid_HR/0900.png")*255
+# img = plt.imread("P:/Urban100_SR/image_SRF_4/img_040_SRF_4_HR.png")*255
 # transformation_params = {'max_translation':10,
 #                           'max_shear': 0,
 #                           'max_ar_factor': 0,
 #                           'max_rotation': 3}
-# burst, flow = single2lrburst(img, 10, downsample_factor=2, transformation_params=transformation_params)
+# burst, flow = single2lrburst(img, 10, downsample_factor=3, transformation_params=transformation_params)
 # # flow is unussable because it is pointing from moving frame to ref. We would need the opposite
 
 
@@ -457,7 +466,7 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 # params["kanade"]["mode"] = 'grey'
 # params["merging"]["mode"] = 'grey'
 # params["robustness"]["mode"] = 'grey'
-# output, R, r, alignment = main(grey_burst[0]/255, grey_burst[1:2]/255, options, params)
+# output, R, r, alignment = main(grey_burst[0]/255, grey_burst[1:]/255, options, params)
 # plt.figure("merge on grey images")
 # plt.imshow(output[:,:,0], cmap='gray')
 # plt.figure("ref")
@@ -486,7 +495,7 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 # params["merging"]["mode"] = 'bayer'
 # params["robustness"]["mode"] = 'bayer'
 
-# output, R, r, alignment = main(dec_burst[0], dec_burst[1:2], options, params)
+# output, R, r, alignment = main(dec_burst[0], dec_burst[1:], options, params)
 # plt.figure("merge on bayer images")
 # plt.imshow(output[:,:,:3])
 # plt.figure("ref")
