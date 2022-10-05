@@ -7,10 +7,12 @@ Created on Sun Jul 31 00:00:36 2022
 
 from time import time
 
+from math import floor, ceil, modf
 import numpy as np
 import cv2
 from numba import cuda, float32, float64, int16
 
+from .linalg import bicubic_interpolation
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
 from .linalg import solve_2x2, solve_6x6_krylov
 
@@ -186,23 +188,54 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
         inbound = (0 <= pixel_global_idx < imsize_x) and (0 <= pixel_global_idy < imsize_y)
     
         if inbound :
-            # Warp I with W(x; p) to compute I(W(x; p))
-            new_idx = round((1+alignment[image_index, patch_idy, patch_idx, 0])*pixel_global_idx +
-                            alignment[image_index, patch_idy, patch_idx, 2]*pixel_global_idy +
-                            alignment[image_index, patch_idy, patch_idx, 4])
             
-            new_idy = round(alignment[image_index, patch_idy, patch_idx, 1]*pixel_global_idx +
-                            (1+alignment[image_index, patch_idy, patch_idx, 3])*pixel_global_idy +
-                            alignment[image_index, patch_idy, patch_idx, 5])
+            # Warp I with W(x; p) to compute I(W(x; p))
+            new_idx = ((1+alignment[image_index, patch_idy, patch_idx, 0])*pixel_global_idx +
+                          alignment[image_index, patch_idy, patch_idx, 2]*pixel_global_idy +
+                          alignment[image_index, patch_idy, patch_idx, 4])
+            
+            new_idy = (alignment[image_index, patch_idy, patch_idx, 1]*pixel_global_idx +
+                          (1+alignment[image_index, patch_idy, patch_idx, 3])*pixel_global_idy +
+                              alignment[image_index, patch_idy, patch_idx, 5])
         
-        inbound = inbound and (0 <= new_idx < imsize_x) and (0 <= new_idy < imsize_y)
+        inbound = inbound and (0 <= new_idx < imsize_x -1) and (0 <= new_idy < imsize_y - 1) # -1 for bicubic interpolation
         
         if inbound:
+            # bicubic interpllation
+            buffer_val = cuda.local.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
+            pos = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE) # y, x
+            normalised_pos_x, floor_x = modf(new_idx) # https://www.rollpie.com/post/252
+            normalised_pos_y, floor_y = modf(new_idy) # separating floor and floating part
+            floor_x = int(floor_x)
+            floor_y = int(floor_y)
+            
+            ceil_x = floor_x + 1
+            ceil_y = floor_y + 1
+            pos[0] = normalised_pos_y
+            pos[1] = normalised_pos_x
+            
             # Warp the gradient of I with W(x; p)
-            gradx = gradsx[image_index, new_idy, new_idx]
-            grady = gradsy[image_index, new_idy, new_idx]
-            # Images are of unsigned type for speeding up transfers. We need to sign them before substracting
-            gradt = comp_img[image_index, new_idy, new_idx] - ref_img[pixel_global_idy, pixel_global_idx]
+            buffer_val[0, 0] = gradsx[image_index, floor_y, floor_x]
+            buffer_val[0, 1] = gradsx[image_index, floor_y, ceil_x]
+            buffer_val[1, 0] = gradsx[image_index, ceil_y, floor_x]
+            buffer_val[1, 1] = gradsx[image_index, ceil_y, ceil_x]
+            gradx = bicubic_interpolation(buffer_val, pos)
+            # gradx = gradsx[image_index, new_idy, new_idx]
+            
+            buffer_val[0, 0] = gradsy[image_index, floor_y, floor_x]
+            buffer_val[0, 1] = gradsy[image_index, floor_y, ceil_x]
+            buffer_val[1, 0] = gradsy[image_index, ceil_y, floor_x]
+            buffer_val[1, 1] = gradsy[image_index, ceil_y, ceil_x]
+            grady = bicubic_interpolation(buffer_val, pos)
+            # grady = gradsy[image_index, new_idy, new_idx]
+            
+            buffer_val[0, 0] = comp_img[image_index, floor_y, floor_x]
+            buffer_val[0, 1] = comp_img[image_index, floor_y, ceil_x]
+            buffer_val[1, 0] = comp_img[image_index, ceil_y, floor_x]
+            buffer_val[1, 1] = comp_img[image_index, ceil_y, ceil_x]
+            comp_val = bicubic_interpolation(buffer_val, pos)
+            gradt = comp_val- ref_img[pixel_global_idy, pixel_global_idx]
+            # gradt = comp_img[image_index, new_idy, new_idx] - ref_img[pixel_global_idy, pixel_global_idx]
             
             cuda.atomic.add(ATB, 0, -pixel_global_idx*gradx*gradt)
             cuda.atomic.add(ATB, 1, -pixel_global_idx*grady*gradt)

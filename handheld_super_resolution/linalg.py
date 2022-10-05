@@ -304,6 +304,31 @@ def interpolate_cov(covs, center_pos, interpolated_cov):
                                       covs[1,0,i,j]*(2 - reframed_posx)*(reframed_posy) + 
                                       covs[1,1,i,j]*reframed_posx*reframed_posy )/4
 
+@cuda.jit(device=True)
+def bicubic_interpolation(values, pos):
+    """
+    
+
+    Parameters
+    ----------
+    values : Array[2, 2]
+        values on the 4 closest neighboors
+    pos : Array[2]
+        position where interpolation must be done (in [0, 1]x[0, 1]). y, x
+
+    Returns
+    -------
+    val : float
+        interpolated value
+
+    """
+    posy = pos[0]
+    posx = pos[1]
+    val = (values[0,0]*(1 - posx)*(1 - posy) +
+           values[0,1]*(posx)*(1 - posy) + 
+           values[1,0]*(1 - posx)*(posy) + 
+           values[1,1]*posx*posy )
+    return val
             
             
     

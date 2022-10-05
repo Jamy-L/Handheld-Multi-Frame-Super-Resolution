@@ -47,7 +47,7 @@ def main(ref_img, comp_imgs, options, params):
             current_time, 'Arrays moved to GPU')
     
     
-    cuda_final_alignment = lucas_kanade_optical_flow_V2(
+    cuda_final_alignment = lucas_kanade_optical_flow(
         ref_img, comp_imgs, pre_alignment, options, params['kanade'])
     
     
