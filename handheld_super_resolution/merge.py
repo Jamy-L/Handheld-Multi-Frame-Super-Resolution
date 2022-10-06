@@ -170,7 +170,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
             if tx == 0 and ty == 0: # Single threaded fetch of the flow
                 if image_index == 0:  # ref image
                     # no optical flow
-                    patch_center_pos[1] = coarse_ref_sub_pos[0]
+                    patch_center_pos[1] = coarse_ref_sub_pos[1]
                     patch_center_pos[0] = coarse_ref_sub_pos[0]
 
                 else:
