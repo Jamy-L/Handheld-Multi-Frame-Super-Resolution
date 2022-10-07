@@ -117,6 +117,15 @@ def process(burst_path, options, params):
     if verbose:
         currentTime = getTime(currentTime, ' -- Read raw files')
     
+    ### Here do black and white level correction and white balance processing for all image in comp_images
+    ### Each image in comp_images should be between 0 and 1.
+    ### images is a (N,H,W) array
+    # images = (images - black_level) / (white_level - black_level)
+    # images[:, 0::2, 1::2] *= float(ref_raw.camera_whitebalance[0]) / raw.camera_whitebalance[1]
+    # images[:, 1::2, 0::2] *= float(ref_raw.camera_whitebalance[2]) / raw.camera_whitebalance[1]
+    # images = np.clip(images, 0.0, 1.0)
+    ### The division by the green WB value is important because WB may come with integer coefficients instead
+    ###
     # casting type fom int to float if necessary. Normalisation into [0, 1]
     if np.issubdtype(type(ref_raw[0,0]), np.integer):
         ref_raw = (ref_raw/params['merging']['exif']['white level']).astype(DEFAULT_NUMPY_FLOAT_TYPE)
