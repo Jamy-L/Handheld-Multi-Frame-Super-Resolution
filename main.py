@@ -14,15 +14,24 @@ from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, 
 import exifread
 import rawpy
 import matplotlib.pyplot as plt
+# import colour_demosaicing
+# Install it with
+#     pip install colour-demosaicing
 
-from handheld_super_resolution import process
+from handheld_super_resolution import process, raw2rgb
 from evaluation import warp_flow, upscale_alignement
 
-def gamma(image):
-    return image**(1/2.2)
+
 
 def flat(x):
     return 1-np.exp(-x/1000)
+
+
+def cfa_to_grayscale(raw_img):
+    return (ref_img[..., 0::2, 0::2] + 
+            ref_img[..., 1::2, 0::2] + 
+            ref_img[..., 0::2, 1::2] + 
+            ref_img[..., 1::2, 1::2])/4
 
 
 #%%
@@ -78,10 +87,13 @@ output, R, r, alignment = process(burst_path, options, params)
 
 #%%
 
-raw_ref_img = rawpy.imread(burst_path + '/im_00.dng')
-exif_tags = open(burst_path + '/im_00.dng', 'rb')
+first_image_path = os.path.join(burst_path, 'im_00.dng')
+raw_ref_img = rawpy.imread(first_image_path)
+exif_tags = open(first_image_path, 'rb')
 tags = exifread.process_file(exif_tags)
 ref_img = raw_ref_img.raw_image.copy()
+
+xyz2cam = raw2rgb.get_xyz2cam_from_exif(first_image_path)
 
 
 comp_images = rawpy.imread(
@@ -91,8 +103,16 @@ for i in range(2, 10):
                                                       ).raw_image.copy()[None], axis=0)
 
 
+## TODO: automatic handling of any Bayer CFA pattern (right now it's hardcoded 'GRBG') 
 
-
+### Here do black and white level correction and white balance processing for all image in comp_images
+### Each image in comp_images should be between 0 and 1.
+# for i in range(len(comp_images)):
+#     comp_images[i] = (comp_images[i] - black_level) / (white_level - black_level)
+# comp_images[0::2, 1::2] *= white_balance_red
+# comp_images[1::2, 0::2] *= white_balance_blue
+# comp_images = np.clip(com_images, 0.0, 1.0)
+###
 
 output_img = output[:,:,:3].copy()
 imsize = output_img.shape
@@ -123,28 +143,31 @@ D = np.empty((output.shape[0], output.shape[1], 3, 3, 2))
 for i in range(18):
     D[:, :, i//6, (i%6)//2, i%2] = output[:,:,13 + i].copy() 
 
+
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 
 plt.figure("output")
-plt.imshow(gamma(output_img))
+plt.imshow(raw2rgb.postprocess(output_img))
+# I would rather use the following line to do a clean demosaicing for fair comparison
+# base = colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(ref_img, pattern='GRBG')  # pattern is [[G,R], [B,G]] for the Samsung G8
+### To be replaced!
 base = np.empty((int(ref_img.shape[0]/2), int(ref_img.shape[1]/2), 3))
 base[:,:,0] = ref_img[0::2, 1::2]
 base[:,:,1] = (ref_img[::2, ::2] + ref_img[1::2, 1::2])/2
 base[:,:,2] = ref_img[1::2, ::2]
+### End to be replaced
 
 plt.figure("original bicubic")
-plt.imshow(cv2.resize(gamma(base/1023), None, fx = 2*params["merging"]['scale'], fy = 2*params["merging"]['scale'], interpolation=cv2.INTER_CUBIC))
+plt.imshow(cv2.resize(raw2rgb.postprocess(base/1023), None, fx = 2*params["merging"]['scale'], fy = 2*params["merging"]['scale'], interpolation=cv2.INTER_CUBIC))
 
 #%% warp optical flow
 
-ref_grey_image = (ref_img[::2, ::2] + ref_img[1::2, ::2] +
-                  ref_img[::2, 1::2] + ref_img[1::2, 1::2])/4
 plt.figure('ref grey')    
+ref_grey_image = cfa_to_grayscale(ref_img)
 plt.imshow(ref_grey_image, cmap= 'gray')  
 
-comp_grey_images = (comp_images[:, ::2, ::2] + comp_images[:,1::2, ::2] +
-                    comp_images[:,::2, 1::2] + comp_images[:,1::2, 1::2])/4
+comp_grey_images = cfa_to_grayscale(comp_images)
 grey_al = alignment.copy()
 grey_al[:,:,:,-2:]*=0.5 # pure translation are downgraded from bayer to grey
 upscaled_al = upscale_alignement(grey_al, ref_grey_image.shape[:2], 16, v2=True) # half tile size cause grey
@@ -203,7 +226,7 @@ plt.imshow(R[0]/np.max(R[0], axis=(0,1)))
 # downscale_coef = 4
 # ix, iy = 2, 1
 # patchx, patchy = int(imsize[1]/downscale_coef), int(imsize[0]/downscale_coef)
-# plt.imshow(gamma(output_img[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1)]/1023))
+# plt.imshow(raw2rgb.postprocess(output_img[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1)]/1023))
 
 # # minus sign because pyplot takes y axis growing towards top. but we need the opposite
 # plt.quiver(e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
