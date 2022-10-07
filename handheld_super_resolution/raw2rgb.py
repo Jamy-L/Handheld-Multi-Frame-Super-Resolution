@@ -1,9 +1,27 @@
-import torch
-import numpy as np
 import random
+import math
+
+import exifread
+import numpy as np
 from skimage import img_as_float32, filters
 
-import math
+
+
+def get_xyz2cam_from_exif(impath):
+    # Open image file for reading (must be in binary mode)
+    f = open(impath, 'rb')
+
+    # Return the exif tags
+    tags = exifread.process_file(f)
+
+    # Get the 9 values of the first CCM in the EXIF
+    values = np.array(tags['EXIF ColorMatrix1'])
+
+    # Fill the matrix and return
+    xyz2cam = np.reshape(values, (3, 3))
+
+    return xyz2cam.astype(np.float32)
+
 
 
 def get_random_ccm():
@@ -22,21 +40,20 @@ def get_random_ccm():
                [-0.4782, 1.3016, 0.1933],
                [-0.097, 0.1581, 0.5181]]]
 
-    num_ccms = len(xyz2cams)
-    xyz2cams = torch.tensor(xyz2cams)
+    num_ccms = len(xyz2cams)  # (4,3,3)
 
-    weights = torch.FloatTensor(num_ccms, 1, 1).uniform_(0.0, 1.0).numpy()
+    weights = np.random.rand(num_ccms).reshape((num_ccms, 1, 1))
     weights_sum = weights.sum()
-    xyz2cam = (xyz2cams * weights).sum(dim=0) / weights_sum
+    xyz2cam = (xyz2cams * weights).sum(axis=0) / weights_sum
 
     # Multiplies with RGB -> XYZ to get RGB -> Camera CCM.
-    rgb2xyz = torch.tensor([[0.4124564, 0.3575761, 0.1804375],
-                            [0.2126729, 0.7151522, 0.0721750],
-                            [0.0193339, 0.1191920, 0.9503041]]).float()
-    rgb2cam = torch.mm(xyz2cam, rgb2xyz)
+    rgb2xyz = np.array([[0.4124564, 0.3575761, 0.1804375],
+                          [0.2126729, 0.7151522, 0.0721750],
+                          [0.0193339, 0.1191920, 0.9503041]])
+    rgb2cam = xyz2cam @ rgb2xyz
 
     # Normalizes each row.
-    rgb2cam = rgb2cam / rgb2cam.sum(dim=-1, keepdims=True)
+    rgb2cam = rgb2cam / rgb2cam.sum(axis=-1, keepdim=True)
     return rgb2cam
 
 
@@ -66,39 +83,42 @@ def get_random_gains():
 
 def safe_invert_gains(image, rgb_gain, red_gain, blue_gain):
     """Inverts gains while safely handling saturated pixels."""
-    assert image.dim() == 3 and image.shape[0] == 3
+    assert image.ndim == 3 and image.shape[2] == 3
 
-    gains = torch.tensor([1.0 / red_gain, 1.0, 1.0 / blue_gain]) / rgb_gain
-    gains = gains.view(-1, 1, 1)
+    gains = np.array([1.0 / red_gain, 1.0, 1.0 / blue_gain]) / rgb_gain
+    gains = gains.reshape((1, 1, 3))
 
     # Prevents dimming of saturated pixels by smoothly masking gains near white.
-    gray = image.mean(dim=0, keepdims=True)
+    gray = np.mean(image, axis=-1, keepdims=True)
     inflection = 0.9
-    mask = ((gray - inflection).clamp(0.0) / (1.0 - inflection)) ** 2.0
+    mask = ((gray - inflection).cllp(min=0.0) / (1.0 - inflection))
+    mask = mask * mask
 
-    safe_gains = torch.max(mask + (1.0 - mask) * gains, gains)
+    safe_gains = np.max(mask + (1.0 - mask) * gains, gains)
     return image * safe_gains
 
 
 def apply_gains(image, red_gain, blue_gain, rgb_gain):
     """Inverts gains while safely handling saturated pixels."""
-    assert image.dim() == 3 and image.shape[0] in [3, 4]
+    assert image.ndim == 3 and image.shape[-1] in [3, 4]
 
-    if image.shape[0] == 3:
-        gains = torch.tensor([red_gain, 1.0, blue_gain]) * rgb_gain
+    if image.shape[-1] == 3:
+        gains = np.tensor([red_gain, 1.0, blue_gain]) * rgb_gain
     else:
-        gains = torch.tensor([red_gain, 1.0, 1.0, blue_gain]) * rgb_gain
-    gains = gains.view(-1, 1, 1)
-    gains = gains.to(image.device).type_as(image)
-
-    return (image * gains).clamp(0.0, 1.0)
+        gains = np.tensor([red_gain, 1.0, 1.0, blue_gain]) * rgb_gain
+    return (image * gains).clip(min=0.0, max=1.0)
 
 
-def get_color_matrix(raw):
+def get_color_matrix(raw, xyz2cam=None):
     rgb2xyz = np.array([[0.4124564, 0.3575761, 0.1804375],
                      [0.2126729, 0.7151522, 0.0721750],
                      [0.0193339, 0.1191920, 0.9503041]])
-    xyz2cam = raw.rgb_xyz_matrix[:3]
+    # If xyz2cam is not given, take it from rawpy.
+    if xyz2cam is None:
+        xyz2cam = raw.rgb_xyz_matrix[:3]
+        if xyz2cam is None:
+            print('Warning -- CCM not found or given. Use eye matrix instead.')
+            xyz2cam = np.eye(3)
     rgb2cam = xyz2cam @ rgb2xyz
 
     # Normalizes each row.
@@ -107,35 +127,23 @@ def get_color_matrix(raw):
 
 
 def apply_ccm(image, ccm):
-    if type(image) == np.ndarray:
-        assert(image.ndim == 3 and image.shape[-1] == 3)
-        image = np.transpose(image, (2, 0, 1))
-        shape = image.shape
-        image = image.reshape(3, -1)
-        image = np.matmul(ccm, image)
-        image = image.reshape(shape)
-        return np.transpose(image, (1, 2, 0))
-    else:
-        assert image.dim() == 3 and image.shape[0] == 3
-        shape = image.shape
-        image = image.view(3, -1)
-        ccm = ccm.to(image.device).type_as(image)
-        image = torch.matmul(ccm, image)
-        return image.view(shape)
+    assert(image.ndim == 3 and image.shape[-1] == 3)
+    image = np.transpose(image, (2, 0, 1))
+    shape = image.shape
+    image = image.reshape(3, -1)
+    image = np.matmul(ccm, image)
+    image = image.reshape(shape)
+    return np.transpose(image, (1, 2, 0))
 
 
 def gamma_compression(img, gamma=2.2):
-    if type(img) == np.ndarray:
-        return img**(1./gamma)
-    else:
-        return img.clamp(1e-8) ** (1 / gamma)
+    img = np.clip(img, min=0.0, max=1.0)
+    return img**(1./gamma)
 
 
 def gamma_expansion(img, gamma=2.2):
-    if type(img) == np.ndarray:
-        return img ** gamma
-    else:
-        return img.clamp(1e-8) ** gamma
+    img = np.clip(img, min=1e-8, max=1.0)
+    return img ** gamma
 
 
 def apply_smoothstep(image):
@@ -146,12 +154,8 @@ def apply_smoothstep(image):
 
 def invert_smoothstep(image):
     """Approximately inverts a global tone mapping curve."""
-    if type(np.ndarray):
-        image = np.clip(image, 0.0, 1.0)
-        return 0.5 - np.sin(np.arcsin(1.0 - 2.0 * image) / 3.0)
-    else:
-        image = image.clamp(0.0, 1.0)
-        return 0.5 - torch.sin(torch.asin(1.0 - 2.0 * image) / 3.0)
+    image = np.clip(image, min=0.0, max=1.0)
+    return 0.5 - np.sin(np.arcsin(1.0 - 2.0 * image) / 3.0)
 
 
 def unprocess_isp(jpg, log_max_shot=0.012):
@@ -166,7 +170,6 @@ def unprocess_isp(jpg, log_max_shot=0.012):
                 'blue_gain': blue_gain, 'lambda_shot': lambda_shot, 'lambda_read': lambda_read}
 
     ## Inverse tone mapping
-    jpg = utils.to_tensor(jpg)
     jpg = invert_smoothstep(jpg)
 
     ## Gamma expansion
@@ -177,12 +180,12 @@ def unprocess_isp(jpg, log_max_shot=0.012):
 
     ## Inverse gains
     raw = safe_invert_gains(raw, red_gain, blue_gain, rgb_gain)
-    raw = utils.to_array(raw)
 
     return raw, metadata
 
 
-def process_isp(raw, img=None, do_color_correction=True, do_tonemapping=True, do_gamma=True, do_sharpening=True):
+def postprocess(raw, img=None, do_color_correction=True, do_tonemapping=True, 
+                do_gamma=True, do_sharpening=True, xyz2cam=None):
     """
     Convert a raw image to jpg image.
     """
@@ -192,8 +195,8 @@ def process_isp(raw, img=None, do_color_correction=True, do_tonemapping=True, do
     else:
         ## Color matrix
         if do_color_correction:
-            # rgb2cam = get_color_matrix(raw)
-            rgb2cam = raw.color_matrix[:3, :3]
+            ## First, read the color matrix from rawpy
+            rgb2cam = get_color_matrix(raw, xyz2cam)
             cam2rgb = np.linalg.inv(rgb2cam)
             img = apply_ccm(img, cam2rgb)
             img = np.clip(img, 0.0, 1.0)
@@ -202,6 +205,7 @@ def process_isp(raw, img=None, do_color_correction=True, do_tonemapping=True, do
             img = gamma_compression(img)
         ## Sharpening
         if do_sharpening:
+            ## TODO: polyblur instead
             img = filters.unsharp_mask(img)
         ## Tone mapping
         if do_tonemapping:
