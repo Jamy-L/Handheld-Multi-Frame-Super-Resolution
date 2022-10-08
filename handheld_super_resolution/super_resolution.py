@@ -32,9 +32,9 @@ def main(ref_img, comp_imgs, options, params):
     t1 = time()
     if verbose :
         print('Beginning block matching')
-    pre_alignment, aligned_tiles = alignBurst(ref_img, comp_imgs,params['block matching'], options)
+    pre_alignment, _ = alignBurst(ref_img, comp_imgs,params['block matching'], options)
     pre_alignment = pre_alignment[:, :, :, ::-1] # swapping x and y direction (x must be first)
-
+    
     if verbose : 
         current_time = getTime(t1, 'Block Matching')
     
@@ -69,7 +69,7 @@ def main(ref_img, comp_imgs, options, params):
 def process(burst_path, options, params):
     currentTime, verbose = time(), options['verbose'] > 2
     
-
+    
     ref_id = 0 #TODO get ref id
     
     raw_comp = []
@@ -124,6 +124,25 @@ def process(burst_path, options, params):
     
     if verbose:
         currentTime = getTime(currentTime, ' -- Read raw files')
+        
+    # copying parameters values in sub-dictionaries
+    if 'scale' not in params["merging"].keys() :
+        params["merging"]["scale"] = params["scale"]
+    if 'tileSize Block Matching' not in params["kanade"]["tuning"].keys():
+        params["kanade"]["tuning"]['tileSize Block Matching'] = params['block matching']['tuning']['tileSizes'][0]
+    if 'tileSize' not in params["robustness"]["tuning"].keys():
+        params["robustness"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
+    if 'tileSize' not in params["merging"]["tuning"].keys():
+        params["merging"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
+
+    if 'mode' not in params["block matching"].keys():
+        params["block matching"]["mode"] = params['mode']
+    if 'mode' not in params["kanade"].keys():
+        params["kanade"]["mode"] = params['mode']
+    if 'mode' not in params["robustness"].keys():
+        params["robustness"]["mode"] = params['mode']
+    if 'mode' not in params["merging"].keys():
+        params["merging"]["mode"] = params['mode']
     
     if np.issubdtype(type(ref_raw[0,0]), np.integer):
         ## Here do black and white level correction and white balance processing for all image in comp_images
