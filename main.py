@@ -53,7 +53,7 @@ params = {'scale' : 2,
                 'tuning' : {
                     'tileSize' : 8,
                     # 'tileSizes' : 8,
-                    'kanadeIter': 6, # 3 
+                    'kanadeIter': 6, # 3
                     }},
             'robustness' : {
                 'tuning' : {
