@@ -36,12 +36,12 @@ def cfa_to_grayscale(raw_img):
 #%%
 
 # Warning : tileSize is expressed at grey pixel scale.
-params = {'block matching': {
-                'mode':'bayer',
+params = {'scale' : 2,
+          'mode' : 'bayer',
+          'block matching': {
                 'tuning': {
                     # WARNING: these parameters are defined fine-to-coarse!
                     'factors': [1, 2, 4, 4],
-                    # 'tileSizes': [8, 8, 8, 8],
                     'tileSizes': [16, 16, 16, 8],
                     'searchRadia': [1, 4, 4, 4],
                     'distances': ['L1', 'L2', 'L2', 'L2'],
@@ -49,30 +49,22 @@ params = {'block matching': {
                     'subpixels': [False, True, True, True]
                     }},
             'kanade' : {
-                'mode':'bayer',
                 'epsilon div' : 1e-6,
                 'tuning' : {
-                    'tileSizes' : 16,
+                    'tileSize' : 8,
                     # 'tileSizes' : 8,
                     'kanadeIter': 6, # 3 
                     }},
             'robustness' : {
-                'mode':'bayer',
                 'tuning' : {
-                    'tileSizes': 16,
-                    # 'tileSizes' : 8,
                     't' : 0.12,            # 0.12
-                    's1' : 2,           # 12
-                    's2' : 12,          # 2
+                    's1' : 12,           # 12
+                    's2' : 2,          # 2
                     'Mt' : 0.8,         # 0.8
                     }
                 },
             'merging': {
-                'mode':'bayer',
-                'scale': 2,
                 'tuning': {
-                    'tileSizes': 16,
-                    # 'tileSizes' : 8,
                     'k_detail' : 0.25, # [0.25, ..., 0.33]
                     'k_denoise': 5,    # [3.0, ...,5.0]
                     'D_th': 0.05,      # [0.001, ..., 0.010]
@@ -88,7 +80,7 @@ burst_path = 'P:/0002/Samsung'
 output, R, r, alignment = process(burst_path, options, params)
 
 
-#%% exttracting image slocally for comparison 
+#%% exttracting images locally for comparison 
 
 first_image_path = os.path.join(burst_path, 'im_00.dng')
 raw_ref_img = rawpy.imread(first_image_path)

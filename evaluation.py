@@ -208,7 +208,7 @@ def upscale_alignement(alignment, imsize, tile_size):
     threadsperblock = (2, 16, 16)
     blockspergrid_n = int(np.ceil(alignment.shape[0]/threadsperblock[0]))
     blockspergrid_x = int(np.ceil(imsize[1]/threadsperblock[1]))
-    blockspergrid_y = int(np.ceil(imsize[0]/threadsperblock[0]))
+    blockspergrid_y = int(np.ceil(imsize[0]/threadsperblock[2]))
     blockspergrid = (blockspergrid_n, blockspergrid_x, blockspergrid_y)
     
     get_flow[blockspergrid, threadsperblock](upscaled_alignment, cuda_alignment)
@@ -370,7 +370,7 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 # CFA = np.array([[2, 1], [1, 0]])
 
 # params = {'block matching': {
-#                 'mode':'bayer2',
+#                 'mode':'bayer',
 #                 'tuning': {
 #                     # WARNING: these parameters are defined fine-to-coarse!
 #                     'factors': [1, 2, 2, 2],
@@ -381,17 +381,18 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 #                     'subpixels': [False, True, True, True]
 #                     }},
 #             'kanade' : {
-#                 'mode':'bayer2',
+#                 'mode':'bayer',
 #                 'epsilon div' : 1e-6,
 #                 'tuning' : {
-#                     'tileSizes' : 16,
-#                     'kanadeIter': 6, # 3 
+#                     'tileSize' : 16,
+#                     'tileSize Block Matching':16,
+#                     'kanadeIter': 25, # 3 
 #                     }},
 #             'robustness' : {
 #                 'exif':{'CFA Pattern':CFA},
-#                 'mode':'bayer2',
+#                 'mode':'bayer',
 #                 'tuning' : {
-#                     'tileSizes': 16,
+#                     'tileSize': 16,
 #                     't' : 0,            # 0.12
 #                     's1' : 2,          #12
 #                     's2' : 12,              # 2
@@ -402,10 +403,10 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 #                 },
 #             'merging': {
 #                 'exif':{'CFA Pattern':CFA},
-#                 'mode':'bayer2',
+#                 'mode':'bayer',
 #                 'scale': 2,
 #                 'tuning': {
-#                     'tileSizes': 16,
+#                     'tileSize': 16,
 #                     'k_detail' : 0.33, # [0.25, ..., 0.33]
 #                     'k_denoise': 5,    # [3.0, ...,5.0]
 #                     'D_th': 0.05,      # [0.001, ..., 0.010]
@@ -438,7 +439,7 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 # pre_alignment, _ = alignBurst(grey_burst[0], grey_burst[1:2],params['block matching'], options)
 # pre_alignment = pre_alignment[:,:,:,::-1]
 # lk_alignment = lucas_kanade_optical_flow(grey_burst[0], grey_burst[1:2],
-#                                          pre_alignment, options, params['kanade']).copy_to_host()
+#                                           pre_alignment, options, params['kanade']).copy_to_host()
 
 # pre_al = np.zeros(pre_alignment.shape[:-1] + (6,))
 # pre_al[:,:,:,-2:] = pre_alignment
@@ -466,7 +467,7 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 # pre_alignment, _ = alignBurst(dec_burst[0], dec_burst[1:2], params['block matching'], options)
 # pre_alignment = pre_alignment[:,:,:,::-1]
 # lk_alignment = lucas_kanade_optical_flow(dec_burst[0], dec_burst[1:2],
-#                                          pre_alignment, options, params['kanade']).copy_to_host()
+#                                           pre_alignment, options, params['kanade']).copy_to_host()
 
 # pre_al = np.zeros(pre_alignment.shape[:-1] + (6,))
 # pre_al[:,:,:,-2:] = pre_alignment
@@ -498,7 +499,7 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 # print('farneback evaluated : ', time()-t1)
 
 # #%% evaluating lk bayer
-# lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:], burst[0],  label = "LK", imshow=False)
+# lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:], burst[0],  label = "LK", imshow=True)
 # fb_warped_images, fb_im_EQ = evaluate_alignment(fb_alignment[None], burst[1:], burst[0], label = "FarneBack", imshow=True)
 
 

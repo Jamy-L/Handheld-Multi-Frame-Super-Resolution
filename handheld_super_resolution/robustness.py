@@ -43,7 +43,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
     
     CFA_pattern = params['exif']['CFA Pattern']
     
-    tile_size = params['tuning']["tileSizes"]
+    tile_size = params['tuning']["tileSize"]
     t = params['tuning']["t"]
     s1 = params['tuning']["s1"]
     s2 = params['tuning']["s2"]

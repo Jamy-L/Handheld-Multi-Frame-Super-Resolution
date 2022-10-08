@@ -53,9 +53,9 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
     CFA_pattern = params['exif']['CFA Pattern']
     bayer_mode = params['mode'] == 'bayer'
     if bayer_mode : 
-        TILE_SIZE = params['tuning']['tileSizes']*2
+        TILE_SIZE = params['tuning']['tileSize']*2
     else:
-        TILE_SIZE = params['tuning']['tileSizes']
+        TILE_SIZE = params['tuning']['tileSize']
     k_detail =params['tuning']['k_detail']
     k_denoise = params['tuning']['k_denoise']
     D_th = params['tuning']['D_th']
