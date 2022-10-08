@@ -14,9 +14,8 @@ from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, 
 import exifread
 import rawpy
 import matplotlib.pyplot as plt
-# import colour_demosaicing
-# Install it with
-#     pip install colour-demosaicing
+import colour_demosaicing
+# pip install colour-demosaicing
 
 from handheld_super_resolution import process, raw2rgb
 from evaluation import warp_flow, upscale_alignement
@@ -28,10 +27,10 @@ def flat(x):
 
 
 def cfa_to_grayscale(raw_img):
-    return (ref_img[..., 0::2, 0::2] + 
-            ref_img[..., 1::2, 0::2] + 
-            ref_img[..., 0::2, 1::2] + 
-            ref_img[..., 1::2, 1::2])/4
+    return (raw_img[..., 0::2, 0::2] + 
+            raw_img[..., 1::2, 0::2] + 
+            raw_img[..., 0::2, 1::2] + 
+            raw_img[..., 1::2, 1::2])/4
 
 
 #%%
@@ -42,6 +41,7 @@ params = {'block matching': {
                 'tuning': {
                     # WARNING: these parameters are defined fine-to-coarse!
                     'factors': [1, 2, 4, 4],
+                    # 'tileSizes': [8, 8, 8, 8],
                     'tileSizes': [16, 16, 16, 8],
                     'searchRadia': [1, 4, 4, 4],
                     'distances': ['L1', 'L2', 'L2', 'L2'],
@@ -53,13 +53,15 @@ params = {'block matching': {
                 'epsilon div' : 1e-6,
                 'tuning' : {
                     'tileSizes' : 16,
+                    # 'tileSizes' : 8,
                     'kanadeIter': 6, # 3 
                     }},
             'robustness' : {
                 'mode':'bayer',
                 'tuning' : {
                     'tileSizes': 16,
-                    't' : 0,            # 0.12
+                    # 'tileSizes' : 8,
+                    't' : 0.12,            # 0.12
                     's1' : 2,           # 12
                     's2' : 12,          # 2
                     'Mt' : 0.8,         # 0.8
@@ -70,6 +72,7 @@ params = {'block matching': {
                 'scale': 2,
                 'tuning': {
                     'tileSizes': 16,
+                    # 'tileSizes' : 8,
                     'k_detail' : 0.25, # [0.25, ..., 0.33]
                     'k_denoise': 5,    # [3.0, ...,5.0]
                     'D_th': 0.05,      # [0.001, ..., 0.010]
@@ -80,12 +83,12 @@ params = {'block matching': {
                 }}
 
 options = {'verbose' : 3}
-burst_path = 'P:/0000/Samsung'
+burst_path = 'P:/0002/Samsung'
 
 output, R, r, alignment = process(burst_path, options, params)
 
 
-#%%
+#%% exttracting image slocally for comparison 
 
 first_image_path = os.path.join(burst_path, 'im_00.dng')
 raw_ref_img = rawpy.imread(first_image_path)
@@ -95,24 +98,41 @@ ref_img = raw_ref_img.raw_image.copy()
 
 xyz2cam = raw2rgb.get_xyz2cam_from_exif(first_image_path)
 
-
 comp_images = rawpy.imread(
     burst_path + '/im_01.dng').raw_image.copy()[None]
 for i in range(2, 10):
     comp_images = np.append(comp_images, rawpy.imread('{}/im_0{}.dng'.format(burst_path, i)
                                                       ).raw_image.copy()[None], axis=0)
 
+white_level = tags['Image Tag 0xC61D'].values[0] # there is only one white level
 
-## TODO: automatic handling of any Bayer CFA pattern (right now it's hardcoded 'GRBG') 
+black_levels = tags['Image BlackLevel'] # This tag is a fraction for some reason. It seems that black levels are all integers anyway
+black_levels = np.array([int(x.decimal()) for x in black_levels.values])
 
-### Here do black and white level correction and white balance processing for all image in comp_images
-### Each image in comp_images should be between 0 and 1.
-# for i in range(len(comp_images)):
-#     comp_images[i] = (comp_images[i] - black_level) / (white_level - black_level)
-# comp_images[0::2, 1::2] *= white_balance_red
-# comp_images[1::2, 0::2] *= white_balance_blue
-# comp_images = np.clip(com_images, 0.0, 1.0)
-###
+white_balance = raw_ref_img.camera_whitebalance
+
+CFA = tags['Image CFAPattern']
+CFA = np.array([x for x in CFA.values]).reshape(2,2)
+
+ref_img = ref_img.astype(np.float32)
+comp_images = comp_images.astype(np.float32)
+for i in range(2):
+    for j in range(2):
+        channel = channel = CFA[i, j]
+        ref_img[i::2, j::2] = (ref_img[i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
+        ref_img[i::2, j::2] *= white_balance[channel]
+        
+        comp_images[:, i::2, j::2] = (comp_images[:, i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
+        comp_images[:, i::2, j::2] *= white_balance[channel]
+
+
+
+ref_img = np.clip(ref_img, 0.0, 1.0)
+comp_images = np.clip(comp_images, 0.0, 1.0)
+
+
+#%% extracting handhled's output data
+
 
 output_img = output[:,:,:3].copy()
 imsize = output_img.shape
@@ -148,18 +168,13 @@ print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 
 plt.figure("output")
-plt.imshow(raw2rgb.postprocess(output_img))
-# I would rather use the following line to do a clean demosaicing for fair comparison
-# base = colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(ref_img, pattern='GRBG')  # pattern is [[G,R], [B,G]] for the Samsung G8
-### To be replaced!
-base = np.empty((int(ref_img.shape[0]/2), int(ref_img.shape[1]/2), 3))
-base[:,:,0] = ref_img[0::2, 1::2]
-base[:,:,1] = (ref_img[::2, ::2] + ref_img[1::2, 1::2])/2
-base[:,:,2] = ref_img[1::2, ::2]
-### End to be replaced
+plt.imshow(raw2rgb.postprocess(raw_ref_img, output_img, xyz2cam=xyz2cam))
+
+base = colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(ref_img, pattern='GRBG')  # pattern is [[G,R], [B,G]] for the Samsung G8
+
 
 plt.figure("original bicubic")
-plt.imshow(cv2.resize(raw2rgb.postprocess(base/1023), None, fx = 2*params["merging"]['scale'], fy = 2*params["merging"]['scale'], interpolation=cv2.INTER_CUBIC))
+plt.imshow(cv2.resize(raw2rgb.postprocess(raw_ref_img, base, xyz2cam=xyz2cam), None, fx = params["merging"]['scale'], fy = params["merging"]['scale'], interpolation=cv2.INTER_CUBIC))
 
 #%% warp optical flow
 
@@ -169,17 +184,17 @@ plt.imshow(ref_grey_image, cmap= 'gray')
 
 comp_grey_images = cfa_to_grayscale(comp_images)
 grey_al = alignment.copy()
-grey_al[:,:,:,-2:]*=0.5 # pure translation are downgraded from bayer to grey
-upscaled_al = upscale_alignement(grey_al, ref_grey_image.shape[:2], 16, v2=True) # half tile size cause grey
+grey_al[:,:,:,-2:]*=0.5 # pure translation are downscaled from bayer to grey
+upscaled_al = upscale_alignement(grey_al, ref_grey_image.shape[:2], 16) # half tile size cause grey
 for image_index in range(comp_images.shape[0]):
-    warped = warp_flow(comp_grey_images[image_index]/1023, upscaled_al[image_index], rgb = False)
+    warped = warp_flow(comp_grey_images[image_index], upscaled_al[image_index], rgb = False)
     plt.figure("image {}".format(image_index))
     plt.imshow(warped, cmap = 'gray')
     plt.figure("EQ {}".format(image_index))
-    plt.imshow(np.log10((ref_grey_image/1023 - warped)**2),vmin = -4, vmax =0 , cmap="Reds")
+    plt.imshow(np.log10((ref_grey_image - warped)**2),vmin = -4, vmax =0 , cmap="Reds")
     plt.colorbar()
     
-    print("Im {}, EQM = {}".format(image_index, np.mean((ref_grey_image/1023 - warped)**2)))
+    print("Im {}, EQM = {}".format(image_index, np.mean((ref_grey_image - warped)**2)))
     
   
 

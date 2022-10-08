@@ -15,10 +15,12 @@ def get_xyz2cam_from_exif(impath):
     tags = exifread.process_file(f)
 
     # Get the 9 values of the first CCM in the EXIF
-    values = np.array(tags['EXIF ColorMatrix1'])
+    color_matrix1 = tags['Image Tag 0xC621']
+    color_matrix1 = np.array([x.decimal() for x in color_matrix1.values])
+
 
     # Fill the matrix and return
-    xyz2cam = np.reshape(values, (3, 3))
+    xyz2cam = np.reshape(color_matrix1, (3, 3))
 
     return xyz2cam.astype(np.float32)
 
@@ -106,7 +108,7 @@ def apply_gains(image, red_gain, blue_gain, rgb_gain):
         gains = np.tensor([red_gain, 1.0, blue_gain]) * rgb_gain
     else:
         gains = np.tensor([red_gain, 1.0, 1.0, blue_gain]) * rgb_gain
-    return (image * gains).clip(min=0.0, max=1.0)
+    return (image * gains).clip(a_min=0.0, a_max=1.0)
 
 
 def get_color_matrix(raw, xyz2cam=None):
@@ -116,10 +118,11 @@ def get_color_matrix(raw, xyz2cam=None):
     # If xyz2cam is not given, take it from rawpy.
     if xyz2cam is None:
         xyz2cam = raw.rgb_xyz_matrix[:3]
-        if xyz2cam is None:
-            print('Warning -- CCM not found or given. Use eye matrix instead.')
-            xyz2cam = np.eye(3)
-    rgb2cam = xyz2cam @ rgb2xyz
+    if np.linalg.norm(xyz2cam) == 0:
+        print('Warning -- CCM not found or given. Use eye matrix instead.')
+        rgb2cam = rgb2xyz
+    else:        
+        rgb2cam = xyz2cam @ rgb2xyz
 
     # Normalizes each row.
     rgb2cam = rgb2cam / rgb2cam.sum(axis=-1, keepdims=True)
@@ -137,12 +140,12 @@ def apply_ccm(image, ccm):
 
 
 def gamma_compression(img, gamma=2.2):
-    img = np.clip(img, min=0.0, max=1.0)
+    img = np.clip(img, a_min=0.0, a_max=1.0)
     return img**(1./gamma)
 
 
 def gamma_expansion(img, gamma=2.2):
-    img = np.clip(img, min=1e-8, max=1.0)
+    img = np.clip(img, a_min=1e-8, a_max=1.0)
     return img ** gamma
 
 
@@ -154,7 +157,7 @@ def apply_smoothstep(image):
 
 def invert_smoothstep(image):
     """Approximately inverts a global tone mapping curve."""
-    image = np.clip(image, min=0.0, max=1.0)
+    image = np.clip(image, a_min=0.0, a_max=1.0)
     return 0.5 - np.sin(np.arcsin(1.0 - 2.0 * image) / 3.0)
 
 
