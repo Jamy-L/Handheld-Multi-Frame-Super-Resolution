@@ -13,7 +13,7 @@ import cv2
 from numba import cuda, float32, float64, int16
 
 from .linalg import bicubic_interpolation
-from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
+from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, hann, hamming
 from .linalg import solve_2x2, solve_6x6_krylov
 
 
@@ -24,16 +24,17 @@ def bm_to_lk_alignment(alignment_lk, alignment_bm, tile_size_lk, tile_size_bm, i
 
     Parameters
     ----------
-    alignment_lk : TYPE
-        DESCRIPTION.
-    alignment_bm : TYPE
-        DESCRIPTION.
-    tile_size_lk : TYPE
-        DESCRIPTION.
-    tile_size_bm : TYPE
-        DESCRIPTION.
-    imsize : TYPE
-        DESCRIPTION.
+    alignment_lk : Array[n_images, n_patch_y_lk, n_patch_x_lk, 6]
+        empty Array representing the optical flow for lk patchs
+    alignment_bm : Array[n_images, n_patch_y_bm, n_patch_x_bm, 6]
+        Array representing the optical flow for lk patchs
+    tile_size_lk : int 
+        size of the tiles for LK
+    tile_size_bm : int
+        size of the tiles used in the finest step of Block matching 
+    imsize : tuple(int, int)
+        size of the image (greyscale)
+
 
     Returns
     -------
@@ -164,6 +165,8 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params,
         current_time = getTime(
             current_time, ' -- Arrays moved to GPU')
     
+    if debug : 
+        debug_list.append(cuda_alignment.copy_to_host())
     for iter_index in range(n_iter):
         lucas_kanade_optical_flow_iteration(
             cuda_ref_img_grey, cuda_gradsx, cuda_gradsy, cuda_comp_img_grey, cuda_alignment,
@@ -489,15 +492,23 @@ def get_closest_flow(idx_sub, idy_sub, optical_flows, tile_size, imsize, local_f
 
     # general case
     else:
-        # Averaging patches
-        flow_x = (warp_flow_x(pos, optical_flows[patch_idy_top, patch_idx_left]) +
-                  warp_flow_x(pos, optical_flows[patch_idy_top, patch_idx_right]) +
-                  warp_flow_x(pos, optical_flows[patch_idy_bottom, patch_idx_left]) +
-                  warp_flow_x(pos, optical_flows[patch_idy_bottom, patch_idx_right]))/4
-        flow_y = (warp_flow_y(pos, optical_flows[patch_idy_top, patch_idx_left]) +
-                  warp_flow_y(pos, optical_flows[patch_idy_top, patch_idx_right]) +
-                  warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_left]) +
-                  warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_right]))/4
+        # Averaging patches with a window function
+        tl = hann(pos[1]%(tile_size/2), pos[0]%(tile_size/2), tile_size)
+        tr = hann(pos[1]%(tile_size/2), (tile_size/2) - pos[0]%(tile_size/2), tile_size)
+        bl = hann((tile_size/2) - pos[1]%(tile_size/2), pos[0]%(tile_size/2), tile_size)
+        br = hann((tile_size/2) - pos[1]%(tile_size/2), (tile_size/2) - pos[0]%(tile_size/2), tile_size)
+        
+        k = tl + tr + br + bl
+        
+        
+        flow_x = (warp_flow_x(pos, optical_flows[patch_idy_top, patch_idx_left])*tl +
+                  warp_flow_x(pos, optical_flows[patch_idy_top, patch_idx_right])*tr +
+                  warp_flow_x(pos, optical_flows[patch_idy_bottom, patch_idx_left])*bl +
+                  warp_flow_x(pos, optical_flows[patch_idy_bottom, patch_idx_right])*br)/k
+        flow_y = (warp_flow_y(pos, optical_flows[patch_idy_top, patch_idx_left])*tl +
+                  warp_flow_y(pos, optical_flows[patch_idy_top, patch_idx_right])*tr +
+                  warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_left])*bl +
+                  warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_right])*br)/k
     
  
     local_flow[0] = flow_x

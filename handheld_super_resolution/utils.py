@@ -5,6 +5,8 @@ Created on Fri Sep 30 16:22:15 2022
 @author: jamyl
 """
 import time
+from math import cos, pi
+
 import numpy as np
 
 from numba import uint8, uint16, float32, float64, complex64, cuda
@@ -30,7 +32,7 @@ def isTypeInt(array):
 
 def getSigned(array):
 	'''Return the same array, casted into a signed equivalent type.'''
-	# Check if it's an unssigned dtype
+	# Check if it's an unsigned dtype
 	dt = array.dtype
 	if dt == np.uint8:
 		return array.astype(np.int16)
@@ -57,3 +59,11 @@ def clamp(x, min_, max_):
 
 def mse(im1, im2):
     return np.linalg.norm(im1 - im2) / np.prod(im1.shape)
+
+@cuda.jit(device = True)
+def hann(i, j, tile_size):
+    return (0.5 + 0.5*cos(2*pi*i/tile_size)) * (0.5 + 0.5*cos(2 * pi*j/tile_size))
+
+@cuda.jit(device = True)
+def hamming(i, j, tile_size):
+    return (0.54 + 0.46*cos(2*pi*i/tile_size)) * (0.54 + 0.46*cos(2*pi*j/tile_size))
