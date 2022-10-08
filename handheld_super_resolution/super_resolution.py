@@ -84,8 +84,9 @@ def process(burst_path, options, params):
                 
                 raw_comp.append(rawObject.raw_image.copy())  # copy otherwise image data is lost when the rawpy object is closed
     raw_comp = np.array(raw_comp)
-    # Reference image selection and metadata         
-    ref_raw = rawpy.imread(raw_path_list[ref_id]).raw_image.copy()
+    # Reference image selection and metadata     
+    raw = rawpy.imread(raw_path_list[ref_id])
+    ref_raw = raw.raw_image.copy()
     with open(raw_path_list[ref_id], 'rb') as raw_file:
         tags = exifread.process_file(raw_file)
     
@@ -94,9 +95,16 @@ def process(burst_path, options, params):
         if not 'exif' in params['robustness'].keys(): 
             params['robustness']['exif'] = {}
         
-    params['merging']['exif']['white level'] = int(str(tags['Image Tag 0xC61D']))
-    CFA = str((tags['Image CFAPattern']))[1:-1].split(sep=', ')
-    CFA = np.array([int(x) for x in CFA]).reshape(2,2)
+    white_level = tags['Image Tag 0xC61D'].values[0] # there is only one white level
+    
+    black_levels = tags['Image BlackLevel'] # This tag is a fraction for some reason. It seems that black levels are all integers anyway
+    black_levels = np.array([int(x.decimal()) for x in black_levels.values])
+    
+    white_balance = raw.camera_whitebalance
+    
+    CFA = tags['Image CFAPattern']
+    CFA = np.array([x for x in CFA.values]).reshape(2,2)
+    
     params['merging']['exif']['CFA Pattern'] = CFA
     params['robustness']['exif']['CFA Pattern'] = CFA
     params['ISO'] = int(str(tags['Image ISOSpeedRatings']))
@@ -117,19 +125,37 @@ def process(burst_path, options, params):
     if verbose:
         currentTime = getTime(currentTime, ' -- Read raw files')
     
-    ### Here do black and white level correction and white balance processing for all image in comp_images
-    ### Each image in comp_images should be between 0 and 1.
-    ### images is a (N,H,W) array
-    # images = (images - black_level) / (white_level - black_level)
-    # images[:, 0::2, 1::2] *= float(ref_raw.camera_whitebalance[0]) / raw.camera_whitebalance[1]
-    # images[:, 1::2, 0::2] *= float(ref_raw.camera_whitebalance[2]) / raw.camera_whitebalance[1]
-    # images = np.clip(images, 0.0, 1.0)
-    ### The division by the green WB value is important because WB may come with integer coefficients instead
-    ###
-    # casting type fom int to float if necessary. Normalisation into [0, 1]
     if np.issubdtype(type(ref_raw[0,0]), np.integer):
-        ref_raw = (ref_raw/params['merging']['exif']['white level']).astype(DEFAULT_NUMPY_FLOAT_TYPE)
-    if np.issubdtype(type(raw_comp[0,0,0]), np.integer):
-        raw_comp = (raw_comp/params['merging']['exif']['white level']).astype(DEFAULT_NUMPY_FLOAT_TYPE)
+        ## Here do black and white level correction and white balance processing for all image in comp_images
+        ## Each image in comp_images should be between 0 and 1.
+        ## ref_raw is a (H,W) array
+        ref_raw = ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE)
+        for i in range(2):
+            for j in range(2):
+                channel = channel = CFA[i, j]
+                ref_raw[i::2, j::2] = (ref_raw[i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
+                ref_raw[i::2, j::2] *= white_balance[channel]
         
-    return main(ref_raw, raw_comp, options, params)
+        
+        # images[:, 0::2, 1::2] *= float(ref_raw.camera_whitebalance[0]) / raw.camera_whitebalance[1]
+        # images[:, 1::2, 0::2] *= float(ref_raw.camera_whitebalance[2]) / raw.camera_whitebalance[1]
+        ref_raw = np.clip(ref_raw, 0.0, 1.0)
+        # ## The division by the green WB value is important because WB may come with integer coefficients instead
+        
+    if np.issubdtype(type(raw_comp[0,0,0]), np.integer):
+        raw_comp = raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE)
+        ## raw_comp is a (N, H,W) array
+        for i in range(2):
+            for j in range(2):
+                channel = channel = CFA[i, j]
+                raw_comp[:, i::2, j::2] = (raw_comp[:, i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
+                raw_comp[:, i::2, j::2] *= white_balance[channel]
+    # TODO debug
+    # print(white_balance)
+    # a = np.zeros((int(ref_raw.shape[0]/2), int(ref_raw.shape[1]/2), 3))
+    # for i in range(2):
+    #     for j in range(2):
+    #         a[:, :, CFA[i, j]] += raw_comp[1, i::2, j::2]
+    # a[:,:,1]/=2
+    # return a, 0, 0, 0   
+    return main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), options, params)

@@ -222,9 +222,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                     else:
                         # pos is divided by 2 during fetching, because grey is twice smaller.
                         local_r = fetch_robustness(thread_pixel_idx * 2, thread_pixel_idy * 2, image_index - 1, r, 0)
-                
-
-            # We need to wait the calculation of R and kernel
+            
             cuda.syncthreads()
             
 
