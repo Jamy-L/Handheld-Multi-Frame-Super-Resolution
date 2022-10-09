@@ -7,7 +7,7 @@ Created on Sun Jul 31 00:00:36 2022
 
 from time import time
 
-from math import floor, ceil, modf
+from math import floor, ceil, modf, exp
 import numpy as np
 import cv2
 from numba import cuda, float32, float64, int16
@@ -165,8 +165,7 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params,
         current_time = getTime(
             current_time, ' -- Arrays moved to GPU')
     
-    if debug : 
-        debug_list.append(cuda_alignment.copy_to_host())
+
     for iter_index in range(n_iter):
         lucas_kanade_optical_flow_iteration(
             cuda_ref_img_grey, cuda_gradsx, cuda_gradsy, cuda_comp_img_grey, cuda_alignment,
@@ -300,12 +299,18 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
             gradt = comp_val- ref_img[pixel_global_idy, pixel_global_idx]
             # gradt = comp_img[image_index, new_idy, new_idx] - ref_img[pixel_global_idy, pixel_global_idx]
             
-            cuda.atomic.add(ATB, 0, -pixel_global_idx*gradx*gradt)
-            cuda.atomic.add(ATB, 1, -pixel_global_idx*grady*gradt)
-            cuda.atomic.add(ATB, 2, -pixel_global_idy*gradx*gradt)
-            cuda.atomic.add(ATB, 3, -pixel_global_idy*grady*gradt)
-            cuda.atomic.add(ATB, 4, -gradx*gradt)
-            cuda.atomic.add(ATB, 5, -grady*gradt)
+            # exponentially decreasing window, of size tile_size_lk
+            r_square = ((pixel_local_idx - tile_size_lk/2)**2 +
+                        (pixel_local_idy - tile_size_lk/2)**2)
+            sigma_square = (tile_size_lk/2)**2
+            w = exp(-r_square/(3*sigma_square)) # TODO this is not improving LK so much... 3 ssems to be a good coef though.
+            
+            cuda.atomic.add(ATB, 0, -pixel_global_idx*gradx*gradt*w)
+            cuda.atomic.add(ATB, 1, -pixel_global_idx*grady*gradt*w)
+            cuda.atomic.add(ATB, 2, -pixel_global_idy*gradx*gradt*w)
+            cuda.atomic.add(ATB, 3, -pixel_global_idy*grady*gradt*w)
+            cuda.atomic.add(ATB, 4, -gradx*gradt*w)
+            cuda.atomic.add(ATB, 5, -grady*gradt*w)
             
             # Compute the Hessian matrix
             for i in range(6):
@@ -332,7 +337,7 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
                     else:
                         a*=grady
                     
-                    cuda.atomic.add(ATA, (i, j), a)
+                    cuda.atomic.add(ATA, (i, j), a*w)
                         
         # TODO is there a clever initialisation for delta p ?
         # Zero init of delta p
@@ -493,10 +498,10 @@ def get_closest_flow(idx_sub, idy_sub, optical_flows, tile_size, imsize, local_f
     # general case
     else:
         # Averaging patches with a window function
-        tl = hann(pos[1]%(tile_size/2), pos[0]%(tile_size/2), tile_size)
-        tr = hann(pos[1]%(tile_size/2), (tile_size/2) - pos[0]%(tile_size/2), tile_size)
-        bl = hann((tile_size/2) - pos[1]%(tile_size/2), pos[0]%(tile_size/2), tile_size)
-        br = hann((tile_size/2) - pos[1]%(tile_size/2), (tile_size/2) - pos[0]%(tile_size/2), tile_size)
+        tl = hamming(pos[1]%(tile_size/2), pos[0]%(tile_size/2), tile_size)
+        tr = hamming(pos[1]%(tile_size/2), (tile_size/2) - pos[0]%(tile_size/2), tile_size)
+        bl = hamming((tile_size/2) - pos[1]%(tile_size/2), pos[0]%(tile_size/2), tile_size)
+        br = hamming((tile_size/2) - pos[1]%(tile_size/2), (tile_size/2) - pos[0]%(tile_size/2), tile_size)
         
         k = tl + tr + br + bl
         

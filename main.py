@@ -177,7 +177,7 @@ plt.imshow(ref_grey_image, cmap= 'gray')
 comp_grey_images = cfa_to_grayscale(comp_images)
 grey_al = alignment.copy()
 grey_al[:,:,:,-2:]*=0.5 # pure translation are downscaled from bayer to grey
-upscaled_al = upscale_alignement(grey_al, ref_grey_image.shape[:2], 16) # half tile size cause grey
+upscaled_al = upscale_alignement(grey_al, ref_grey_image.shape[:2], 8) # half tile size cause grey
 for image_index in range(comp_images.shape[0]):
     warped = warp_flow(comp_grey_images[image_index], upscaled_al[image_index], rgb = False)
     plt.figure("image {}".format(image_index))
