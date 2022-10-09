@@ -155,7 +155,7 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params,
     
     # init aligment as pure translation from block matching, but with different tile size
     bm_to_lk_alignment(cuda_alignment, cuda_bm_alignment, tile_size_lk, tile_size_bm, imsize=ref_img_grey.shape)
-    print("flow passed to LK scale")
+
     
     cuda_ref_img_grey = cuda.to_device(np.ascontiguousarray(ref_img_grey))
     cuda_comp_img_grey = cuda.to_device(np.ascontiguousarray(comp_img_grey))
@@ -385,7 +385,8 @@ def warp_flow_y(pos, local_flow):
 
 @cuda.jit(device=True)
 def get_closest_flow(idx_sub, idy_sub, optical_flows, tile_size, imsize, local_flow):
-    # TODO windowing 
+    # TODO windowing is only applied to pixels which are on 4 overlapped tile.
+    # The corner and side condition remain with a generic square window 
     """
     Returns the estimated optical flow for a subpixel (or a pixel), based on
     the tile based estimated optical flow. Note that this function can be called
