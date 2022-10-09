@@ -222,7 +222,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
 
         Parameters
         ----------
-        flows : shared Array[n_images, n_patchs_y, n_patchs_x, 2]
+        flows : shared Array[n_images, n_patchs_y, n_patchs_x, 6]
             optical flows
         mini : shared Array[2]
             empty shared array used for parallel computation of min 
