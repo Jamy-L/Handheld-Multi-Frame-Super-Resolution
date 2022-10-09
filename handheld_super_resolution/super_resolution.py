@@ -60,8 +60,9 @@ def main(ref_img, comp_imgs, options, params):
         current_time = getTime(
             current_time, 'Robustness estimated')
     
-    output = merge(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment, cuda_robustness, {"verbose": 3}, params['merging'])
-    print('\nTotal ellapsed time : ', time() - t1)
+    output = merge(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment, cuda_robustness, options, params['merging'])
+    if verbose:
+        print('\nTotal ellapsed time : ', time() - t1)
     return output, cuda_Robustness.copy_to_host(), cuda_robustness.copy_to_host(), cuda_final_alignment.copy_to_host()
 
 #%%
@@ -100,7 +101,7 @@ def process(burst_path, options, params):
     black_levels = tags['Image BlackLevel'] # This tag is a fraction for some reason. It seems that black levels are all integers anyway
     black_levels = np.array([int(x.decimal()) for x in black_levels.values])
     
-    white_balance = raw.camera_whitebalance
+    white_balance = raw.camera_whitebalance # TODO make sure green is 1 and other ratio
     
     CFA = tags['Image CFAPattern']
     CFA = np.array([x for x in CFA.values]).reshape(2,2)
