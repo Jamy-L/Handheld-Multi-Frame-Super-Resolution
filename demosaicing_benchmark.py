@@ -222,8 +222,6 @@ params = {'block matching': {
                     's1' : 2,          #12
                     's2' : 12,              # 2
                     'Mt' : 0.8,         # 0.8
-                    'sigma_t' : 0.03,
-                    'dt' : 1e-3,
                     }
                 },
             'merging': {

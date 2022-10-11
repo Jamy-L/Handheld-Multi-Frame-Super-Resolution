@@ -11,7 +11,7 @@ import numpy as np
 from numba import uint8, uint16, float32, float64, jit, njit, cuda, int32
 
 from .optical_flow import get_closest_flow
-from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
+from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, clamp
 
 def compute_robustness(ref_img, comp_imgs, flows, options, params):
     """
@@ -371,21 +371,15 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         
         if ty == 0 and bayer_mode:
             if sqrt(M[0]**2 + M[1]**2) > Mt:
-                a = s1*exp(-dp[tx]**2/sigma[tx]**2) - t
-                a = min(1, a)
-                a = max(0, a)
-                R[image_index, pixel_idy, pixel_idx, tx] = a
+                R[image_index, pixel_idy, pixel_idx, tx] = clamp(s1*exp(-dp[tx]**2/sigma[tx]**2) - t, 0, 1)
             else:
-                a = s2*exp(-dp[tx]**2/sigma[tx]**2) - t
-                a = min(1, a)
-                a = max(0, a)
-                R[image_index, pixel_idy, pixel_idx, tx] = a
+                R[image_index, pixel_idy, pixel_idx, tx] = clamp(s2*exp(-dp[tx]**2/sigma[tx]**2) - t, 0, 1)
         
         elif ty == 0 and tx == 0 and not bayer_mode :
             if sqrt(M[0]**2 + M[1]**2) > Mt:
-                R[image_index, pixel_idy, pixel_idx, 0] = s1*exp(-dp[0]**2/sigma[0]**2) - t
+                R[image_index, pixel_idy, pixel_idx, 0] = clamp(s1*exp(-dp[0]**2/sigma[0]**2) - t, 0, 1)
             else:
-                R[image_index, pixel_idy, pixel_idx, 0] = s2*exp(-dp[0]**2/sigma[0]**2) - t
+                R[image_index, pixel_idy, pixel_idx, 0] = clamp(s1*exp(-dp[0]**2/sigma[0]**2) - t, 0, 1)
         
     @cuda.jit
     def compute_local_min(R, bayer_mode, r):
@@ -455,8 +449,8 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
 @cuda.jit(device=True)
 def fetch_robustness(pos_x, pos_y,image_index, R, channel):
 
-    downscaled_posx = int(pos_x//2)
-    downscaled_posy = int(pos_y//2)
+    downscaled_posx = round(pos_x//2)
+    downscaled_posy = round(pos_y//2)
     
     # TODO Neirest neighboor is made here. Maybe bilinear interpolation is better ?
     return max(0, R[image_index, downscaled_posy, downscaled_posx, channel])

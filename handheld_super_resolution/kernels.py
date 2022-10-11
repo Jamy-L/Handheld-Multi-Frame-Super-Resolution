@@ -294,8 +294,8 @@ def compute_interpolated_kernel_cov(image, fine_center_pos, cov_i,
     """
     tx = cuda.threadIdx.x
     ty = cuda.threadIdx.y
-    center_pos_x = uint16(fine_center_pos[1])
-    center_pos_y = uint16(fine_center_pos[0])
+    center_pos_x = uint16(round(fine_center_pos[1]))
+    center_pos_y = uint16(round(fine_center_pos[0]))
     
     # 1 Compute The 4 cov in parallel
     covs = cuda.shared.array((2, 2, 2, 2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
