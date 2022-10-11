@@ -198,7 +198,7 @@ params = {'block matching': {
                 'mode':'bayer',
                 'tuning': {
                     # WARNING: these parameters are defined fine-to-coarse!
-                    'factors': [1, 2, 2, 2],
+                    'factors': [1, 2, 2, 4],
                     'tileSizes': [16, 16, 16, 8],
                     'searchRadia': [1, 4, 4, 4],
                     'distances': ['L1', 'L2', 'L2', 'L2'],
@@ -209,7 +209,7 @@ params = {'block matching': {
                 'mode':'bayer',
                 'epsilon div' : 1e-6,
                 'tuning' : {
-                    'tileSize' : 8,
+                    'tileSize' : 16,
                     'tileSize Block Matching':16,
                     'kanadeIter': 6, # 3 
                     }},
@@ -217,7 +217,7 @@ params = {'block matching': {
                 'exif':{'CFA Pattern':CFA},
                 'mode':'bayer',
                 'tuning' : {
-                    'tileSize': 8,
+                    'tileSize': 16,
                     't' : 0,            # 0.12
                     's1' : 2,          #12
                     's2' : 12,              # 2
@@ -231,7 +231,7 @@ params = {'block matching': {
                 'mode':'bayer',
                 'scale': 1,
                 'tuning': {
-                    'tileSize': 8,
+                    'tileSize': 16,
                     'k_detail' : 0.33, # [0.25, ..., 0.33]
                     'k_denoise': 5,    # [3.0, ...,5.0]
                     'D_th': 0.05,      # [0.001, ..., 0.010]
@@ -257,7 +257,7 @@ SSIM = {"handheld": np.zeros(N_images),
 
 demosaicnet_bayer = demosaicnet.BayerDemosaick()
 
-for im_id, filename in tqdm(enumerate(os.listdir(DATASET_PATH))):
+for im_id, filename in tqdm(enumerate(os.listdir(DATASET_PATH)), total=N_images):
     impath = DATASET_PATH/filename
     
     ground_truth = plt.imread(impath.as_posix()).astype(np.float64)

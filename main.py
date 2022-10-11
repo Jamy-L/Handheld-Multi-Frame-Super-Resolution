@@ -36,7 +36,7 @@ def cfa_to_grayscale(raw_img):
 #%%
 
 # Warning : tileSize is expressed at grey pixel scale.
-params = {'scale' : 2,
+params = {'scale' : 1,
           'mode' : 'bayer',
           'block matching': {
                 'tuning': {
@@ -51,8 +51,8 @@ params = {'scale' : 2,
             'kanade' : {
                 'epsilon div' : 1e-6,
                 'tuning' : {
-                    'tileSize' : 8,
-                    # 'tileSizes' : 8,
+                    'tileSize' : 16,
+                    # 'tileSize' : 8,
                     'kanadeIter': 6, # 3
                     }},
             'robustness' : {
@@ -75,7 +75,7 @@ params = {'scale' : 2,
                 }}
 
 options = {'verbose' : 3}
-burst_path = 'P:/0002/Samsung'
+burst_path = 'P:/0001/Samsung'
 
 output, R, r, alignment = process(burst_path, options, params)
 
@@ -177,7 +177,7 @@ plt.imshow(ref_grey_image, cmap= 'gray')
 comp_grey_images = cfa_to_grayscale(comp_images)
 grey_al = alignment.copy()
 grey_al[:,:,:,-2:]*=0.5 # pure translation are downscaled from bayer to grey
-upscaled_al = upscale_alignement(grey_al, ref_grey_image.shape[:2], 8) # half tile size cause grey
+upscaled_al = upscale_alignement(grey_al, ref_grey_image.shape[:2], 16) 
 for image_index in range(comp_images.shape[0]):
     warped = warp_flow(comp_grey_images[image_index], upscaled_al[image_index], rgb = False)
     plt.figure("image {}".format(image_index))
@@ -216,13 +216,30 @@ def plot_merge(cov_i, D, pos):
     plt.colorbar()
 
 #%% robustness
-plt.figure('r')
-plt.imshow(r[0]/np.max(r[0], axis=(0,1)))
-plt.figure("accumulated r")
-plt.imshow(np.mean(r[0]/np.max(r[0], axis=(0,1)), axis = 2), cmap = "gray")
 
-plt.figure('R')
-plt.imshow(R[0]/np.max(R[0], axis=(0,1)))
+rmax = np.max(r, axis=(0,1,2))
+for im_id in range(R.shape[0]):
+    plt.figure('accumulated r '+str(im_id))
+    plt.imshow(np.mean(r[im_id]/rmax, axis = 2), cmap = "gray")
+
+
+# plt.figure('patchwise error')
+# plt.imshow(np.mean(r[2], axis = 2), cmap="jet", vmin = 0, vmax = 1)
+# plt.colorbar()
+
+# plt.figure("warped error")
+# warped = warp_flow(comp_grey_images[2], upscaled_al[2], rgb = False)
+# plt.imshow(np.log10((warped - ref_grey_image)**2), cmap = "Reds", vmax = 0, vmin = -10)
+# plt.colorbar()
+
+    
+# plt.figure('r')
+# plt.imshow(r[5]/np.max(r[5], axis=(0,1)))
+# plt.figure("accumulated r")
+# plt.imshow(np.mean(r[5]/np.max(r[5], axis=(0,1)), axis = 2), cmap = "gray")
+
+# plt.figure('R')
+# plt.imshow(R[5]/np.max(R[5], axis=(0,1)))
 
 
 #%% eighen vectors
