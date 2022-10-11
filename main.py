@@ -151,9 +151,9 @@ covs[:,:,0,1] = output[:,:,10].copy()
 covs[:,:,1,0] = output[:,:,11].copy()
 covs[:,:,1,1] = output[:,:,12].copy()
 
-D = np.empty((output.shape[0], output.shape[1], 3, 3, 2))
-for i in range(18):
-    D[:, :, i//6, (i%6)//2, i%2] = output[:,:,13 + i].copy() 
+D = np.empty((output.shape[0], output.shape[1], 2, 2, 2))
+for i in range(8):
+    D[:, :, i//4, (i%4)//2, i%2] = output[:,:,13 + i].copy() 
 
 
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
@@ -208,8 +208,32 @@ def plot_merge(cov_i, D, pos):
     plt.figure("merge in (x = {}, y = {})".format(pos[1],pos[0]))
     plt.pcolor(Xm, Ym, np.exp(-Z/2), vmin = 0, vmax=1)
     plt.gca().invert_yaxis()
-    plt.scatter([0], [0], c='g', marker ='o')
-    plt.scatter(D[:,:,0].reshape(9), D[:,:,1].reshape(9), c='r', marker ='x')
+    plt.scatter([0], [0], c='k', marker ='o')
+    
+    dist = abs(D[1,1,0] - D[1,0,0]) # for scale
+    Dx_red = [D[0,1,0] + 2*i*dist for i in range(-1, 2)] * 3
+    Dy_red = [D[0,1,1] + 2*i*dist for i in range(-1, 2)]
+    Dy_red = [item for item in Dy_red for repetition in range(3)]
+    plt.scatter(Dx_red, Dy_red, c='r', marker ='x')
+    
+    Dx_blue = [D[1,0,0] + 2*i*dist for i in range(-1, 2)] * 3
+    Dy_blue = [D[1,0,1] + 2*i*dist for i in range(-1, 2)]
+    Dy_blue = [item for item in Dy_blue for repetition in range(3)]
+    plt.scatter(Dx_blue, Dy_blue, c='b', marker ='x')
+    
+    Dx_green = [D[0, 0,0] + 2*i*dist for i in range(-1, 2)] * 3
+    Dy_green = [D[0, 0,1] + 2*i*dist for i in range(-1, 2)]
+    Dy_green = [item for item in Dy_green for repetition in range(3)]
+    plt.scatter(Dx_green, Dy_green, c='g', marker ='x')
+    Dx_green = [D[1,1,0] + 2*i*dist for i in range(-1, 2)] * 3
+    Dy_green = [D[1,1,1] + 2*i*dist for i in range(-1, 2)]
+    Dy_green = [item for item in Dy_green for repetition in range(3)]
+    plt.scatter(Dx_green, Dy_green, c='g', marker ='x')
+    
+    
+    
+    
+    # plt.scatter(D[:,:,0].reshape(4), D[:,:,1].reshape(4), c='r', marker ='x')
 
     # for i in range(9):
     #     plt.quiver(D[:,:,0].reshape(9)[i], -D[:,:,1].reshape(9)[i], scale=1, scale_units = "xy")
@@ -217,10 +241,9 @@ def plot_merge(cov_i, D, pos):
 
 #%% robustness
 
-rmax = np.max(r, axis=(0,1,2))
 for im_id in range(R.shape[0]):
     plt.figure('accumulated r '+str(im_id))
-    plt.imshow(np.mean(r[im_id]/rmax, axis = 2), cmap = "gray")
+    plt.imshow(np.mean(r[im_id], axis = 2), cmap = "gray")
 
 
 # plt.figure('patchwise error')

@@ -72,8 +72,8 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
 
     native_im_size = ref_img.shape
     # casting to integer to account for floating scale
-    output_size = (int(SCALE*native_im_size[0]), int(SCALE*native_im_size[1]))
-    output_img = cuda.device_array(output_size+(31,), dtype = DEFAULT_NUMPY_FLOAT_TYPE) #third dim for rgb channel
+    output_size = (round(SCALE*native_im_size[0]), round(SCALE*native_im_size[1]))
+    output_img = cuda.device_array(output_size+(22,), dtype = DEFAULT_NUMPY_FLOAT_TYPE) #third dim for rgb channel
     # TODO 3 channels are enough, the rest is for debugging
 
 
@@ -162,15 +162,15 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                 val[1] = 0
                 val[2] = 0
 
-        patch_center_pos = cuda.shared.array(2, uint16) # y, x
+        patch_center_pos = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE) # y, x
         local_optical_flow = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
         for image_index in range(N_IMAGES + 1):
             if tx == 0 and ty == 0: # Single threaded fetch of the flow
                 if image_index == 0:  # ref image
                     # no optical flow
-                    patch_center_pos[1] = coarse_ref_sub_pos[1]
-                    patch_center_pos[0] = coarse_ref_sub_pos[0]
+                    local_optical_flow[0] = 0
+                    local_optical_flow[1] = 0
 
                 else:
                     get_closest_flow(coarse_ref_sub_pos[1], # flow is x, y and pos is y, x
@@ -181,8 +181,8 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                                       local_optical_flow)
                     
                     
-                    patch_center_pos[1] = coarse_ref_sub_pos[1] + local_optical_flow[0]
-                    patch_center_pos[0] = coarse_ref_sub_pos[0] + local_optical_flow[1]
+                patch_center_pos[1] = coarse_ref_sub_pos[1] + local_optical_flow[0]
+                patch_center_pos[0] = coarse_ref_sub_pos[0] + local_optical_flow[1]
             
             # we need the position of the patch before computing the kernel
             cuda.syncthreads()
@@ -196,8 +196,8 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
             # coordinates of the top left bayer pixel in each of the 9
             # neigbhoors bayer cells
             
-            thread_tl_pixel_idx = int16(2*(patch_center_pos[1]//2) + 2*tx)
-            thread_tl_pixel_idy = int16(2*(patch_center_pos[0]//2) + 2*ty)
+            thread_tl_pixel_idx = 2*round((patch_center_pos[1] - 0.5)/2) + 2*tx
+            thread_tl_pixel_idy = 2*round((patch_center_pos[0] - 0.5)/2) + 2*ty
             
             # computing kernel
             if image_index == 0:
@@ -249,12 +249,8 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
 
     
                     # applying invert transformation and upscaling
-                    if image_index == 0:
-                        fine_sub_pos_x = SCALE * (thread_tl_pixel_idx + j)
-                        fine_sub_pos_y = SCALE * (thread_tl_pixel_idy + i)
-                    else:
-                        fine_sub_pos_x = SCALE * (thread_tl_pixel_idx + j - local_optical_flow[0])
-                        fine_sub_pos_y = SCALE * (thread_tl_pixel_idy + i - local_optical_flow[1])
+                    fine_sub_pos_x = SCALE * (thread_tl_pixel_idx + j - local_optical_flow[0])
+                    fine_sub_pos_y = SCALE * (thread_tl_pixel_idy + i - local_optical_flow[1])
 
                 
                     dist = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
@@ -262,29 +258,29 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                     dist[1] = (fine_sub_pos_y - output_pixel_idy)
                 
                     # TODO Debugging
-                    if image_index == 1 and i==0 and j==0:
-                        output_img[output_pixel_idy, output_pixel_idx, 13 + 6*(ty+1) + 2*(tx+1)] = dist[0]
-                        output_img[output_pixel_idy, output_pixel_idx, 13 + 6*(ty+1) + 2*(tx+1) + 1] = dist[1]
+                    if image_index == 0 and tx==0 and ty==0:
+                        output_img[output_pixel_idy, output_pixel_idx, 13 + 4*i + 2*j] = dist[0]
+                        output_img[output_pixel_idy, output_pixel_idx, 13 + 4*i + 2*j + 1] = dist[1]
                 
 
                     y = max(0, quad_mat_prod(cov_i, dist))
                     # y can be slightly negative because of numerical precision.
                     # I clamp it to not explode the error with exp
 
-                    w = math.exp(-0.5*y*4/(SCALE**2)) 
+                    w = math.exp(-0.5*y/(SCALE**2)) 
                     # if abs(dist[0]) <= 1 and abs(dist[1]) <= 1:
                     #     w=1
                     # else:
                     #     w=0
                     # TODO debug
-                    # if image_index == 0: 
-                    cuda.atomic.add(val, channel, c*w)#*local_r)
-                    cuda.atomic.add(acc, channel, w)#*local_r)
+
+                    cuda.atomic.add(val, channel, c*w*local_r)
+                    cuda.atomic.add(acc, channel, w*local_r)
                 
                     # TODO debugging only
                     if image_index == 0 :
                         if tx == 0 and ty == 0 and i==0 and j==0:
-                            output_img[output_pixel_idy, output_pixel_idx, 3] = dist[0] #DEBUG_E1[0]
+                            output_img[output_pixel_idy, output_pixel_idx, 3] = DEBUG_E1[0]
                             output_img[output_pixel_idy, output_pixel_idx, 4] = DEBUG_E1[1]
                             output_img[output_pixel_idy, output_pixel_idx, 5] = DEBUG_E2[0]
                             output_img[output_pixel_idy, output_pixel_idx, 6] = DEBUG_E2[1]
