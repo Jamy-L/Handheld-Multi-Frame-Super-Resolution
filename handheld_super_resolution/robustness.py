@@ -302,7 +302,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         maxi = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) #Max Vx, Vy
         mini = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) # Min Vx, Vy
         M = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) #Mx, My
-        # multithreade inits
+        # multithreaded inits
         if ty < 2:
             local_stats_ref[ty, tx] = 0
             local_stats_comp[ty, tx] = 0
@@ -371,9 +371,15 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         
         if ty == 0 and bayer_mode:
             if sqrt(M[0]**2 + M[1]**2) > Mt:
-                R[image_index, pixel_idy, pixel_idx, tx] = s1*exp(-dp[tx]**2/sigma[tx]**2) - t
+                a = s1*exp(-dp[tx]**2/sigma[tx]**2) - t
+                a = min(1, a)
+                a = max(0, a)
+                R[image_index, pixel_idy, pixel_idx, tx] = a
             else:
-                R[image_index, pixel_idy, pixel_idx, tx] = s2*exp(-dp[tx]**2/sigma[tx]**2) - t
+                a = s2*exp(-dp[tx]**2/sigma[tx]**2) - t
+                a = min(1, a)
+                a = max(0, a)
+                R[image_index, pixel_idy, pixel_idx, tx] = a
         
         elif ty == 0 and tx == 0 and not bayer_mode :
             if sqrt(M[0]**2 + M[1]**2) > Mt:
@@ -444,7 +450,6 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
     if VERBOSE > 2:
         current_time = getTime(
             current_time, ' - Robustness locally minimized')
-    
     return R, r
 
 @cuda.jit(device=True)

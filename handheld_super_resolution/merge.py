@@ -10,7 +10,7 @@ from time import time
 import math
 
 import numpy as np
-from numba import uint8, uint16, float32, float64, jit, njit, cuda, int32
+from numba import uint8, uint16, int16, float32, float64, jit, njit, cuda, int32
 
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, EPSILON
 from .optical_flow import get_closest_flow
@@ -46,7 +46,6 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
         merged images
 
     """
-    # TODO Non int scale is broken atm
     VERBOSE = options['verbose']
     SCALE = params['scale']
     
@@ -193,99 +192,112 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
             DEBUG_E1 = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
             DEBUG_E2 = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
             DEBUG_L = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-
-            # coordinates of the pixel neigbhour (one for each thread)
-            thread_pixel_idx = uint16(patch_center_pos[1]) + tx
-            thread_pixel_idy = uint16(patch_center_pos[0]) + ty  
             
-            # checking if pixel is r, g or b
-            if bayer_mode : 
-                channel = get_channel(thread_pixel_idx, thread_pixel_idy)
-            else:
-                channel = 0
-
+            # coordinates of the top left bayer pixel in each of the 9
+            # neigbhoors bayer cells
+            
+            thread_tl_pixel_idx = int16(2*(patch_center_pos[1]//2) + 2*tx)
+            thread_tl_pixel_idy = int16(2*(patch_center_pos[0]//2) + 2*ty)
+            
+            # computing kernel
             if image_index == 0:
                 compute_interpolated_kernel_cov(ref_img, patch_center_pos, cov_i,
                                                 k_detail, k_denoise, D_th, D_tr, k_stretch,
                                                 k_shrink,DEBUG_E1, DEBUG_E2, DEBUG_L)
-                local_r = 1 # for all 9 threads
-
             else:
                 compute_interpolated_kernel_cov(comp_imgs[image_index - 1], patch_center_pos, cov_i,
                                                 k_detail, k_denoise, D_th, D_tr, k_stretch,
                                                 k_shrink,DEBUG_E1, DEBUG_E2, DEBUG_L)
-                
-                # robustness
-                if 0 <= thread_pixel_idx < input_size_x and 0 <= thread_pixel_idy < input_size_y: # inbound
-                    if bayer_mode : 
-                        local_r = fetch_robustness(thread_pixel_idx, thread_pixel_idy, image_index - 1, r, channel) # r is a local variable : different for every thread
-                    else:
-                        # pos is divided by 2 during fetching, because grey is twice smaller.
-                        local_r = fetch_robustness(thread_pixel_idx * 2, thread_pixel_idy * 2, image_index - 1, r, 0)
+
             
             cuda.syncthreads()
             
+            
+            
+            
+            # iterating through all 4 bayer pixels in the bayer cell
+            for i in range(2):
+                for j in range(2):
+                    # checking if pixel is r, g or b
+                    if bayer_mode : 
+                        channel = get_channel(thread_tl_pixel_idx + j,
+                                              thread_tl_pixel_idy + i)
+                    else:
+                        channel = 0
+                    
+                    
+                    # fetching robustness
+                    if image_index == 0:
+                        local_r = 1 # for all 9 threads and each 4 pixels
+                    elif 0 <= thread_tl_pixel_idx < input_size_x - 1 and 0 <= thread_tl_pixel_idy < input_size_y - 1: # inbound
+                        if bayer_mode : 
+                            local_r = fetch_robustness(thread_tl_pixel_idx, thread_tl_pixel_idy, image_index - 1, r, channel) # r is different for every thread, and i,j are driving the channel
+                        else:
+                            # pos is divided by 2 during fetching, because grey is twice smaller.
+                            local_r = fetch_robustness((thread_tl_pixel_idx+j) * 2, (thread_tl_pixel_idy+i) * 2, image_index - 1, r, 0)
+                        
 
-            # in bounds conditions
-            if (0 <= thread_pixel_idx < input_size_x and
-                0 <= thread_pixel_idy < input_size_y):
-                if image_index == 0:
-                    c = ref_img[thread_pixel_idy, thread_pixel_idx]
-                else:
-                    c = comp_imgs[image_index - 1, thread_pixel_idy, thread_pixel_idx]
+            
+
+                    # in bounds conditions
+                    if 0 <= thread_tl_pixel_idx + j < input_size_x and 0 <= thread_tl_pixel_idy + i < input_size_y: # inbound
+                        if image_index == 0:
+                            c = ref_img[thread_tl_pixel_idy + i, thread_tl_pixel_idx + j]
+                        else:
+                            c = comp_imgs[image_index - 1, thread_tl_pixel_idy + i, thread_tl_pixel_idx + j]
 
 
     
-                # applying invert transformation and upscaling
-                if image_index == 0:
-                    fine_sub_pos_x = SCALE * thread_pixel_idx
-                    fine_sub_pos_y = SCALE * thread_pixel_idy
-                else:
-                    fine_sub_pos_x = SCALE * (thread_pixel_idx - local_optical_flow[0])
-                    fine_sub_pos_y = SCALE * (thread_pixel_idy - local_optical_flow[1])
+                    # applying invert transformation and upscaling
+                    if image_index == 0:
+                        fine_sub_pos_x = SCALE * (thread_tl_pixel_idx + j)
+                        fine_sub_pos_y = SCALE * (thread_tl_pixel_idy + i)
+                    else:
+                        fine_sub_pos_x = SCALE * (thread_tl_pixel_idx + j - local_optical_flow[0])
+                        fine_sub_pos_y = SCALE * (thread_tl_pixel_idy + i - local_optical_flow[1])
 
                 
-                dist = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-                dist[0] = (fine_sub_pos_x - output_pixel_idx)
-                dist[1] = (fine_sub_pos_y - output_pixel_idy)
+                    dist = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+                    dist[0] = (fine_sub_pos_x - output_pixel_idx)
+                    dist[1] = (fine_sub_pos_y - output_pixel_idy)
                 
-                # TODO Debugging
-                if image_index == 1 :
-                    output_img[output_pixel_idy, output_pixel_idx, 13 + 6*(ty+1) + 2*(tx+1)] = dist[0]
-                    output_img[output_pixel_idy, output_pixel_idx, 13 + 6*(ty+1) + 2*(tx+1) + 1] = dist[1]
+                    # TODO Debugging
+                    if image_index == 1 and i==0 and j==0:
+                        output_img[output_pixel_idy, output_pixel_idx, 13 + 6*(ty+1) + 2*(tx+1)] = dist[0]
+                        output_img[output_pixel_idy, output_pixel_idx, 13 + 6*(ty+1) + 2*(tx+1) + 1] = dist[1]
                 
 
-                y = max(0, quad_mat_prod(cov_i, dist))
-                # y can be slightly negative because of numerical precision.
-                # I clamp it to not explode the error with exp
-                if bayer_mode : 
-                    w = math.exp(-y/(2*4*SCALE**2))
-                else : 
-                    w = math.exp(-y/(2*SCALE**2))
-                # kernels are estimated on grey levels, so distances have to
-                # be downscaled to grey coarse level if distances are on bayer level
+                    y = max(0, quad_mat_prod(cov_i, dist))
+                    # y can be slightly negative because of numerical precision.
+                    # I clamp it to not explode the error with exp
 
-
-                cuda.atomic.add(val, channel, c*w*local_r)
-                cuda.atomic.add(acc, channel, w*local_r)
+                    w = math.exp(-0.5*y*4/(SCALE**2)) 
+                    # if abs(dist[0]) <= 1 and abs(dist[1]) <= 1:
+                    #     w=1
+                    # else:
+                    #     w=0
+                    # TODO debug
+                    # if image_index == 0: 
+                    cuda.atomic.add(val, channel, c*w)#*local_r)
+                    cuda.atomic.add(acc, channel, w)#*local_r)
                 
-                # TODO debugging only
-                if image_index == 1 :
-                    if tx == 0 and ty == 0:
-                        output_img[output_pixel_idy, output_pixel_idx, 3] = DEBUG_E1[0]
-                        output_img[output_pixel_idy, output_pixel_idx, 4] = DEBUG_E1[1]
-                        output_img[output_pixel_idy, output_pixel_idx, 5] = DEBUG_E2[0]
-                        output_img[output_pixel_idy, output_pixel_idx, 6] = DEBUG_E2[1]
-                        output_img[output_pixel_idy, output_pixel_idx, 7] = DEBUG_L[0]
-                        output_img[output_pixel_idy, output_pixel_idx, 8] = DEBUG_L[1]
-                        output_img[output_pixel_idy, output_pixel_idx, 9] = cov_i[0, 0]
-                        output_img[output_pixel_idy, output_pixel_idx, 10] = cov_i[0, 1]
-                        output_img[output_pixel_idy, output_pixel_idx, 11] = cov_i[1, 0]
-                        output_img[output_pixel_idy, output_pixel_idx, 12] = cov_i[1, 1]
+                    # TODO debugging only
+                    if image_index == 0 :
+                        if tx == 0 and ty == 0 and i==0 and j==0:
+                            output_img[output_pixel_idy, output_pixel_idx, 3] = dist[0] #DEBUG_E1[0]
+                            output_img[output_pixel_idy, output_pixel_idx, 4] = DEBUG_E1[1]
+                            output_img[output_pixel_idy, output_pixel_idx, 5] = DEBUG_E2[0]
+                            output_img[output_pixel_idy, output_pixel_idx, 6] = DEBUG_E2[1]
+                            output_img[output_pixel_idy, output_pixel_idx, 7] = DEBUG_L[0]
+                            output_img[output_pixel_idy, output_pixel_idx, 8] = DEBUG_L[1]
+                            output_img[output_pixel_idy, output_pixel_idx, 9] = cov_i[0, 0]
+                            output_img[output_pixel_idy, output_pixel_idx, 10] = cov_i[0, 1]
+                            output_img[output_pixel_idy, output_pixel_idx, 11] = cov_i[1, 0]
+                            output_img[output_pixel_idy, output_pixel_idx, 12] = cov_i[1, 1]
                         
                 
             
-            # We need to wait the accumulation of the 9 pixels before going for
+            # We need to wait the accumulation of all the pixels before going for
             # the next image, because sharred arrays will be overwritten
             cuda.syncthreads()
         if tx == 0 and ty == 0:
