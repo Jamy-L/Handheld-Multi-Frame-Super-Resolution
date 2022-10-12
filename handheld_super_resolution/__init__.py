@@ -6,4 +6,5 @@ Created on Fri Sep 30 16:33:09 2022
 """
 
 from .super_resolution import process
+from .params import get_params
 

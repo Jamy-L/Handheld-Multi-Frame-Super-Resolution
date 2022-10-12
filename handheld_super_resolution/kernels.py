@@ -71,14 +71,14 @@ def compute_harris(image, top_left_x, top_left_y, harris):
     cuda.syncthreads()
     tx = cuda.threadIdx.x
     ty = cuda.threadIdx.y
-    idy = int(ty//2) # 0 or 1 : harris index
-    idx = int(tx//2)
     if (not out_of_bounds):
         # averaging for estimating grad on middle point
         gradx = (grads_x[ty + 1, tx] + grads_x[ty, tx])/2
         grady = (grads_y[ty, tx +1 ] + grads_y[ty, tx])/2
         
         if  tx != 1 and ty != 1: #grad contributes to a single cov
+            idy = ty//2 # 0 or 1 : harris index
+            idx = tx//2
             cuda.atomic.add(harris, (idy, idx, 0, 0), gradx*gradx)
             cuda.atomic.add(harris, (idy, idx, 0, 1), gradx*grady)
             cuda.atomic.add(harris, (idy, idx, 1, 0), gradx*grady)
@@ -86,6 +86,7 @@ def compute_harris(image, top_left_x, top_left_y, harris):
             
         if tx == 1 and ty != 1: #grad contributes to 2 covs
             for j in range(2):
+                idy = ty//2
                 cuda.atomic.add(harris, (idy, j, 0, 0), gradx*gradx)
                 cuda.atomic.add(harris, (idy, j, 0, 1), gradx*grady)
                 cuda.atomic.add(harris, (idy, j, 1, 0), gradx*grady)
@@ -93,10 +94,11 @@ def compute_harris(image, top_left_x, top_left_y, harris):
                 
         if tx != 1 and ty == 1: #grad contributes to 2 covs
             for i in range(2):
-                cuda.atomic.add(harris, (i, tx, 0, 0), gradx*gradx)
-                cuda.atomic.add(harris, (i, tx, 0, 1), gradx*grady)
-                cuda.atomic.add(harris, (i, tx, 1, 0), gradx*grady)
-                cuda.atomic.add(harris, (i, tx, 1, 1), grady*grady)
+                idx = tx//2
+                cuda.atomic.add(harris, (i, idx, 0, 0), gradx*gradx)
+                cuda.atomic.add(harris, (i, idx, 0, 1), gradx*grady)
+                cuda.atomic.add(harris, (i, idx, 1, 0), gradx*grady)
+                cuda.atomic.add(harris, (i, idx, 1, 1), grady*grady)
                 
         else:#contributes to the 4 covs
             for i in range(2):
@@ -213,8 +215,8 @@ def compute_kernel_covs(image, center_pos_x, center_pos_y, covs,
     
     # Steps to jump from the middle bayer cell to the 3 grey neigbhours
     # it is either -1 or +1
-    x_step = 2*center_pos_x%2 - 1
-    y_step = 2*center_pos_y%2 - 1
+    x_step = 2*(center_pos_x%2) - 1
+    y_step = 2*(center_pos_y%2) - 1
     
     
     # coordinates of the top left pixel belonging to the center Bayer cell
@@ -317,19 +319,9 @@ def compute_interpolated_kernel_cov(image, fine_center_pos, cov_i,
         
         else:
             # For constant luminance patch, this a dummy filter
+            # TODO mayber a better patch in this case ?
             cov_i[0, 0] = 1
             cov_i[0, 1] = 0
             cov_i[1, 0] = 1
             cov_i[1, 1] = 0
-        
-
-def plot_kernel(cov_i):
-    L = np.linspace(-10, 10, 100)
-    Xm, Ym = np.meshgrid(L,L)
-    Z = np.empty_like(Xm)
-    Z = cov_i[0,0] * Xm**2 + (cov_i[1, 0] + cov_i[0, 1])*Xm*Ym + cov_i[1, 1]*Ym**2
-    plt.figure()
-    plt.pcolor(Xm, Ym, np.exp(-Z/2), vmin = 0, vmax=1)
-    plt.gca().invert_yaxis()
-    plt.colorbar()
     
