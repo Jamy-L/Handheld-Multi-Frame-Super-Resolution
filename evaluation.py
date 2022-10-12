@@ -370,7 +370,7 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
     return warped_images, im_EQ 
 
 #%% params
-# # #Warning : tileSize is expressed in terms of grey pixels.
+# #Warning : tileSize is expressed in terms of grey pixels.
 # CFA = np.array([[2, 1], [1, 0]])
 
 # params = {'block matching': {
@@ -388,7 +388,7 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 #                 'mode':'bayer',
 #                 'epsilon div' : 1e-6,
 #                 'tuning' : {
-#                     'tileSize' : 8,
+#                     'tileSize' : 16,
 #                     'tileSize Block Matching':16,
 #                     'kanadeIter': 6, # 3 
 #                     }},
@@ -396,13 +396,11 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 #                 'exif':{'CFA Pattern':CFA},
 #                 'mode':'bayer',
 #                 'tuning' : {
-#                     'tileSize': 8,
-#                     't' : 0,            # 0.12
-#                     's1' : 2,          #12
-#                     's2' : 12,              # 2
+#                     'tileSize': 16,
+#                     't' : 0.12,            # 0.12
+#                     's1' : 12,          #12
+#                     's2' : 2,           # 2
 #                     'Mt' : 0.8,         # 0.8
-#                     'sigma_t' : 0.03,
-#                     'dt' : 1e-3,
 #                     }
 #                 },
 #             'merging': {
@@ -410,7 +408,7 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 #                 'mode':'bayer',
 #                 'scale': 1,
 #                 'tuning': {
-#                     'tileSize': 8,
+#                     'tileSize': 16,
 #                     'k_detail' : 0.33, # [0.25, ..., 0.33]
 #                     'k_denoise': 5,    # [3.0, ...,5.0]
 #                     'D_th': 0.05,      # [0.001, ..., 0.010]
@@ -424,64 +422,19 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 # options = {'verbose' : 3}
 
 # #%% generating burst
-# img = plt.imread("P:/DIV2K_valid_HR/DIV2K_valid_HR/0808.png")*255
+# img = plt.imread("P:/Kodak/1.png")*255
 # #img = plt.imread("P:/Urban100_SR/image_SRF_4/img_040_SRF_4_HR.png")*255
 # transformation_params = {'max_translation':10,
 #                           'max_shear': 0,
 #                           'max_ar_factor': 0,
-#                           'max_rotation': 3}
-# burst, flow = single2lrburst(img, 10, downsample_factor=2, transformation_params=transformation_params)
+#                           'max_rotation': 1.5}
+# burst, flow = single2lrburst(img, 10, downsample_factor=1, transformation_params=transformation_params)
 # # flow is unussable because it is pointing from moving frame to ref. We would need the opposite
 
 
 # dec_burst = (decimate(burst)/255).astype(np.float32)
 
 # grey_burst = np.mean(burst, axis = 3)/255
-
-# #%%
-# params["block matching"]["mode"] = 'grey'
-# params["kanade"]["mode"] = 'grey'
-# pre_alignment, _ = alignBurst(grey_burst[0], grey_burst[1:2],params['block matching'], options)
-# pre_alignment = pre_alignment[:,:,:,::-1]
-# lk_alignment = lucas_kanade_optical_flow(grey_burst[0], grey_burst[1:2],
-#                                           pre_alignment, options, params['kanade']).copy_to_host()
-
-# pre_al = np.zeros(pre_alignment.shape[:-1] + (6,))
-# pre_al[:,:,:,-2:] = pre_alignment
-
-# imsize = grey_burst[0].shape[:2]
-# upscaled_al = upscale_alignement(lk_alignment, imsize, params['block matching']['tuning']['tileSizes'][0])
-# warped = warp_flow(grey_burst[1], upscaled_al[0], rgb=False)
-# plt.figure("grey warped")
-# plt.imshow(warped, cmap='gray')
-
-# #%% testing pipleine on grey images
-# params["block matching"]["mode"] = 'grey'
-# params["kanade"]["mode"] = 'grey'
-# params["merging"]["mode"] = 'grey'
-# params["robustness"]["mode"] = 'grey'
-# output, R, r, alignment = main(grey_burst[0], grey_burst[1:], options, params)
-# plt.figure("merge on grey images")
-# plt.imshow(output[:,:,0], cmap='gray')
-# plt.figure("ref")
-# plt.imshow(grey_burst[0], cmap="gray")
-
-# #%% same with bayer
-# params["block matching"]["mode"] = 'bayer'
-# params["kanade"]["mode"] = 'bayer'
-# pre_alignment, _ = alignBurst(dec_burst[0], dec_burst[1:2], params['block matching'], options)
-# pre_alignment = pre_alignment[:,:,:,::-1]
-# lk_alignment = lucas_kanade_optical_flow(dec_burst[0], dec_burst[1:2],
-#                                           pre_alignment, options, params['kanade']).copy_to_host()
-
-# pre_al = np.zeros(pre_alignment.shape[:-1] + (6,))
-# pre_al[:,:,:,-2:] = pre_alignment
-# imsize = dec_burst[0].shape[:2]
-
-# upscaled_al = upscale_alignement(pre_al, imsize, 2*params['block matching']['tuning']['tileSizes'][0])
-# warped = warp_flow(burst[1]/255, upscaled_al[0], rgb=True)
-# plt.figure('bayer warp')
-# plt.imshow(warped)
 
 # #%% testing pipleine on one bayer image
 # params["block matching"]["mode"] = 'bayer'
@@ -501,7 +454,7 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 # params["kanade"]["mode"] = 'bayer'
 # raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params)
 # t1 = time()
-# fb_alignment = align_fb(dec_burst)
+# fb_alignment = align_fb(dec_burst*255)
 # print('farneback evaluated : ', time()-t1)
 
 # #%% evaluating lk bayer
@@ -526,11 +479,11 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 
 # #%%
 # plt.figure("LK")
-# plt.imshow(lk_warped_images[-1, 0]/255)
+# plt.imshow(lk_warped_images[-1, 0])
 # plt.figure("Farneback")
-# plt.imshow(fb_warped_images[0, 0]/255)
+# plt.imshow(fb_warped_images[0, 0])
 # plt.figure("Block Matching")
-# plt.imshow(lk_warped_images[0,0]/255)
+# plt.imshow(lk_warped_images[0,0])
 
 
 

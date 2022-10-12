@@ -8,6 +8,7 @@ import os
 import glob
 from time import time
 
+from tqdm import tqdm
 import numpy as np
 import cv2
 from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda, int32
@@ -17,7 +18,7 @@ import matplotlib.pyplot as plt
 import colour_demosaicing
 # pip install colour-demosaicing
 
-from handheld_super_resolution import process, raw2rgb
+from handheld_super_resolution import process, raw2rgb, get_params
 from evaluation import warp_flow, upscale_alignement
 
 
@@ -35,45 +36,7 @@ def cfa_to_grayscale(raw_img):
 
 #%%
 
-# Warning : tileSize is expressed at grey pixel scale.
-params = {'scale' : 1,
-          'mode' : 'bayer',
-          'block matching': {
-                'tuning': {
-                    # WARNING: these parameters are defined fine-to-coarse!
-                    'factors': [1, 2, 4, 4],
-                    'tileSizes': [16, 16, 16, 8],
-                    'searchRadia': [1, 4, 4, 4],
-                    'distances': ['L1', 'L2', 'L2', 'L2'],
-                    # if you want to compute subpixel tile alignment at each pyramid level
-                    'subpixels': [False, True, True, True]
-                    }},
-            'kanade' : {
-                'epsilon div' : 1e-6,
-                'tuning' : {
-                    'tileSize' : 16,
-                    # 'tileSize' : 8,
-                    'kanadeIter': 6, # 3
-                    }},
-            'robustness' : {
-                'tuning' : {
-                    't' : 0.12,            # 0.12
-                    's1' : 12,           # 12
-                    's2' : 2,          # 2
-                    'Mt' : 0.8,         # 0.8
-                    }
-                },
-            'merging': {
-                'tuning': {
-                    'k_detail' : 0.25, # [0.25, ..., 0.33]
-                    'k_denoise': 5,    # [3.0, ...,5.0]
-                    'D_th': 0.05,      # [0.001, ..., 0.010]
-                    'D_tr': 0.014,     # [0.006, ..., 0.020]
-                    'k_stretch' : 4,   # 4
-                    'k_shrink' : 2,    # 2
-                    }
-                }}
-
+params = get_params(PSNR = 35)
 options = {'verbose' : 3}
 burst_path = 'P:/0001/Samsung'
 
@@ -92,7 +55,7 @@ xyz2cam = raw2rgb.get_xyz2cam_from_exif(first_image_path)
 
 comp_images = rawpy.imread(
     burst_path + '/im_01.dng').raw_image.copy()[None]
-for i in range(2, 10):
+for i in range(2, 8):
     comp_images = np.append(comp_images, rawpy.imread('{}/im_0{}.dng'.format(burst_path, i)
                                                       ).raw_image.copy()[None], axis=0)
 
@@ -145,15 +108,16 @@ e2[:,:,1] = output[:,:,6].copy()
 e2[:,:,0]*=flat(l2)
 e2[:,:,1]*=flat(l2)
 
-covs = np.empty((output.shape[0], output.shape[1], 2, 2))
-covs[:,:,0,0] = output[:,:,9].copy()
-covs[:,:,0,1] = output[:,:,10].copy()
-covs[:,:,1,0] = output[:,:,11].copy()
-covs[:,:,1,1] = output[:,:,12].copy()
+D = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 2, 2))
+covs = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 2))
+for image in tqdm(range(comp_images.shape[0]+1)):
+    covs[image, :,:,0,0] = output[:,:,9+image*12].copy()
+    covs[image, :,:,0,1] = output[:,:,10+image*12].copy()
+    covs[image, :,:,1,0] = output[:,:,11+image*12].copy()
+    covs[image, :,:,1,1] = output[:,:,12+image*12].copy()
 
-D = np.empty((output.shape[0], output.shape[1], 2, 2, 2))
-for i in range(8):
-    D[:, :, i//4, (i%4)//2, i%2] = output[:,:,13 + i].copy() 
+    for i in range(8):
+        D[image, :, :, i//4, (i%4)//2, i%2] = output[:,:,13 + i + 12*image].copy() 
 
 
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
@@ -197,10 +161,19 @@ plt.hist(r2.reshape(r2.size), bins=25)
 r3 = np.mean(r, axis = 3)
 plt.figure("r histogram")
 plt.hist(r3.reshape(r3.size), bins=25)
+
+X = np.linspace(0, 5, 100)
+Y1 = params['robustness']["tuning"]["s1"]*np.exp(-X) - params['robustness']["tuning"]["t"]
+Y2 = params['robustness']["tuning"]["s2"]*np.exp(-X) - params['robustness']["tuning"]["t"]
+plt.figure("robustness")
+plt.plot(X, np.clip(Y1, 0,1), label = "s1 (discontinuous alignment)")
+plt.plot(X, np.clip(Y2, 0,1), label = "s2 (continuous alignment)")
+plt.xlabel("(d/sigma)²")
+plt.ylabel("R")
+plt.legend()
 #%% kernels
-def plot_merge(cov_i, D, pos):
-    cov_i = cov_i[pos]
-    D = D[pos]
+def plot_merge(covs_i, Dist, pos):
+    cov_i = covs_i[(0,) + pos]
     L = np.linspace(-5, 5, 100)
     Xm, Ym = np.meshgrid(L,L)
     Z = np.empty_like(Xm)
@@ -210,25 +183,57 @@ def plot_merge(cov_i, D, pos):
     plt.gca().invert_yaxis()
     plt.scatter([0], [0], c='k', marker ='o')
     
-    dist = abs(D[1,1,0] - D[1,0,0]) # for scale
-    Dx_red = [D[0,1,0] + 2*i*dist for i in range(-1, 2)] * 3
-    Dy_red = [D[0,1,1] + 2*i*dist for i in range(-1, 2)]
-    Dy_red = [item for item in Dy_red for repetition in range(3)]
-    plt.scatter(Dx_red, Dy_red, c='r', marker ='x')
-    
-    Dx_blue = [D[1,0,0] + 2*i*dist for i in range(-1, 2)] * 3
-    Dy_blue = [D[1,0,1] + 2*i*dist for i in range(-1, 2)]
-    Dy_blue = [item for item in Dy_blue for repetition in range(3)]
-    plt.scatter(Dx_blue, Dy_blue, c='b', marker ='x')
-    
-    Dx_green = [D[0, 0,0] + 2*i*dist for i in range(-1, 2)] * 3
-    Dy_green = [D[0, 0,1] + 2*i*dist for i in range(-1, 2)]
-    Dy_green = [item for item in Dy_green for repetition in range(3)]
-    plt.scatter(Dx_green, Dy_green, c='g', marker ='x')
-    Dx_green = [D[1,1,0] + 2*i*dist for i in range(-1, 2)] * 3
-    Dy_green = [D[1,1,1] + 2*i*dist for i in range(-1, 2)]
-    Dy_green = [item for item in Dy_green for repetition in range(3)]
-    plt.scatter(Dx_green, Dy_green, c='g', marker ='x')
+    for image in range(Dist.shape[0]):
+        D = Dist[(image,) + pos]
+        dist = abs(D[1,1,0] - D[1,0,0]) # for scale
+        Dx_red = [D[0,1,0] + 2*i*dist for i in range(-1, 2)] * 3
+        Dy_red = [D[0,1,1] + 2*i*dist for i in range(-1, 2)]
+        Dy_red = [item for item in Dy_red for repetition in range(3)]
+        weights = []
+        d = np.empty(2)
+        for i in range(len(Dx_red)):
+            d[0] = Dx_red[i]
+            d[1] = Dy_red[i]
+            y = d@covs_i[(image,) + pos]@d
+            weights.append(200*np.exp(-0.5*y))
+            
+        plt.scatter(Dx_red, Dy_red, s=weights, c='r', marker ='x')
+        
+        Dx_blue = [D[1,0,0] + 2*i*dist for i in range(-1, 2)] * 3
+        Dy_blue = [D[1,0,1] + 2*i*dist for i in range(-1, 2)]
+        Dy_blue = [item for item in Dy_blue for repetition in range(3)]
+        weights = []
+        d = np.empty(2)
+        for i in range(len(Dx_blue)):
+            d[0] = Dx_blue[i]
+            d[1] = Dy_blue[i]
+            y = d@covs_i[(image,) + pos]@d
+            weights.append(200*np.exp(-0.5*y))
+        plt.scatter(Dx_blue, Dy_blue, s=weights, c='b', marker ='x')
+        
+        Dx_green = [D[0, 0,0] + 2*i*dist for i in range(-1, 2)] * 3
+        Dy_green = [D[0, 0,1] + 2*i*dist for i in range(-1, 2)]
+        Dy_green = [item for item in Dy_green for repetition in range(3)]
+        weights = []
+        d = np.empty(2)
+        for i in range(len(Dx_green)):
+            d[0] = Dx_green[i]
+            d[1] = Dy_green[i]
+            y = d@covs_i[(image,) + pos]@d
+            weights.append(200*np.exp(-0.5*y))
+        plt.scatter(Dx_green, Dy_green, s=weights, c='g', marker ='x')
+        
+        Dx_green = [D[1,1,0] + 2*i*dist for i in range(-1, 2)] * 3
+        Dy_green = [D[1,1,1] + 2*i*dist for i in range(-1, 2)]
+        Dy_green = [item for item in Dy_green for repetition in range(3)]
+        weights = []
+        d = np.empty(2)
+        for i in range(len(Dx_green)):
+            d[0] = Dx_green[i]
+            d[1] = Dy_green[i]
+            y = d@covs_i[(image,) + pos]@d
+            weights.append(200*np.exp(-0.5*y))
+        plt.scatter(Dx_green, Dy_green, s=weights, c='g', marker ='x')
     
     
     

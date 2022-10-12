@@ -73,7 +73,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
     native_im_size = ref_img.shape
     # casting to integer to account for floating scale
     output_size = (round(SCALE*native_im_size[0]), round(SCALE*native_im_size[1]))
-    output_img = cuda.device_array(output_size+(22,), dtype = DEFAULT_NUMPY_FLOAT_TYPE) #third dim for rgb channel
+    output_img = cuda.device_array(output_size+(22 + 13*N_IMAGES,), dtype = DEFAULT_NUMPY_FLOAT_TYPE) #third dim for rgb channel
     # TODO 3 channels are enough, the rest is for debugging
 
 
@@ -258,9 +258,9 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                     dist[1] = (fine_sub_pos_y - output_pixel_idy)
                 
                     # TODO Debugging
-                    if image_index == 0 and tx==0 and ty==0:
-                        output_img[output_pixel_idy, output_pixel_idx, 13 + 4*i + 2*j] = dist[0]
-                        output_img[output_pixel_idy, output_pixel_idx, 13 + 4*i + 2*j + 1] = dist[1]
+                    if tx==0 and ty==0:
+                        output_img[output_pixel_idy, output_pixel_idx, 13 + image_index*12 + 4*i + 2*j] = dist[0]
+                        output_img[output_pixel_idy, output_pixel_idx, 13 + image_index*12 + 4*i + 2*j + 1] = dist[1]
                 
 
                     y = max(0, quad_mat_prod(cov_i, dist))
@@ -273,23 +273,25 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                     # else:
                     #     w=0
                     # TODO debug
-
-                    cuda.atomic.add(val, channel, c*w*local_r)
-                    cuda.atomic.add(acc, channel, w*local_r)
-                
+                    
+                    # TODO debug
+                    # if image_index == 0 :
+                    cuda.atomic.add(val, channel, c*w)#*local_r)
+                    cuda.atomic.add(acc, channel, w)#*local_r)
+                    
                     # TODO debugging only
-                    if image_index == 0 :
-                        if tx == 0 and ty == 0 and i==0 and j==0:
+                    if tx == 0 and ty == 0 and i==0 and j==0:
+                        if image_index == 0 :
                             output_img[output_pixel_idy, output_pixel_idx, 3] = DEBUG_E1[0]
                             output_img[output_pixel_idy, output_pixel_idx, 4] = DEBUG_E1[1]
                             output_img[output_pixel_idy, output_pixel_idx, 5] = DEBUG_E2[0]
                             output_img[output_pixel_idy, output_pixel_idx, 6] = DEBUG_E2[1]
                             output_img[output_pixel_idy, output_pixel_idx, 7] = DEBUG_L[0]
                             output_img[output_pixel_idy, output_pixel_idx, 8] = DEBUG_L[1]
-                            output_img[output_pixel_idy, output_pixel_idx, 9] = cov_i[0, 0]
-                            output_img[output_pixel_idy, output_pixel_idx, 10] = cov_i[0, 1]
-                            output_img[output_pixel_idy, output_pixel_idx, 11] = cov_i[1, 0]
-                            output_img[output_pixel_idy, output_pixel_idx, 12] = cov_i[1, 1]
+                        output_img[output_pixel_idy, output_pixel_idx, 9 + image_index*12] = cov_i[0, 0]
+                        output_img[output_pixel_idy, output_pixel_idx, 10 + image_index*12] = cov_i[0, 1]
+                        output_img[output_pixel_idy, output_pixel_idx, 11 + image_index*12] = cov_i[1, 0]
+                        output_img[output_pixel_idy, output_pixel_idx, 12 + image_index*12] = cov_i[1, 1]
                         
                 
             
