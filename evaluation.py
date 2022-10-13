@@ -226,7 +226,7 @@ def align_lk(dec_burst, params):
     tile_size_lk = params["kanade"]['tuning']['tileSize']
 
     lk_alignment = lucas_kanade_optical_flow(
-        dec_burst[0], dec_burst[1:], pre_alignment, options, params['kanade'], debug=True)
+        dec_burst[0], dec_burst[1:], pre_alignment, options, params['kanade'], debug=True, filt=False)
     lk_alignment[-1][ :, :, :, -2:]/=2 #last alignment is multiplied by 2 by the LK flow function
     for i,x in enumerate(lk_alignment):
         lk_alignment[i][ :, :, :, -2:] = 2*x[:, :, :, -2:]
@@ -458,7 +458,7 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 # print('farneback evaluated : ', time()-t1)
 
 # #%% evaluating lk bayer
-# lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255,  label = "LK gauss + Hamming", imshow=False, params=params)
+# lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255,  label = "LK not filtered", imshow=False, params=params)
 # fb_warped_images, fb_im_EQ = evaluate_alignment(fb_alignment[None], burst[1:]/255, burst[0]/255, label = "FarneBack", imshow=True, params=params)
 
 # #%% ploting burst

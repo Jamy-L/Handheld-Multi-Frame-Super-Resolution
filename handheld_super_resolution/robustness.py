@@ -348,10 +348,10 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         elif ty==0 and tx==0 and not bayer_mode:
             # normalizing
             local_stats_ref[0, 0] /= 9
-            local_stats_ref[1, 0] = sqrt(local_stats_ref[1, 0]/9 -  local_stats_ref[0, 0]**2)
+            local_stats_ref[1, 0] = sqrt(local_stats_ref[1, 0]/9 - local_stats_ref[0, 0]**2)
             
             local_stats_comp[0, 0] /= 9
-            local_stats_comp[1, 0] = sqrt(local_stats_comp[1, 0]/9 -  local_stats_comp[0, 0]**2)
+            local_stats_comp[1, 0] = sqrt(local_stats_comp[1, 0]/9 - local_stats_comp[0, 0]**2)
             
             # mapping the brightness from [0, 1] to the related index on the noise model curve
             id_noise = round(1000 *local_stats_comp[0, 0])
@@ -364,6 +364,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
             # noise correction
             sigma[0] = max(sigma_t, local_stats_comp[1, 0])
             dp[0] = dp[0]*(dp[0]**2/(dp[0]**2 + dt**2))
+            # sigma[0] = local_stats_comp[1, 0]
         
 
         compute_m(flows, mini, maxi, bayer_mode, M)
@@ -371,8 +372,14 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         
         if ty == 0 and bayer_mode:
             if sqrt(M[0]**2 + M[1]**2) > Mt:
+                # R[image_index, pixel_idy, pixel_idx, 0] = dp[0] **2
+                # R[image_index, pixel_idy, pixel_idx, 1] = sigma[0] **2
+                # R[image_index, pixel_idy, pixel_idx, 2] = dp[0] **2/sigma[0]
                 R[image_index, pixel_idy, pixel_idx, tx] = clamp(s1*exp(-dp[tx]**2/sigma[tx]**2) - t, 0, 1)
             else:
+                # R[image_index, pixel_idy, pixel_idx, 0] = dp[0] **2
+                # R[image_index, pixel_idy, pixel_idx, 1] = sigma[0] **2
+                # R[image_index, pixel_idy, pixel_idx, 2] = dp[0] **2/sigma[0]
                 R[image_index, pixel_idy, pixel_idx, tx] = clamp(s2*exp(-dp[tx]**2/sigma[tx]**2) - t, 0, 1)
         
         elif ty == 0 and tx == 0 and not bayer_mode :
@@ -445,12 +452,13 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         current_time = getTime(
             current_time, ' - Robustness locally minimized')
     return R, r
+    # return R, r
 
 @cuda.jit(device=True)
-def fetch_robustness(pos_x, pos_y,image_index, R, channel):
+def fetch_robustness(pos_x, pos_y, image_index, R, channel):
 
-    downscaled_posx = round(pos_x//2)
-    downscaled_posy = round(pos_y//2)
+    downscaled_posx = round((pos_x - 0.5)/2)
+    downscaled_posy = round((pos_y - 0.5)/2)
     
     # TODO Neirest neighboor is made here. Maybe bilinear interpolation is better ?
     return max(0, R[image_index, downscaled_posy, downscaled_posx, channel])

@@ -142,15 +142,18 @@ def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
 
 
     """
+    k_stretch = 1
+    k_shrink = 1
+    # TODO debug
+    
     A = 1+sqrt((l1 - l2)/(l1 + l2))
-    D = clamp(1 - sqrt(l1)/D_tr+D_th, 0, 1)
+    D = clamp(1 - sqrt(l1)/D_tr + D_th, 0, 1)
     k_1 = k_detail*k_stretch*A
     k_2 = k_detail/(k_shrink*A)
     
 
     k_1 = ((1-D)*k_1 + D*k_detail*k_denoise)**2
-    
-    k_2 = ((1-D)*k_2 + D*k_detail*k_denoise)
+    k_2 = ((1-D)*k_2 + D*k_detail*k_denoise)**2
     
     k[0] = k_1
     k[1] = k_2 
@@ -264,10 +267,18 @@ def compute_kernel_covs(image, center_pos_x, center_pos_y, covs,
             DEBUG_E1[0] = e1[0]; DEBUG_E1[1] = e1[1]
             DEBUG_E2[0] = e2[0]; DEBUG_E2[1] = e2[1]
             DEBUG_L[0] = l[0]; DEBUG_L[1] = l[1]
-
-        for i in range(2):
-            for j in range(2):
-                covs[typ, txp, i, j] = k[1]*e1[j]*e1[i] + k[0]*e2[j]*e2[i] # TODO k are inverted
+        
+        
+        k1 = k[1]
+        k2 = k[0]
+        covs[typ, txp, 0, 0] = k1*e1[0]*e1[0] + k2*e2[0]*e2[0]
+        covs[typ, txp, 0, 1] = k1*e1[0]*e1[1] + k2*e2[0]*e2[1]
+        covs[typ, txp, 1, 0] = covs[typ, txp, 0, 1]
+        covs[typ, txp, 1, 1] = k1*e1[1]*e1[1] + k2*e2[1]*e2[1]
+        
+        # for i in range(2):
+        #     for j in range(2):
+        #         covs[typ, txp, i, j] = k[0]*e1[j]*e1[i] + k[1]*e2[j]*e2[i] # TODO k are inverted
         
 
 @cuda.jit(device=True) 
@@ -314,14 +325,24 @@ def compute_interpolated_kernel_cov(image, fine_center_pos, cov_i,
         interpolate_cov(covs, fine_center_pos, interpolated_cov)
     
     # 3 Inverting cov(single threaded)
+    # TODO debug
         if interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0] > 1e-6:
             invert_2x2(interpolated_cov, cov_i)
+        # cov_i[0, 0] = interpolated_cov[0, 0]
+        # cov_i[0, 1] = interpolated_cov[0, 1]
+        # cov_i[1, 0] = interpolated_cov[1, 0]
+        # cov_i[1, 1] = interpolated_cov[1, 1]
+        # cov_i[0, 0] = 2
+        # cov_i[0, 1] = 0
+        # cov_i[1, 0] = 0
+        # cov_i[1, 1] = 2
         
-        else:
-            # For constant luminance patch, this a dummy filter
-            # TODO mayber a better patch in this case ?
-            cov_i[0, 0] = 1
-            cov_i[0, 1] = 0
-            cov_i[1, 0] = 1
-            cov_i[1, 1] = 0
+        
+        # else:
+        #     # For constant luminance patch, this a dummy filter
+        #     # TODO mayber a better patch in this case ?
+        #     cov_i[0, 0] = 1
+        #     cov_i[0, 1] = 0
+        #     cov_i[1, 0] = 1
+        #     cov_i[1, 1] = 0
     

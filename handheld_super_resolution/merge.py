@@ -231,8 +231,11 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                         local_r = 1 # for all 9 threads and each 4 pixels
                     elif 0 <= thread_tl_pixel_idx < input_size_x - 1 and 0 <= thread_tl_pixel_idy < input_size_y - 1: # inbound
                         if bayer_mode : 
-                            local_r = fetch_robustness(thread_tl_pixel_idx, thread_tl_pixel_idy, image_index - 1, r, channel) # r is different for every thread, and i,j are driving the channel
+                            local_r = fetch_robustness(coarse_ref_sub_pos[1] + 2*tx,
+                                                       coarse_ref_sub_pos[0] + 2*ty,
+                                                       image_index - 1, r, channel) # r is different for every thread, and i,j are driving the channel
                         else:
+                            # TODO need to fix this to be coherent with bayer case
                             # pos is divided by 2 during fetching, because grey is twice smaller.
                             local_r = fetch_robustness((thread_tl_pixel_idx+j) * 2, (thread_tl_pixel_idy+i) * 2, image_index - 1, r, 0)
                         
@@ -266,7 +269,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                     y = max(0, quad_mat_prod(cov_i, dist))
                     # y can be slightly negative because of numerical precision.
                     # I clamp it to not explode the error with exp
-
+                    
                     w = math.exp(-0.5*y/(SCALE**2)) 
                     # if abs(dist[0]) <= 1 and abs(dist[1]) <= 1:
                     #     w=1

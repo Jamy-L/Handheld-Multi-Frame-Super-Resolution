@@ -11,6 +11,7 @@ from math import floor, ceil, modf, exp
 import numpy as np
 import cv2
 from numba import cuda, float32, float64, int16
+from scipy.ndimage import gaussian_filter1d
 
 from .linalg import bicubic_interpolation
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, hann, hamming
@@ -65,7 +66,7 @@ def bm_to_lk_alignment(alignment_lk, alignment_bm, tile_size_lk, tile_size_bm, i
     cuda_bm_to_lk[blockspergrid, threadsperblock](alignment_lk, alignment_bm)
     
 
-def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params, debug = False):
+def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params, debug = False, filt = False):
     """
     Computes the displacement based on a naive implementation of
     Lucas-Kanade optical flow (https://www.cs.cmu.edu/~16385/s15/lectures/Lecture21.pdf)
@@ -107,6 +108,13 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params,
         t1 = time()
         current_time = time()
         print("Estimating Lucas-Kanade's optical flow")
+        
+    if filt : 
+        ref_img = gaussian_filter1d(ref_img, 2, axis = 0)
+        ref_img = gaussian_filter1d(ref_img, 2, axis = 1)
+        
+        comp_img = gaussian_filter1d(comp_img, 2, axis = 1)
+        comp_img = gaussian_filter1d(comp_img, 2, axis = 2)
     
     if params["mode"] == "bayer" : 
         # grey level

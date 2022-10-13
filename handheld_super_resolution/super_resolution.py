@@ -48,7 +48,7 @@ def main(ref_img, comp_imgs, options, params):
     
     
     cuda_final_alignment = lucas_kanade_optical_flow(
-        ref_img, comp_imgs, pre_alignment, options, params['kanade'])
+        ref_img, comp_imgs, pre_alignment, options, params['kanade'], filt=True)
     
     
     if verbose : 
