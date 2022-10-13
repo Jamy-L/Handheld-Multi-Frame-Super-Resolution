@@ -147,11 +147,24 @@ for image_index in range(comp_images.shape[0]):
     plt.figure("image {}".format(image_index))
     plt.imshow(warped, cmap = 'gray')
     plt.figure("EQ {}".format(image_index))
-    plt.imshow(np.log10((ref_grey_image - warped)**2),vmin = -4, vmax =0 , cmap="Reds")
+    plt.imshow(np.log10((ref_grey_image - warped)**2),vmin = -4, vmax =0 , cmap="gray")
     plt.colorbar()
     
     print("Im {}, EQM = {}".format(image_index, np.mean((ref_grey_image - warped)**2)))
-    
+
+#%% warp optical flow rgb
+
+plt.figure('ref rgb')    
+plt.imshow(raw2rgb.postprocess(raw_ref_img, colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(ref_img[:750, :750], pattern = "GRBG"), xyz2cam=xyz2cam))  
+
+upscaled_al = upscale_alignement(alignment, ref_img[:750, :750].shape, 16*2) 
+for image_index in range(comp_images.shape[0]):
+    warped = warp_flow(colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(comp_images[image_index, :750, :750], pattern = "GRBG"), upscaled_al[image_index], rgb = True)
+    plt.figure("image {} warped".format(image_index))
+    plt.imshow(raw2rgb.postprocess(raw_ref_img, warped, xyz2cam=xyz2cam))
+for image_index in range(comp_images.shape[0]):
+    plt.figure("image {}".format(image_index))
+    plt.imshow(raw2rgb.postprocess(raw_ref_img, colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(comp_images[image_index, :750, :750], pattern = "GRBG"), xyz2cam=xyz2cam))
   
 
 #%% histograms
@@ -172,13 +185,14 @@ plt.xlabel("(d/sigma)²")
 plt.ylabel("R")
 plt.legend()
 #%% kernels
-def plot_merge(covs_i, Dist, pos):
-    cov_i = covs_i[(0,) + pos]
+def plot_merge(covs_i, Dist, pos, id_plot = 0):
+    cov_i = covs_i[(id_plot,) + pos]
     L = np.linspace(-5, 5, 100)
     Xm, Ym = np.meshgrid(L,L)
     Z = np.empty_like(Xm)
     Z = cov_i[0,0] * Xm**2 + (cov_i[1, 0] + cov_i[0, 1])*Xm*Ym + cov_i[1, 1]*Ym**2
     plt.figure("merge in (x = {}, y = {})".format(pos[1],pos[0]))
+    plt.title("kernel of image {} rerpesented".format(id_plot))
     plt.pcolor(Xm, Ym, np.exp(-Z/2), vmin = 0, vmax=1)
     plt.gca().invert_yaxis()
     plt.scatter([0], [0], c='k', marker ='o')
@@ -248,26 +262,29 @@ def plot_merge(covs_i, Dist, pos):
 
 for im_id in range(R.shape[0]):
     plt.figure('accumulated r '+str(im_id))
-    plt.imshow(np.mean(r[im_id], axis = 2), cmap = "gray")
-
-
-# plt.figure('patchwise error')
-# plt.imshow(np.mean(r[2], axis = 2), cmap="jet", vmin = 0, vmax = 1)
-# plt.colorbar()
-
-# plt.figure("warped error")
-# warped = warp_flow(comp_grey_images[2], upscaled_al[2], rgb = False)
-# plt.imshow(np.log10((warped - ref_grey_image)**2), cmap = "Reds", vmax = 0, vmin = -10)
-# plt.colorbar()
-
+    plt.imshow(np.mean(r[im_id], axis = 2), cmap = "gray", interpolation='none')
     
-# plt.figure('r')
-# plt.imshow(r[5]/np.max(r[5], axis=(0,1)))
-# plt.figure("accumulated r")
-# plt.imshow(np.mean(r[5]/np.max(r[5], axis=(0,1)), axis = 2), cmap = "gray")
+# for im_id in range(R.shape[0]):
+#     plt.figure('accumulated R '+str(im_id))
+#     plt.imshow(np.mean(R[im_id, 875:1100, 1100:1300], axis = 2), cmap = "gray", interpolation='none')
 
-# plt.figure('R')
-# plt.imshow(R[5]/np.max(R[5], axis=(0,1)))
+
+
+# for im_id in range(R.shape[0]):
+#     plt.figure('patchwise error '+str(im_id))
+#     plt.imshow(R[im_id, 875:1100, 1100:1300, 0], vmax = np.max(R[:, 875:1100, 1100:1300, 0]), cmap="gray", interpolation='none')
+#     plt.colorbar()
+
+# for im_id in range(R.shape[0]):
+#     plt.figure('std '+str(im_id))
+#     plt.imshow(R[im_id, 875:1100, 1100:1300, 1], vmin = 0, vmax = np.max(R[:, 875:1100, 1100:1300, 1]), cmap="gray", interpolation='none')
+#     plt.colorbar()
+
+# for im_id in range(R.shape[0]):
+#     plt.figure('rapport '+str(im_id))
+#     plt.imshow(R[im_id, 875:1100, 1100:1300, 2], cmap="gray", vmin = 0, vmax=1, interpolation='none')
+#     plt.colorbar()
+
 
 
 #%% eighen vectors
@@ -285,7 +302,4 @@ for im_id in range(R.shape[0]):
 #            -e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale)
 # plt.quiver(e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
 #            -e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale, color='b')
-
-
-# img = process_isp(raw=raw_ref_img, img=(output_img/1023), do_color_correction=False, do_tonemapping=True, do_gamma=True, do_sharpening=False)
 

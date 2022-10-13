@@ -186,8 +186,8 @@ def invert_2x2(M, M_i):
     
 @cuda.jit(device=True)
 def quad_mat_prod(A, X):
-    _ = A[0, 0]*X[0]*X[0] + X[0]*X[1]*(A[0, 1] + A[1, 0]) + A[1, 1]*X[1]*X[1]
-    return _
+    y = A[0, 0]*X[0]*X[0] + X[0]*X[1]*(A[0, 1] + A[1, 0]) + A[1, 1]*X[1]*X[1]
+    return y
 
 @cuda.jit(device=True)
 def get_real_polyroots_2(a, b, c, roots):

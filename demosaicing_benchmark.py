@@ -259,34 +259,38 @@ for im_id, filename in tqdm(enumerate(os.listdir(DATASET_PATH)), total=N_images)
     impath = DATASET_PATH/filename
     
     ground_truth = plt.imread(impath.as_posix()).astype(np.float64)
+    #  ensuring the image can be decimated into Bayer
     if ground_truth.shape[0]%2 == 1:
         ground_truth = ground_truth[:-1,:]
     if ground_truth.shape[1]%2 == 1:
         ground_truth = ground_truth[:,:-1]
         
-    burst, _ = single2lrburst(ground_truth, 10, downsample_factor=1, transformation_params=transformation_params)
+    burst, _ = single2lrburst(ground_truth, 15, downsample_factor=1, transformation_params=transformation_params)
     dec_burst = decimate(burst).astype(np.float32)
-    
-    handheld_output = main(dec_burst[0], dec_burst[1:], options, params)[0][:, :, :3].astype(np.float64)
-    malvar_output = colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(dec_burst[0], pattern='BGGR')
-    bilinear_output = colour_demosaicing.demosaicing_CFA_Bayer_bilinear(dec_burst[0], pattern='BGGR')
+        
     with torch.no_grad():
         mosaic = demosaicnet.bayer(np.transpose(burst[0], [2, 0, 1]))
         mosaicnet_output = demosaicnet_bayer(torch.from_numpy(mosaic).unsqueeze(0)).squeeze(0).cpu().numpy()
     mosaicnet_output = np.clip(mosaicnet_output, 0, 1).transpose(1,2,0).astype(np.float64)
-    
-    PSNR["handheld"][im_id] = computePSNR(ground_truth, handheld_output)
-    PSNR["malvar"][im_id] = computePSNR(ground_truth, malvar_output)
-    PSNR["bilinear"][im_id] = computePSNR(ground_truth, bilinear_output)
-    
-    SSIM["handheld"][im_id] = ssim(ground_truth, handheld_output, channel_axis=2)
-    SSIM["malvar"][im_id] = ssim(ground_truth, malvar_output, channel_axis=2)
-    SSIM["bilinear"][im_id] = ssim(ground_truth, bilinear_output, channel_axis=2)
-    
     # mosaicnet is outputing a cropped image. We need to crop ground truth
     crop = int((ground_truth.shape[0] - mosaicnet_output.shape[0])/2)
+    
+    handheld_output = main(dec_burst[0], dec_burst[1:], options, params)[0][:, :, :3].astype(np.float64)
+    malvar_output = colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(dec_burst[0], pattern='BGGR')
+    bilinear_output = colour_demosaicing.demosaicing_CFA_Bayer_bilinear(dec_burst[0], pattern='BGGR')
+
+    
+    PSNR["handheld"][im_id] = computePSNR(ground_truth[crop:-crop, crop:-crop], handheld_output[crop:-crop, crop:-crop])
+    PSNR["malvar"][im_id] = computePSNR(ground_truth[crop:-crop, crop:-crop], malvar_output[crop:-crop, crop:-crop])
+    PSNR["bilinear"][im_id] = computePSNR(ground_truth[crop:-crop, crop:-crop], bilinear_output[crop:-crop, crop:-crop])
+    
+    SSIM["handheld"][im_id] = ssim(ground_truth[crop:-crop, crop:-crop], handheld_output[crop:-crop, crop:-crop], channel_axis=2)
+    SSIM["malvar"][im_id] = ssim(ground_truth[crop:-crop, crop:-crop], malvar_output[crop:-crop, crop:-crop], channel_axis=2)
+    SSIM["bilinear"][im_id] = ssim(ground_truth[crop:-crop, crop:-crop], bilinear_output[crop:-crop, crop:-crop], channel_axis=2)
+    
     PSNR["mosaicnet"][im_id] = computePSNR(ground_truth[crop:-crop, crop:-crop], mosaicnet_output)
     SSIM["mosaicnet"][im_id] = ssim(ground_truth[crop:-crop, crop:-crop], mosaicnet_output, channel_axis=2)
+    
 
 #%% ploting result
 
