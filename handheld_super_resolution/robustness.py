@@ -55,15 +55,11 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
     
     if params["mode"]=='bayer':
         rgb_imshape_y, rgb_imshape_x = int(imshape_y/2), int(imshape_x/2)
-        
-        r = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x, 3))
-        R = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x, 3))
     else:
         rgb_imshape_y, rgb_imshape_x = imshape_y, imshape_x
 
-        
-        r = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x, 1))
-        R = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x, 1))
+    r = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x))
+    R = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x))
     rgb_imshape = (rgb_imshape_y, rgb_imshape_x)
     
     
@@ -296,7 +292,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         # For each block, the ref guide patch and the matching compared guide image are computed
         compute_guide_patchs(ref_img, comp_imgs, flows, bayer_mode, guide_patch_ref, guide_patch_comp)
         
-        local_stats_ref = cuda.shared.array((2, 3), dtype=DEFAULT_CUDA_FLOAT_TYPE) #mu, sigma for rgb
+        local_stats_ref = cuda.shared.array((2, 3), dtype=DEFAULT_CUDA_FLOAT_TYPE) #mu, sigma² for rgb
         local_stats_comp = cuda.shared.array((2,3), dtype=DEFAULT_CUDA_FLOAT_TYPE)
         
         maxi = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) #Max Vx, Vy
@@ -321,29 +317,41 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         
         compute_local_stats(guide_patch_ref, guide_patch_comp,
                             local_stats_ref, local_stats_comp)
-        cuda.syncthreads()
         
-        dp = cuda.shared.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-        sigma = cuda.shared.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        dp = cuda.shared.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        dp[0] = 0
+        sigma = cuda.shared.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        sigma[0] = 0
+        cuda.syncthreads()
         if ty ==0 and bayer_mode:
             # normalizing
             local_stats_ref[0, tx] /= 9 # one thread for each color channel = no racing condition
-            local_stats_ref[1, tx] = sqrt(local_stats_ref[1, tx]/9 -  local_stats_ref[0, tx]**2)
+            local_stats_ref[1, tx] = local_stats_ref[1, tx]/9 -  local_stats_ref[0, tx]**2
             
             local_stats_comp[0, tx] /= 9
-            local_stats_comp[1, tx] = sqrt(local_stats_comp[1, tx]/9 -  local_stats_comp[0, tx]**2)
+            local_stats_comp[1, tx] = local_stats_comp[1, tx]/9 -  local_stats_comp[0, tx]**2
             
+            # accumulating colors channels to compute color diff and std
+            cuda.atomic.add(dp, 0, (local_stats_ref[0, tx] - local_stats_comp[0, tx])**2)
+            cuda.atomic.add(sigma, 0, local_stats_comp[1, tx])
+            
+        cuda.syncthreads()
+        
+        if tx == 0 and ty == 0 and bayer_mode:
+            brightness = (local_stats_ref[0, 0] + local_stats_ref[0, 1] + local_stats_ref[0, 2])/3 
             # mapping the brightness from [0, 1] to the related index on the noise model curve
-            id_noise = round(1000 *local_stats_comp[0, tx])
+            id_noise = round(1000 *brightness)
             
             # fetching noise model values
             dt = cuda_diff_curve[id_noise]  
             sigma_t = cuda_std_curve[id_noise]
             
-            dp[tx] = abs(local_stats_ref[0, tx] - local_stats_comp[0, tx])
+            dp[0] = sqrt(dp[0])
+            sigma[0] = sqrt(sigma[0])
+            
             # noise correction
-            sigma[tx] = max(sigma_t, local_stats_comp[1, tx])
-            dp[tx] = dp[tx]*(dp[tx]**2/(dp[tx]**2 + dt**2))
+            sigma[0] = max(sigma_t, sigma[0])
+            dp[0] = dp[0]*(dp[0]**2/(dp[0]**2 + dt**2))
             
         elif ty==0 and tx==0 and not bayer_mode:
             # normalizing
@@ -364,47 +372,39 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
             # noise correction
             sigma[0] = max(sigma_t, local_stats_comp[1, 0])
             dp[0] = dp[0]*(dp[0]**2/(dp[0]**2 + dt**2))
-            # sigma[0] = local_stats_comp[1, 0]
+
         
 
         compute_m(flows, mini, maxi, bayer_mode, M)
         cuda.syncthreads()
         
-        if ty == 0 and bayer_mode:
-            if sqrt(M[0]**2 + M[1]**2) > Mt:
-                R[image_index, pixel_idy, pixel_idx, 0] = dp[0] **2/sigma[0]
-                R[image_index, pixel_idy, pixel_idx, 1] = dp[1] **2/sigma[1]
-                R[image_index, pixel_idy, pixel_idx, 2] = dp[2] **2/sigma[2]
+        if ty == 0 and tx == 0 and bayer_mode:
+            if (M[0]*M[0] + M[1]*M[1]) > Mt*Mt:
+                # R[image_index, pixel_idy, pixel_idx] = dp[0] **2/sigma[0]**2
                 
-                # R[image_index, pixel_idy, pixel_idx, 2] = 0
-                
-                # R[image_index, pixel_idy, pixel_idx, tx] = clamp(s1*exp(-dp[tx]**2/sigma[tx]**2) - t, 0, 1)
+                R[image_index, pixel_idy, pixel_idx] = clamp(s1*exp(-dp[0]**2/sigma[0]**2) - t, 0, 1)
             else:
-                R[image_index, pixel_idy, pixel_idx, 0] = dp[0] **2/sigma[0]
-                R[image_index, pixel_idy, pixel_idx, 1] = dp[1] **2/sigma[1]
-                R[image_index, pixel_idy, pixel_idx, 2] = dp[2] **2/sigma[2]
+                # R[image_index, pixel_idy, pixel_idx] = dp[0] **2/sigma[0]**2
                 
-                # R[image_index, pixel_idy, pixel_idx, 2] = 1
-                
-                # R[image_index, pixel_idy, pixel_idx, tx] = clamp(s2*exp(-dp[tx]**2/sigma[tx]**2) - t, 0, 1)
+                R[image_index, pixel_idy, pixel_idx] = clamp(s2*exp(-dp[0]**2/sigma[0]**2) - t, 0, 1)
         
         elif ty == 0 and tx == 0 and not bayer_mode :
-            if sqrt(M[0]**2 + M[1]**2) > Mt:
-                R[image_index, pixel_idy, pixel_idx, 0] = clamp(s1*exp(-dp[0]**2/sigma[0]**2) - t, 0, 1)
+            if (M[0]*M[0] + M[1]*M[1]) > Mt*Mt:
+                R[image_index, pixel_idy, pixel_idx] = clamp(s1*exp(-dp[0]**2/sigma[0]**2) - t, 0, 1)
             else:
-                R[image_index, pixel_idy, pixel_idx, 0] = clamp(s1*exp(-dp[0]**2/sigma[0]**2) - t, 0, 1)
+                R[image_index, pixel_idy, pixel_idx] = clamp(s2*exp(-dp[0]**2/sigma[0]**2) - t, 0, 1)
         
     @cuda.jit
-    def compute_local_min(R, bayer_mode, r):
+    def compute_local_min(R, r):
         """
         For each pixel of R, the minimum in a 5 by 5 window is estimated in parallel
         and stored in r.
 
         Parameters
         ----------
-        R : Array[n_images, imsize_y/2, imsize_x/2, 3]
-            Robustness map for every image, for the r, g and b channels
-        r : Array[n_images, imsize_y/2, imsize_x/2, 3]
+        R : Array[n_images, imsize_y/2, imsize_x/2]
+            Robustness map for every image
+        r : Array[n_images, imsize_y/2, imsize_x/2]
             locally minimised version of R
 
         Returns
@@ -414,29 +414,20 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         """
         image_index, pixel_idy, pixel_idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
         tx, ty = cuda.threadIdx.x - 2, cuda.threadIdx.y - 2
-        if bayer_mode : 
-            mini = cuda.shared.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-        else : 
-            mini = cuda.shared.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-        if tx == 0 and ty >= 0 and bayer_mode:
-            mini[ty] = 1/0 # + inf
-        elif not bayer_mode and tx == 0 and ty == 0:
+
+        mini = cuda.shared.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+
+        if tx == 0 and ty == 0:
             mini[0] = 1/0
-            
         cuda.syncthreads()
         
         #local min search
-        if 0 <= pixel_idx + tx < rgb_imshape_x and 0<= pixel_idy + ty < rgb_imshape_y : #inbound
-            cuda.atomic.min(mini, 0, R[image_index, pixel_idy + ty, pixel_idx + tx, 0])
-            if bayer_mode : 
-                cuda.atomic.min(mini, 1, R[image_index, pixel_idy + ty, pixel_idx + tx, 1])
-                cuda.atomic.min(mini, 2, R[image_index, pixel_idy + ty, pixel_idx + tx, 2])
+        if 0 <= pixel_idx + tx < rgb_imshape_x and 0 <= pixel_idy + ty < rgb_imshape_y : #inbound
+            cuda.atomic.min(mini, 0, R[image_index, pixel_idy + ty, pixel_idx + tx])
         
         cuda.syncthreads()
-        if tx == 0 and ty >= 0 and bayer_mode:
-            r[image_index, pixel_idy, pixel_idx, ty] = mini[ty]
-        elif tx==0 and ty==0 and not bayer_mode:
-            r[image_index, pixel_idy, pixel_idx, 0] = mini[0]
+        if tx==0 and ty==0 :
+            r[image_index, pixel_idy, pixel_idx] = mini[0]
         
         
         
@@ -447,26 +438,26 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         
     cuda_compute_robustness[(n_images, rgb_imshape_y, rgb_imshape_x), (3, 3)
         ](ref_img, comp_imgs, flows,cuda_diff_curve, cuda_std_curve, bayer_mode, R)
-    
+    cuda.synchronize()
     if VERBOSE > 2:
         current_time = getTime(
             current_time, ' - Robustness Estimated')
     
-    compute_local_min[(n_images, rgb_imshape_y, rgb_imshape_x), (5, 5)](R, bayer_mode, r)
-    
+    compute_local_min[(n_images, rgb_imshape_y, rgb_imshape_x), (5, 5)](R, r)
+    cuda.synchronize()
     if VERBOSE > 2:
         current_time = getTime(
             current_time, ' - Robustness locally minimized')
     return R, r
 
 @cuda.jit(device=True)
-def fetch_robustness(pos_x, pos_y, image_index, R, channel):
+def fetch_robustness(pos_x, pos_y, image_index, R):
 
     downscaled_posx = round((pos_x - 0.5)/2)
     downscaled_posy = round((pos_y - 0.5)/2)
     
     # TODO Neirest neighboor is made here. Maybe bilinear interpolation is better ?
-    return max(0, R[image_index, downscaled_posy, downscaled_posx, channel])
+    return max(0, R[image_index, downscaled_posy, downscaled_posx])
 
         
         
