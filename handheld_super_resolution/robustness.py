@@ -372,15 +372,21 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         
         if ty == 0 and bayer_mode:
             if sqrt(M[0]**2 + M[1]**2) > Mt:
-                # R[image_index, pixel_idy, pixel_idx, 0] = dp[0] **2
-                # R[image_index, pixel_idy, pixel_idx, 1] = sigma[0] **2
-                # R[image_index, pixel_idy, pixel_idx, 2] = dp[0] **2/sigma[0]
-                R[image_index, pixel_idy, pixel_idx, tx] = clamp(s1*exp(-dp[tx]**2/sigma[tx]**2) - t, 0, 1)
+                R[image_index, pixel_idy, pixel_idx, 0] = dp[0] **2/sigma[0]
+                R[image_index, pixel_idy, pixel_idx, 1] = dp[1] **2/sigma[1]
+                R[image_index, pixel_idy, pixel_idx, 2] = dp[2] **2/sigma[2]
+                
+                # R[image_index, pixel_idy, pixel_idx, 2] = 0
+                
+                # R[image_index, pixel_idy, pixel_idx, tx] = clamp(s1*exp(-dp[tx]**2/sigma[tx]**2) - t, 0, 1)
             else:
-                # R[image_index, pixel_idy, pixel_idx, 0] = dp[0] **2
-                # R[image_index, pixel_idy, pixel_idx, 1] = sigma[0] **2
-                # R[image_index, pixel_idy, pixel_idx, 2] = dp[0] **2/sigma[0]
-                R[image_index, pixel_idy, pixel_idx, tx] = clamp(s2*exp(-dp[tx]**2/sigma[tx]**2) - t, 0, 1)
+                R[image_index, pixel_idy, pixel_idx, 0] = dp[0] **2/sigma[0]
+                R[image_index, pixel_idy, pixel_idx, 1] = dp[1] **2/sigma[1]
+                R[image_index, pixel_idy, pixel_idx, 2] = dp[2] **2/sigma[2]
+                
+                # R[image_index, pixel_idy, pixel_idx, 2] = 1
+                
+                # R[image_index, pixel_idy, pixel_idx, tx] = clamp(s2*exp(-dp[tx]**2/sigma[tx]**2) - t, 0, 1)
         
         elif ty == 0 and tx == 0 and not bayer_mode :
             if sqrt(M[0]**2 + M[1]**2) > Mt:
@@ -452,7 +458,6 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         current_time = getTime(
             current_time, ' - Robustness locally minimized')
     return R, r
-    # return R, r
 
 @cuda.jit(device=True)
 def fetch_robustness(pos_x, pos_y, image_index, R, channel):

@@ -269,16 +269,13 @@ def compute_kernel_covs(image, center_pos_x, center_pos_y, covs,
             DEBUG_L[0] = l[0]; DEBUG_L[1] = l[1]
         
         
+        # k's are inverted compared to the original article
         k1 = k[1]
         k2 = k[0]
         covs[typ, txp, 0, 0] = k1*e1[0]*e1[0] + k2*e2[0]*e2[0]
         covs[typ, txp, 0, 1] = k1*e1[0]*e1[1] + k2*e2[0]*e2[1]
         covs[typ, txp, 1, 0] = covs[typ, txp, 0, 1]
         covs[typ, txp, 1, 1] = k1*e1[1]*e1[1] + k2*e2[1]*e2[1]
-        
-        # for i in range(2):
-        #     for j in range(2):
-        #         covs[typ, txp, i, j] = k[0]*e1[j]*e1[i] + k[1]*e2[j]*e2[i] # TODO k are inverted
         
 
 @cuda.jit(device=True) 
@@ -338,11 +335,11 @@ def compute_interpolated_kernel_cov(image, fine_center_pos, cov_i,
         # cov_i[1, 1] = 2
         
         
-        # else:
-        #     # For constant luminance patch, this a dummy filter
-        #     # TODO mayber a better patch in this case ?
-        #     cov_i[0, 0] = 1
-        #     cov_i[0, 1] = 0
-        #     cov_i[1, 0] = 1
-        #     cov_i[1, 1] = 0
+        else:
+            # For constant luminance patch, this a dummy filter
+            # TODO mayber a better patch in this case ?
+            cov_i[0, 0] = 1
+            cov_i[0, 1] = 0
+            cov_i[1, 0] = 1
+            cov_i[1, 1] = 0
     

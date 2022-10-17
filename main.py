@@ -55,8 +55,8 @@ xyz2cam = raw2rgb.get_xyz2cam_from_exif(first_image_path)
 
 comp_images = rawpy.imread(
     burst_path + '/im_01.dng').raw_image.copy()[None]
-for i in range(2, 8):
-    comp_images = np.append(comp_images, rawpy.imread('{}/im_0{}.dng'.format(burst_path, i)
+for i in range(2, 13):
+    comp_images = np.append(comp_images, rawpy.imread('{}/im_{:02d}.dng'.format(burst_path, i)
                                                       ).raw_image.copy()[None], axis=0)
 
 white_level = tags['Image Tag 0xC61D'].values[0] # there is only one white level
@@ -108,16 +108,16 @@ e2[:,:,1] = output[:,:,6].copy()
 e2[:,:,0]*=flat(l2)
 e2[:,:,1]*=flat(l2)
 
-D = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 2, 2))
-covs = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 2))
-for image in tqdm(range(comp_images.shape[0]+1)):
-    covs[image, :,:,0,0] = output[:,:,9+image*12].copy()
-    covs[image, :,:,0,1] = output[:,:,10+image*12].copy()
-    covs[image, :,:,1,0] = output[:,:,11+image*12].copy()
-    covs[image, :,:,1,1] = output[:,:,12+image*12].copy()
+# D = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 2, 2))
+# covs = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 2))
+# for image in tqdm(range(comp_images.shape[0]+1)):
+#     covs[image, :,:,0,0] = output[:,:,9+image*12].copy()
+#     covs[image, :,:,0,1] = output[:,:,10+image*12].copy()
+#     covs[image, :,:,1,0] = output[:,:,11+image*12].copy()
+#     covs[image, :,:,1,1] = output[:,:,12+image*12].copy()
 
-    for i in range(8):
-        D[image, :, :, i//4, (i%4)//2, i%2] = output[:,:,13 + i + 12*image].copy() 
+#     for i in range(8):
+#         D[image, :, :, i//4, (i%4)//2, i%2] = output[:,:,13 + i + 12*image].copy() 
 
 
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
@@ -155,16 +155,16 @@ for image_index in range(comp_images.shape[0]):
 #%% warp optical flow rgb
 
 plt.figure('ref rgb')    
-plt.imshow(raw2rgb.postprocess(raw_ref_img, colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(ref_img[:750, :750], pattern = "GRBG"), xyz2cam=xyz2cam))  
+plt.imshow(raw2rgb.postprocess(raw_ref_img, colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(ref_img, pattern = "GRBG"), xyz2cam=xyz2cam))  
 
-upscaled_al = upscale_alignement(alignment, ref_img[:750, :750].shape, 16*2) 
+upscaled_al = upscale_alignement(alignment, ref_img.shape, 16*2) 
 for image_index in range(comp_images.shape[0]):
-    warped = warp_flow(colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(comp_images[image_index, :750, :750], pattern = "GRBG"), upscaled_al[image_index], rgb = True)
+    warped = warp_flow(colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(comp_images[image_index], pattern = "GRBG"), upscaled_al[image_index], rgb = True)
     plt.figure("image {} warped".format(image_index))
     plt.imshow(raw2rgb.postprocess(raw_ref_img, warped, xyz2cam=xyz2cam))
 for image_index in range(comp_images.shape[0]):
     plt.figure("image {}".format(image_index))
-    plt.imshow(raw2rgb.postprocess(raw_ref_img, colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(comp_images[image_index, :750, :750], pattern = "GRBG"), xyz2cam=xyz2cam))
+    plt.imshow(raw2rgb.postprocess(raw_ref_img, colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(comp_images[image_index], pattern = "GRBG"), xyz2cam=xyz2cam))
   
 
 #%% histograms
@@ -260,13 +260,13 @@ def plot_merge(covs_i, Dist, pos, id_plot = 0):
 
 #%% robustness
 
-for im_id in range(R.shape[0]):
-    plt.figure('accumulated r '+str(im_id))
-    plt.imshow(np.mean(r[im_id], axis = 2), cmap = "gray", interpolation='none')
-    
 # for im_id in range(R.shape[0]):
-#     plt.figure('accumulated R '+str(im_id))
-#     plt.imshow(np.mean(R[im_id, 875:1100, 1100:1300], axis = 2), cmap = "gray", interpolation='none')
+#     plt.figure('accumulated r '+str(im_id))
+#     plt.imshow(np.mean(r[im_id], axis = 2), cmap = "gray", interpolation='none')
+    
+for im_id in range(R.shape[0]):
+    plt.figure('accumulated R '+str(im_id))
+    plt.imshow(np.mean(R[im_id], axis = 2), vmax=2, cmap = "gray", interpolation='none')
 
 
 
@@ -281,8 +281,8 @@ for im_id in range(R.shape[0]):
 #     plt.colorbar()
 
 # for im_id in range(R.shape[0]):
-#     plt.figure('rapport '+str(im_id))
-#     plt.imshow(R[im_id, 875:1100, 1100:1300, 2], cmap="gray", vmin = 0, vmax=1, interpolation='none')
+#     plt.figure(''+str(im_id))
+#     plt.imshow(R[im_id, :, :], vmin = 0, vmax=6, interpolation='none')
 #     plt.colorbar()
 
 
