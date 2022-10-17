@@ -270,12 +270,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                     # y can be slightly negative because of numerical precision.
                     # I clamp it to not explode the error with exp
                     
-                    w = math.exp(-0.5*y/(SCALE**2)) 
-                    # if abs(dist[0]) <= 1 and abs(dist[1]) <= 1:
-                    #     w=1
-                    # else:
-                    #     w=0
-                    # TODO debug
+                    w = math.exp(-0.5*y/(4*SCALE**2)) 
                     
                     # TODO debug
                     # if image_index == 0 :
