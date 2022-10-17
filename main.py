@@ -38,7 +38,7 @@ def cfa_to_grayscale(raw_img):
 
 params = get_params(PSNR = 35)
 options = {'verbose' : 3}
-burst_path = 'P:/0001/Samsung'
+burst_path = 'P:/0002/Samsung'
 
 output, R, r, alignment = process(burst_path, options, params)
 
@@ -168,12 +168,12 @@ for image_index in range(comp_images.shape[0]):
   
 
 #%% histograms
-r2 = np.mean(R, axis = 3)
+
 plt.figure("R histogram")
-plt.hist(r2.reshape(r2.size), bins=25)
-r3 = np.mean(r, axis = 3)
+plt.hist(R.reshape(R.size), bins=25)
+
 plt.figure("r histogram")
-plt.hist(r3.reshape(r3.size), bins=25)
+plt.hist(r.reshape(r.size), bins=25)
 
 X = np.linspace(0, 5, 100)
 Y1 = params['robustness']["tuning"]["s1"]*np.exp(-X) - params['robustness']["tuning"]["t"]
@@ -261,12 +261,17 @@ def plot_merge(covs_i, Dist, pos, id_plot = 0):
 #%% robustness
 
 # for im_id in range(R.shape[0]):
-#     plt.figure('accumulated r '+str(im_id))
-#     plt.imshow(np.mean(r[im_id], axis = 2), cmap = "gray", interpolation='none')
+#     plt.figure('r '+str(im_id))
+#     plt.imshow(r[im_id], vmax=1, vmin = 0, cmap = "gray", interpolation='none')
     
-for im_id in range(R.shape[0]):
-    plt.figure('accumulated R '+str(im_id))
-    plt.imshow(np.mean(R[im_id], axis = 2), vmax=2, cmap = "gray", interpolation='none')
+# for im_id in range(R.shape[0]):
+#     plt.figure('R '+str(im_id))
+#     plt.imshow(R[im_id], vmax=1, vmin = 0, cmap = 'gray', interpolation='none')
+#     plt.colorbar()
+    
+
+plt.figure('accumulated r')
+plt.imshow(np.sum(r, axis = 0)/r.shape[0], vmax=1, vmin = 0, cmap = "gray", interpolation='none')
 
 
 
