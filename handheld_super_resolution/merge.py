@@ -233,11 +233,11 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                         if bayer_mode : 
                             local_r = fetch_robustness(coarse_ref_sub_pos[1] + 2*tx,
                                                        coarse_ref_sub_pos[0] + 2*ty,
-                                                       image_index - 1, r, channel) # r is different for every thread, and i,j are driving the channel
+                                                       image_index - 1, r) # r is different for every thread
                         else:
                             # TODO need to fix this to be coherent with bayer case
                             # pos is divided by 2 during fetching, because grey is twice smaller.
-                            local_r = fetch_robustness((thread_tl_pixel_idx+j) * 2, (thread_tl_pixel_idy+i) * 2, image_index - 1, r, 0)
+                            local_r = fetch_robustness((thread_tl_pixel_idx+j) * 2, (thread_tl_pixel_idy+i) * 2, image_index - 1, r)
                         
 
             
@@ -274,8 +274,8 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                     
                     # TODO debug
                     # if image_index == 0 :
-                    cuda.atomic.add(val, channel, c*w)#*local_r)
-                    cuda.atomic.add(acc, channel, w)#*local_r)
+                    cuda.atomic.add(val, channel, c*w*local_r)
+                    cuda.atomic.add(acc, channel, w*local_r)
                     
                     # TODO debugging only
                     if tx == 0 and ty == 0 and i==0 and j==0:
@@ -297,7 +297,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
             # the next image, because sharred arrays will be overwritten
             cuda.syncthreads()
         if tx == 0 and ty == 0:
-            for chan in range(r.shape[3]): # 3 or 1 if bayer or not
+            for chan in range(output_img.shape[2]): # 3 or 1 if bayer or not
                 output_img[output_pixel_idy, output_pixel_idx, chan] = val[chan]/(acc[chan] + EPSILON) 
 
                     
