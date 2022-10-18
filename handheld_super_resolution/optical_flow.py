@@ -16,54 +16,6 @@ from scipy.ndimage import gaussian_filter1d
 from .linalg import bicubic_interpolation
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, hann, hamming
 from .linalg import solve_2x2, solve_6x6_krylov
-
-
-def bm_to_lk_alignment(alignment_lk, alignment_bm, tile_size_lk, tile_size_bm, imsize):
-    """
-    For each tile of the lk grid, fetch the center pixel from the block matching
-    estimation
-
-    Parameters
-    ----------
-    alignment_lk : Array[n_images, n_patch_y_lk, n_patch_x_lk, 6]
-        empty Array representing the optical flow for lk patchs
-    alignment_bm : Array[n_images, n_patch_y_bm, n_patch_x_bm, 6]
-        Array representing the optical flow for lk patchs
-    tile_size_lk : int 
-        size of the tiles for LK
-    tile_size_bm : int
-        size of the tiles used in the finest step of Block matching 
-    imsize : tuple(int, int)
-        size of the image (greyscale)
-
-
-    Returns
-    -------
-    None.
-
-    """
-    n_images, n_tiles_y_lk, n_tiles_x_lk, _ = alignment_lk.shape
-    @cuda.jit
-    def cuda_bm_to_lk(alignment_lk, alignment_bm):
-        im_id, patch_idy_lk, patch_idx_lk = cuda.grid(3)
-        if (0 <= im_id < n_images and # inbound condition
-            0 <= patch_idy_lk < n_tiles_y_lk and
-            0 <= patch_idx_lk < n_tiles_x_lk):
-            
-            center_pos_y = tile_size_lk/2 * patch_idy_lk # may be out of bound because of border padding
-            center_pos_x = tile_size_lk/2 * patch_idx_lk
-            local_flow = cuda.local.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
-            get_closest_flow(center_pos_x, center_pos_y, alignment_bm[im_id], tile_size_bm, imsize, local_flow)
-            alignment_lk[im_id, patch_idy_lk, patch_idx_lk, 4] = local_flow[0]
-            alignment_lk[im_id, patch_idy_lk, patch_idx_lk, 5] = local_flow[1]
-        
-        
-    threadsperblock = (2, 16, 16) # empirical
-    blockspergrid_n = int(np.ceil(n_images/threadsperblock[0]))
-    blockspergrid_x = int(np.ceil(n_tiles_y_lk/threadsperblock[1]))
-    blockspergrid_y = int(np.ceil(n_tiles_x_lk/threadsperblock[2]))
-    blockspergrid = (blockspergrid_n, blockspergrid_x, blockspergrid_y)
-    cuda_bm_to_lk[blockspergrid, threadsperblock](alignment_lk, alignment_bm)
     
 
 def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params, debug = False, filt = False):
@@ -79,7 +31,7 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params,
         The reference image
     comp_img : Array[n_images, imsize_y, imsize_x]
         The images to rearrange and compare to the reference
-    pre_alignment : Array[n_images, n_tiles_y_block_matching, n_tiles_x_block_matching, 2]
+    pre_alignment : Array[n_images, n_tiles_y, n_tiles_x, 2]
         The alignment vectors obtained by the coarse to fine pyramid search.
     options : Dict
         Options to pass
@@ -98,8 +50,7 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params,
         
     current_time, verbose, verbose_2 = time(), options['verbose'] > 1, options['verbose'] > 2
     n_iter = params['tuning']['kanadeIter']
-    tile_size_lk = params['tuning']['tileSize']
-    tile_size_bm = params['tuning']['tileSize Block Matching']
+    tile_size = params['tuning']['tileSize']
 
     n_images, imsize_y, imsize_x = comp_img.shape
 
@@ -123,17 +74,17 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params,
         pre_alignment = pre_alignment/2 # dividing by 2 because grey image is twice smaller than bayer
         # and blockmatching in bayer mode returnsaignment to bayer scale
         
-        # At this point imsize is bayer an tile_size is grey scale
-        n_patch_y_lk = 2 * ceil(imsize_y/(2*tile_size_lk)) + 1 
-        n_patch_x_lk = 2 * ceil(imsize_x/(2*tile_size_lk)) + 1
+        # At this point imsize is bayer and tile_size is grey scale
+        n_patch_y = 2 * ceil(imsize_y/(2*tile_size)) + 1 
+        n_patch_x = 2 * ceil(imsize_x/(2*tile_size)) + 1
         
     else :
         # in non bayer mode, BM returns alignment to grey scale
         ref_img_grey = ref_img # no need to copy now, they will be copied to gpu later.
         comp_img_grey = comp_img
         
-        n_patch_y_lk = 2 * ceil(imsize_y/tile_size_lk) + 1 
-        n_patch_x_lk = 2 * ceil(imsize_x/tile_size_lk) + 1
+        n_patch_y = 2 * ceil(imsize_y/tile_size) + 1 
+        n_patch_x = 2 * ceil(imsize_x/tile_size) + 1
         
     if verbose_2:
         current_time = getTime(
@@ -154,18 +105,11 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params,
             current_time, ' -- Gradients estimated')
     
     # translating BM pure tranlsation to affinity model
-    bm_alignment = np.zeros((pre_alignment.shape[:-1] + (6,)))
-    bm_alignment[:,:,:,4] = pre_alignment[:,:,:,0]
-    bm_alignment[:,:,:,5] = pre_alignment[:,:,:,1]
-    cuda_bm_alignment = cuda.to_device(bm_alignment)
-
-    cuda_alignment = cuda_bm_alignment
-    # cuda_alignment = cuda.device_array((n_images, n_patch_y_lk, n_patch_x_lk, 6), DEFAULT_NUMPY_FLOAT_TYPE)
+    alignment = np.zeros((pre_alignment.shape[:-1] + (6,)))
+    alignment[:,:,:,4] = pre_alignment[:,:,:,0]
+    alignment[:,:,:,5] = pre_alignment[:,:,:,1]
     
-    # # init aligment as pure translation from block matching, but with different tile size
-    # bm_to_lk_alignment(cuda_alignment, cuda_bm_alignment, tile_size_lk, tile_size_bm, imsize=ref_img_grey.shape)
-
-    
+    cuda_alignment = cuda.to_device(alignment)
     cuda_ref_img_grey = cuda.to_device(np.ascontiguousarray(ref_img_grey))
     cuda_comp_img_grey = cuda.to_device(np.ascontiguousarray(comp_img_grey))
     cuda_gradsx = cuda.to_device(gradsx)
@@ -224,12 +168,12 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
     verbose_2 = options['verbose'] > 2
     n_iter = params['tuning']['kanadeIter']
     
-    tile_size_lk = params['tuning']['tileSize']
+    tile_size = params['tuning']['tileSize']
         
     EPSILON =  params['epsilon div']
     n_images, imsize_y, imsize_x = comp_img.shape
     
-    _, n_patch_y_lk, n_patch_x_lk, _ = alignment.shape
+    _, n_patch_y, n_patch_x, _ = alignment.shape
     
     if verbose_2 : 
         print(" -- Lucas-Kanade iteration {}".format(iter_index))
@@ -243,8 +187,8 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
         pixel_local_idx = cuda.threadIdx.x # Position relative to the patch
         pixel_local_idy = cuda.threadIdx.y
         
-        pixel_global_idx = tile_size_lk//2 * (patch_idx - 1) + pixel_local_idx # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
-        pixel_global_idy = tile_size_lk//2 * (patch_idy - 1) + pixel_local_idy
+        pixel_global_idx = tile_size//2 * (patch_idx - 1) + pixel_local_idx # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
+        pixel_global_idy = tile_size//2 * (patch_idy - 1) + pixel_local_idy
         
         ATA = cuda.shared.array((6,6), dtype = DEFAULT_CUDA_FLOAT_TYPE)
         ATB = cuda.shared.array(6, dtype = DEFAULT_CUDA_FLOAT_TYPE)
@@ -309,10 +253,10 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
             # gradt = comp_img[image_index, new_idy, new_idx] - ref_img[pixel_global_idy, pixel_global_idx]
             
             # exponentially decreasing window, of size tile_size_lk
-            r_square = ((pixel_local_idx - tile_size_lk/2)**2 +
-                        (pixel_local_idy - tile_size_lk/2)**2)
-            sigma_square = (tile_size_lk/2)**2
-            w = exp(-r_square/(3*sigma_square)) # TODO this is not improving LK so much... 3 ssems to be a good coef though.
+            r_square = ((pixel_local_idx - tile_size/2)**2 +
+                        (pixel_local_idy - tile_size/2)**2)
+            sigma_square = (tile_size/2)**2
+            w = exp(-r_square/(3*sigma_square)) # TODO this is not improving LK so much... 3 seems to be a good coef though.
             
             cuda.atomic.add(ATB, 0, -pixel_global_idx*gradx*gradt*w)
             cuda.atomic.add(ATB, 1, -pixel_global_idx*grady*gradt*w)
@@ -370,7 +314,7 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
     
     current_time = time()
     
-    get_new_flow[[(n_images, n_patch_y_lk, n_patch_x_lk), (tile_size_lk, tile_size_lk)]
+    get_new_flow[[(n_images, n_patch_y, n_patch_x), (tile_size, tile_size)]
         ](ref_img, comp_img, gradsx, gradsy, alignment, 
             ((n_iter - 1) == iter_index) and (params['mode'] == 'bayer'))   
             # last 2 components (fixed translation) must be doubled during the

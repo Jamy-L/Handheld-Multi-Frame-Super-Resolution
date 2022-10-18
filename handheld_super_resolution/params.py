@@ -35,7 +35,6 @@ def get_params(PSNR):
                 'kanade' : {
                     'epsilon div' : 1e-6,
                     'tuning' : {
-                        'tileSize' : Ts,
                         'kanadeIter': 10, # 3
                         }},
                 'robustness' : {

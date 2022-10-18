@@ -389,7 +389,6 @@ params = {'block matching': {
                 'epsilon div' : 1e-6,
                 'tuning' : {
                     'tileSize' : 16,
-                    'tileSize Block Matching':16,
                     'kanadeIter': 25, # 3 
                     }},
             'robustness' : {
@@ -457,7 +456,7 @@ fb_alignment = align_fb(dec_burst*255)
 print('farneback evaluated : ', time()-t1)
 
 #%% evaluating lk bayer
-lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255,  label = "LK", imshow=False, params=params)
+lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255,  label = "LK (no extrapolated)", imshow=False, params=params)
 fb_warped_images, fb_im_EQ = evaluate_alignment(fb_alignment[None], burst[1:]/255, burst[0]/255, label = "FarneBack", imshow=True, params=params)
 
 #%% ploting burst
