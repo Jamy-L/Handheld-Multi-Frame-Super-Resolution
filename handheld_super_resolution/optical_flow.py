@@ -159,10 +159,11 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params,
     bm_alignment[:,:,:,5] = pre_alignment[:,:,:,1]
     cuda_bm_alignment = cuda.to_device(bm_alignment)
 
-    cuda_alignment = cuda.device_array((n_images, n_patch_y_lk, n_patch_x_lk, 6), DEFAULT_NUMPY_FLOAT_TYPE)
+    cuda_alignment = cuda_bm_alignment
+    # cuda_alignment = cuda.device_array((n_images, n_patch_y_lk, n_patch_x_lk, 6), DEFAULT_NUMPY_FLOAT_TYPE)
     
-    # init aligment as pure translation from block matching, but with different tile size
-    bm_to_lk_alignment(cuda_alignment, cuda_bm_alignment, tile_size_lk, tile_size_bm, imsize=ref_img_grey.shape)
+    # # init aligment as pure translation from block matching, but with different tile size
+    # bm_to_lk_alignment(cuda_alignment, cuda_bm_alignment, tile_size_lk, tile_size_bm, imsize=ref_img_grey.shape)
 
     
     cuda_ref_img_grey = cuda.to_device(np.ascontiguousarray(ref_img_grey))

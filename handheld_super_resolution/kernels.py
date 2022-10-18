@@ -155,6 +155,10 @@ def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
     k_1 = ((1-D)*k_1 + D*k_detail*k_denoise)**2
     k_2 = ((1-D)*k_2 + D*k_detail*k_denoise)**2
     
+    
+    # k_2 = clamp(k_2, 0.8, 1/0)
+    # k_1 = clamp(k_1, 0.8, 1/0)
+    
     k[0] = k_1
     k[1] = k_2 
 

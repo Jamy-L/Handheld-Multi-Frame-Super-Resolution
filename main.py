@@ -17,9 +17,13 @@ import rawpy
 import matplotlib.pyplot as plt
 import colour_demosaicing
 # pip install colour-demosaicing
+import seaborn as sns
+import pandas as pd
 
 from handheld_super_resolution import process, raw2rgb, get_params
 from evaluation import warp_flow, upscale_alignement
+from plot_flow import flow2img
+from handheld_super_resolution.utils import crop
 
 
 
@@ -34,30 +38,41 @@ def cfa_to_grayscale(raw_img):
             raw_img[..., 1::2, 1::2])/4
 
 
+
+crop_str = "[1638:2600, 1912:2938]"
+
+
 #%%
 
 params = get_params(PSNR = 35)
 options = {'verbose' : 3}
-burst_path = 'P:/0002/Samsung'
+burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
+# burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
 
-output, R, r, alignment = process(burst_path, options, params)
+output, R, r, alignment = process(burst_path, options, params, crop_str)
 
 
-#%% exttracting images locally for comparison 
+#%% extracting images locally for comparison 
+raw_path_list = glob.glob(os.path.join(burst_path, '*.dng'))
+first_image_path = raw_path_list[0]
 
-first_image_path = os.path.join(burst_path, 'im_00.dng')
 raw_ref_img = rawpy.imread(first_image_path)
+
 exif_tags = open(first_image_path, 'rb')
 tags = exifread.process_file(exif_tags)
+
 ref_img = raw_ref_img.raw_image.copy()
+ref_img = crop(ref_img, crop_str, axis=(0,1))
 
 xyz2cam = raw2rgb.get_xyz2cam_from_exif(first_image_path)
 
 comp_images = rawpy.imread(
-    burst_path + '/im_01.dng').raw_image.copy()[None]
-for i in range(2, 13):
-    comp_images = np.append(comp_images, rawpy.imread('{}/im_{:02d}.dng'.format(burst_path, i)
+    raw_path_list[1]).raw_image.copy()[None]
+for i in range(2,len(raw_path_list)):
+    comp_images = np.append(comp_images, rawpy.imread(raw_path_list[i]
                                                       ).raw_image.copy()[None], axis=0)
+
+comp_images = crop(comp_images, crop_str, axis=(1,2))
 
 white_level = tags['Image Tag 0xC61D'].values[0] # there is only one white level
 
@@ -88,6 +103,7 @@ comp_images = np.clip(comp_images, 0.0, 1.0)
 
 #%% extracting handhled's output data
 
+upscaled_al = upscale_alignement(alignment, ref_img.shape, 16*2) 
 
 output_img = output[:,:,:3].copy()
 imsize = output_img.shape
@@ -108,16 +124,16 @@ e2[:,:,1] = output[:,:,6].copy()
 e2[:,:,0]*=flat(l2)
 e2[:,:,1]*=flat(l2)
 
-# D = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 2, 2))
-# covs = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 2))
-# for image in tqdm(range(comp_images.shape[0]+1)):
-#     covs[image, :,:,0,0] = output[:,:,9+image*12].copy()
-#     covs[image, :,:,0,1] = output[:,:,10+image*12].copy()
-#     covs[image, :,:,1,0] = output[:,:,11+image*12].copy()
-#     covs[image, :,:,1,1] = output[:,:,12+image*12].copy()
+D = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 2, 2))
+covs = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 2))
+for image in tqdm(range(comp_images.shape[0]+1)):
+    covs[image, :,:,0,0] = output[:,:,9+image*12].copy()
+    covs[image, :,:,0,1] = output[:,:,10+image*12].copy()
+    covs[image, :,:,1,0] = output[:,:,11+image*12].copy()
+    covs[image, :,:,1,1] = output[:,:,12+image*12].copy()
 
-#     for i in range(8):
-#         D[image, :, :, i//4, (i%4)//2, i%2] = output[:,:,13 + i + 12*image].copy() 
+    for i in range(8):
+        D[image, :, :, i//4, (i%4)//2, i%2] = output[:,:,13 + i + 12*image].copy() 
 
 
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
@@ -126,11 +142,32 @@ print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 plt.figure("output")
 plt.imshow(raw2rgb.postprocess(raw_ref_img, output_img, xyz2cam=xyz2cam))
 
-base = colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(ref_img, pattern='GRBG')  # pattern is [[G,R], [B,G]] for the Samsung G8
+
+colors = "RGB"
+bayer = params["merging"]['exif']['CFA Pattern']
+pattern = colors[bayer[0,0]] + colors[bayer[0,1]] +colors[bayer[1,0]]+colors[bayer[1,1]]
+
+
+base = colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(ref_img, pattern=pattern)  # pattern is [[G,R], [B,G]] for the Samsung G8
 
 
 plt.figure("original bicubic")
 plt.imshow(cv2.resize(raw2rgb.postprocess(raw_ref_img, base, xyz2cam=xyz2cam), None, fx = params["merging"]['scale'], fy = params["merging"]['scale'], interpolation=cv2.INTER_CUBIC))
+
+#%%
+x = upscaled_al[:,:,:,0]%2
+x = x.reshape(x.size)
+x_sample = np.random.choice(x, size = 1000, replace = False)
+
+y = upscaled_al[:,:,:,1]%2
+y = y.reshape(y.size)
+y_sample = np.random.choice(y, size = 1000, replace = False)
+
+ds = pd.DataFrame()
+ds['x'] = x_sample
+ds['y'] = y_sample
+
+sns.pairplot(ds, kind="hist")
 
 #%% warp optical flow
 
@@ -141,9 +178,9 @@ plt.imshow(ref_grey_image, cmap= 'gray')
 comp_grey_images = cfa_to_grayscale(comp_images)
 grey_al = alignment.copy()
 grey_al[:,:,:,-2:]*=0.5 # pure translation are downscaled from bayer to grey
-upscaled_al = upscale_alignement(grey_al, ref_grey_image.shape[:2], 16) 
+upscaled_grey_al = upscale_alignement(grey_al, ref_grey_image.shape[:2], 16) 
 for image_index in range(comp_images.shape[0]):
-    warped = warp_flow(comp_grey_images[image_index], upscaled_al[image_index], rgb = False)
+    warped = warp_flow(comp_grey_images[image_index], upscaled_grey_al[image_index], rgb = False)
     plt.figure("image {}".format(image_index))
     plt.imshow(warped, cmap = 'gray')
     plt.figure("EQ {}".format(image_index))
@@ -151,6 +188,26 @@ for image_index in range(comp_images.shape[0]):
     plt.colorbar()
     
     print("Im {}, EQM = {}".format(image_index, np.mean((ref_grey_image - warped)**2)))
+
+#%% plot flow
+maxrad = 10
+
+for image_index in range(comp_images.shape[0]):
+    flow_image = flow2img(upscaled_al[image_index], maxrad)
+    plt.figure("flow {}".format(image_index))
+    plt.imshow(flow_image)
+
+# Making color wheel
+X = np.linspace(-maxrad, maxrad, 1000)
+Y = np.linspace(-maxrad, maxrad, 1000)
+Xm, Ym = np.meshgrid(X, Y)
+Z = np.stack((Xm, Ym)).transpose(1,2,0)
+
+flow_image = flow2img(Z, maxrad)
+plt.figure("wheel")
+plt.imshow(flow_image)
+
+
 
 #%% warp optical flow rgb
 
@@ -185,23 +242,50 @@ plt.xlabel("(d/sigma)²")
 plt.ylabel("R")
 plt.legend()
 #%% kernels
+def plot_local_flow(pos, upscaled_flow):
+    
+    scale = 1
+    plt.figure("flow in (x = {}, y = {})".format(pos[1],pos[0]))
+    for image_id in range(upscaled_flow.shape[0]):
+        plt.arrow(0, 0,
+                  upscaled_flow[image_id, pos[0], pos[1], 0],
+                  upscaled_flow[image_id, pos[0], pos[1], 1],
+                  width=0.01)
+    plt.gca().invert_yaxis()
+        
+    
+    
+    
+
 def plot_merge(covs_i, Dist, pos, id_plot = 0):
     cov_i = covs_i[(id_plot,) + pos]
     L = np.linspace(-5, 5, 100)
     Xm, Ym = np.meshgrid(L,L)
     Z = np.empty_like(Xm)
     Z = cov_i[0,0] * Xm**2 + (cov_i[1, 0] + cov_i[0, 1])*Xm*Ym + cov_i[1, 1]*Ym**2
-    plt.figure("merge in (x = {}, y = {})".format(pos[1],pos[0]))
-    plt.title("kernel of image {} rerpesented".format(id_plot))
+    plt.figure("merge in (x = {}, y = {}) {}".format(pos[1],pos[0], id_plot))
+    plt.title("kernel of image {} represented".format(id_plot))
     plt.pcolor(Xm, Ym, np.exp(-Z/2), vmin = 0, vmax=1)
     plt.gca().invert_yaxis()
     plt.scatter([0], [0], c='k', marker ='o')
     
+    
+    
+    r_index_x = np.where(bayer ==0)[0][0]
+    r_index_y = np.where(bayer ==0)[1][0]
+    
+    b_index_x = np.where(bayer ==2)[0][0]
+    b_index_y = np.where(bayer ==2)[1][0]
+    
+    
+    
     for image in range(Dist.shape[0]):
         D = Dist[(image,) + pos]
         dist = abs(D[1,1,0] - D[1,0,0]) # for scale
-        Dx_red = [D[0,1,0] + 2*i*dist for i in range(-1, 2)] * 3
-        Dy_red = [D[0,1,1] + 2*i*dist for i in range(-1, 2)]
+        
+        
+        Dx_red = [D[r_index_y,r_index_x,0] + 2*i*dist for i in range(-1, 2)] * 3
+        Dy_red = [D[r_index_y,r_index_x,1] + 2*i*dist for i in range(-1, 2)]
         Dy_red = [item for item in Dy_red for repetition in range(3)]
         weights = []
         d = np.empty(2)
@@ -213,8 +297,8 @@ def plot_merge(covs_i, Dist, pos, id_plot = 0):
             
         plt.scatter(Dx_red, Dy_red, s=weights, c='r', marker ='x')
         
-        Dx_blue = [D[1,0,0] + 2*i*dist for i in range(-1, 2)] * 3
-        Dy_blue = [D[1,0,1] + 2*i*dist for i in range(-1, 2)]
+        Dx_blue = [D[b_index_y,b_index_x,0] + 2*i*dist for i in range(-1, 2)] * 3
+        Dy_blue = [D[b_index_y,b_index_x,1] + 2*i*dist for i in range(-1, 2)]
         Dy_blue = [item for item in Dy_blue for repetition in range(3)]
         weights = []
         d = np.empty(2)
@@ -225,38 +309,27 @@ def plot_merge(covs_i, Dist, pos, id_plot = 0):
             weights.append(200*np.exp(-0.5*y))
         plt.scatter(Dx_blue, Dy_blue, s=weights, c='b', marker ='x')
         
-        Dx_green = [D[0, 0,0] + 2*i*dist for i in range(-1, 2)] * 3
-        Dy_green = [D[0, 0,1] + 2*i*dist for i in range(-1, 2)]
-        Dy_green = [item for item in Dy_green for repetition in range(3)]
-        weights = []
-        d = np.empty(2)
-        for i in range(len(Dx_green)):
-            d[0] = Dx_green[i]
-            d[1] = Dy_green[i]
-            y = d@covs_i[(image,) + pos]@d
-            weights.append(200*np.exp(-0.5*y))
-        plt.scatter(Dx_green, Dy_green, s=weights, c='g', marker ='x')
+        for green_channel in range(2):
+            g_index_x = np.where(bayer == 1)[0][green_channel]
+            g_index_y = np.where(bayer == 1)[1][green_channel]
+            
         
-        Dx_green = [D[1,1,0] + 2*i*dist for i in range(-1, 2)] * 3
-        Dy_green = [D[1,1,1] + 2*i*dist for i in range(-1, 2)]
-        Dy_green = [item for item in Dy_green for repetition in range(3)]
-        weights = []
-        d = np.empty(2)
-        for i in range(len(Dx_green)):
-            d[0] = Dx_green[i]
-            d[1] = Dy_green[i]
-            y = d@covs_i[(image,) + pos]@d
-            weights.append(200*np.exp(-0.5*y))
-        plt.scatter(Dx_green, Dy_green, s=weights, c='g', marker ='x')
+            Dx_green = [D[g_index_y, g_index_x, 0] + 2*i*dist for i in range(-1, 2)] * 3
+            Dy_green = [D[g_index_y, g_index_x, 1] + 2*i*dist for i in range(-1, 2)]
+            Dy_green = [item for item in Dy_green for repetition in range(3)]
+            weights = []
+            d = np.empty(2)
+            for i in range(len(Dx_green)):
+                d[0] = Dx_green[i]
+                d[1] = Dy_green[i]
+                y = d@covs_i[(image,) + pos]@d
+                weights.append(200*np.exp(-0.5*y))
+            plt.scatter(Dx_green, Dy_green, s=weights, c='g', marker ='x')
     
-    
-    
-    
-    # plt.scatter(D[:,:,0].reshape(4), D[:,:,1].reshape(4), c='r', marker ='x')
 
-    # for i in range(9):
-    #     plt.quiver(D[:,:,0].reshape(9)[i], -D[:,:,1].reshape(9)[i], scale=1, scale_units = "xy")
     plt.colorbar()
+    
+    
 
 #%% robustness
 
@@ -264,10 +337,10 @@ def plot_merge(covs_i, Dist, pos, id_plot = 0):
 #     plt.figure('r '+str(im_id))
 #     plt.imshow(r[im_id], vmax=1, vmin = 0, cmap = "gray", interpolation='none')
     
-# for im_id in range(R.shape[0]):
-#     plt.figure('R '+str(im_id))
-#     plt.imshow(R[im_id], vmax=1, vmin = 0, cmap = 'gray', interpolation='none')
-#     plt.colorbar()
+for im_id in range(R.shape[0]):
+    plt.figure('R '+str(im_id))
+    plt.imshow(R[im_id], vmax=1, vmin = 0, cmap = 'gray', interpolation='none')
+    plt.colorbar()
     
 
 plt.figure('accumulated r')

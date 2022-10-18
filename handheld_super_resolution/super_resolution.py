@@ -15,8 +15,9 @@ from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, 
 import exifread
 import rawpy
 import matplotlib.pyplot as plt
+from scipy.ndimage import gaussian_filter1d
 
-from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE
+from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, crop
 from .merge import merge
 from .block_matching import alignBurst
 from .optical_flow import lucas_kanade_optical_flow
@@ -36,7 +37,7 @@ def main(ref_img, comp_imgs, options, params):
     pre_alignment = pre_alignment[:, :, :, ::-1] # swapping x and y direction (x must be first)
     
     if verbose : 
-        current_time = getTime(t1, 'Block Matching')
+        current_time = getTime(t1, 'Block Matching (Total)')
     
     
     cuda_ref_img = cuda.to_device(ref_img)
@@ -53,12 +54,20 @@ def main(ref_img, comp_imgs, options, params):
     
     if verbose : 
         current_time = time()
-        
-    cuda_Robustness, cuda_robustness = compute_robustness(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment,
+    
+    ref_img_filt = gaussian_filter1d(ref_img, 3, axis = 0)
+    ref_img_filt = gaussian_filter1d(ref_img_filt, 3, axis = 1)
+    
+    comp_img_filt = gaussian_filter1d(comp_imgs, 3, axis = 1)
+    comp_img_filt = gaussian_filter1d(comp_img_filt, 3, axis = 2)
+    
+    cuda_ref_img_filt = cuda.to_device(ref_img_filt)
+    cuda_comp_imgs_filt = cuda.to_device(comp_img_filt)
+    cuda_Robustness, cuda_robustness = compute_robustness(cuda_ref_img_filt, cuda_comp_imgs_filt, cuda_final_alignment,
                                              options, params['robustness'])
     if verbose : 
         current_time = getTime(
-            current_time, 'Robustness estimated')
+            current_time, 'Robustness estimated (Total)')
     
     output = merge(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment, cuda_robustness, options, params['merging'])
     if verbose:
@@ -67,7 +76,7 @@ def main(ref_img, comp_imgs, options, params):
 
 #%%
 
-def process(burst_path, options, params):
+def process(burst_path, options, params, crop_str=None):
     currentTime, verbose = time(), options['verbose'] > 2
     
     
@@ -88,6 +97,12 @@ def process(burst_path, options, params):
     # Reference image selection and metadata     
     raw = rawpy.imread(raw_path_list[ref_id])
     ref_raw = raw.raw_image.copy()
+    
+    if crop_str is not None:
+        ref_raw = crop(ref_raw, crop_str, axis=(0, 1))
+        raw_comp = crop(raw_comp, crop_str, axis=(1, 2))
+    
+    
     with open(raw_path_list[ref_id], 'rb') as raw_file:
         tags = exifread.process_file(raw_file)
     
@@ -170,12 +185,5 @@ def process(burst_path, options, params):
                 channel = channel = CFA[i, j]
                 raw_comp[:, i::2, j::2] = (raw_comp[:, i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
                 raw_comp[:, i::2, j::2] *= white_balance[channel]
-    # TODO debug
-    # print(white_balance)
-    # a = np.zeros((int(ref_raw.shape[0]/2), int(ref_raw.shape[1]/2), 3))
-    # for i in range(2):
-    #     for j in range(2):
-    #         a[:, :, CFA[i, j]] += raw_comp[1, i::2, j::2]
-    # a[:,:,1]/=2
-    # return a, 0, 0, 0   
+
     return main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), options, params)

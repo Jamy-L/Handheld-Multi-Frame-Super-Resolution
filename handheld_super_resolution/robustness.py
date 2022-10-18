@@ -381,10 +381,12 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         if ty == 0 and tx == 0 and bayer_mode:
             if (M[0]*M[0] + M[1]*M[1]) > Mt*Mt:
                 # R[image_index, pixel_idy, pixel_idx] = dp[0] **2/sigma[0]**2
+                # R[image_index, pixel_idy, pixel_idx] = 0
                 
                 R[image_index, pixel_idy, pixel_idx] = clamp(s1*exp(-dp[0]**2/sigma[0]**2) - t, 0, 1)
             else:
                 # R[image_index, pixel_idy, pixel_idx] = dp[0] **2/sigma[0]**2
+                # R[image_index, pixel_idy, pixel_idx] = 1
                 
                 R[image_index, pixel_idy, pixel_idx] = clamp(s2*exp(-dp[0]**2/sigma[0]**2) - t, 0, 1)
         
