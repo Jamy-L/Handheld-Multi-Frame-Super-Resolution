@@ -263,20 +263,19 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                     # TODO Debugging
                     if tx==0 and ty==0:
                         output_img[output_pixel_idy, output_pixel_idx, 13 + image_index*12 + 4*i + 2*j] = dist[0]
-                        output_img[output_pixel_idy, output_pixel_idx, 13 + image_index*12 + 4*i + 2*j + 1] = dist[1]
+                        output_img[output_pixel_idy, output_pixel_idx, 13 + image_index*12 + 4*i + 2*j + 1] =dist[1]
                 
 
                     y = max(0, quad_mat_prod(cov_i, dist))
                     # y can be slightly negative because of numerical precision.
                     # I clamp it to not explode the error with exp
                     
-                    w = math.exp(-0.5*y/(4*SCALE**2)) 
+                    w = math.exp(-0.5*y/(4*SCALE**2))
                     
                     # TODO debug
-                    # if image_index == 0 :
                     cuda.atomic.add(val, channel, c*w*local_r)
                     cuda.atomic.add(acc, channel, w*local_r)
-                    
+                        
                     # TODO debugging only
                     if tx == 0 and ty == 0 and i==0 and j==0:
                         if image_index == 0 :
@@ -297,7 +296,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
             # the next image, because sharred arrays will be overwritten
             cuda.syncthreads()
         if tx == 0 and ty == 0:
-            for chan in range(output_img.shape[2]): # 3 or 1 if bayer or not
+            for chan in range(3): # TODO bayer case
                 output_img[output_pixel_idy, output_pixel_idx, chan] = val[chan]/(acc[chan] + EPSILON) 
 
                     

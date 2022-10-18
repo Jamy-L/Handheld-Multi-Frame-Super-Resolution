@@ -187,7 +187,7 @@ def unprocess_isp(jpg, log_max_shot=0.012):
     return raw, metadata
 
 
-def postprocess(raw, img=None, do_color_correction=True, do_tonemapping=True, 
+def postprocess(raw, img=None, do_color_correction=True, do_tonemapping=False, 
                 do_gamma=True, do_sharpening=True, xyz2cam=None):
     """
     Convert a raw image to jpg image.

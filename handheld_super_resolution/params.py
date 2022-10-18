@@ -20,12 +20,12 @@ def get_params(PSNR):
         Ts = 16
         
     
-    params = {'scale' : 1,
+    params = {'scale' : 3,
               'mode' : 'bayer',
               'block matching': {
                     'tuning': {
                         # WARNING: these parameters are defined fine-to-coarse!
-                        'factors': [1, 2, 4, 4],
+                        'factors': [1, 2, 2, 2],
                         'tileSizes': [Ts, Ts, Ts, int(Ts/2)],
                         'searchRadia': [1, 4, 4, 4],
                         'distances': ['L1', 'L2', 'L2', 'L2'],
@@ -36,7 +36,7 @@ def get_params(PSNR):
                     'epsilon div' : 1e-6,
                     'tuning' : {
                         'tileSize' : Ts,
-                        'kanadeIter': 6, # 3
+                        'kanadeIter': 10, # 3
                         }},
                 'robustness' : {
                     'tuning' : {

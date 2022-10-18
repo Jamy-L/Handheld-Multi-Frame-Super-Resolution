@@ -211,7 +211,7 @@ params = {'block matching': {
                 'tuning' : {
                     'tileSize' : 16,
                     'tileSize Block Matching':16,
-                    'kanadeIter': 6, # 3 
+                    'kanadeIter': 10, # 3 
                     }},
             'robustness' : {
                 'exif':{'CFA Pattern':CFA},
