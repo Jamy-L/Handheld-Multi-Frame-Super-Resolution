@@ -144,10 +144,8 @@ def process(burst_path, options, params, crop_str=None):
     # copying parameters values in sub-dictionaries
     if 'scale' not in params["merging"].keys() :
         params["merging"]["scale"] = params["scale"]
-    if 'tileSize Block Matching' not in params["kanade"]["tuning"].keys():
-        params["kanade"]["tuning"]['tileSize Block Matching'] = params['block matching']['tuning']['tileSizes'][0]
-    if 'tileSize' not in params["robustness"]["tuning"].keys():
-        params["robustness"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
+    if 'tileSize' not in params["kanade"]["tuning"].keys():
+        params["kanade"]["tuning"]['tileSize'] = params['block matching']['tuning']['tileSizes'][0]
     if 'tileSize' not in params["merging"]["tuning"].keys():
         params["merging"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
 
