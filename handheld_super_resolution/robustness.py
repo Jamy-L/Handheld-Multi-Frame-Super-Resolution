@@ -292,14 +292,17 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         # For each block, the ref guide patch and the matching compared guide image are computed
         compute_guide_patchs(ref_img, comp_imgs, flows, bayer_mode, guide_patch_ref, guide_patch_comp)
         
-        local_stats_ref = cuda.shared.array((2, 3), dtype=DEFAULT_CUDA_FLOAT_TYPE) #mu, sigma² for rgb
-        local_stats_comp = cuda.shared.array((2,3), dtype=DEFAULT_CUDA_FLOAT_TYPE)
-        
+        if bayer_mode : 
+            local_stats_ref = cuda.shared.array((2, 3), dtype=DEFAULT_CUDA_FLOAT_TYPE) #mu, sigma² for rgb
+            local_stats_comp = cuda.shared.array((2, 3), dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        else :
+            local_stats_ref = cuda.shared.array((2, 1), dtype=DEFAULT_CUDA_FLOAT_TYPE) #mu, sigma² for rgb
+            local_stats_comp = cuda.shared.array((2, 1), dtype=DEFAULT_CUDA_FLOAT_TYPE)
         maxi = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) #Max Vx, Vy
         mini = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) # Min Vx, Vy
         M = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) #Mx, My
         # multithreaded inits
-        if ty < 2:
+        if ty < 2 and (bayer_mode or tx == 0):
             local_stats_ref[ty, tx] = 0
             local_stats_comp[ty, tx] = 0
             
@@ -317,6 +320,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         
         compute_local_stats(guide_patch_ref, guide_patch_comp,
                             local_stats_ref, local_stats_comp)
+        
         
         dp = cuda.shared.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         dp[0] = 0

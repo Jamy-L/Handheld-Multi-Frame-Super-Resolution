@@ -237,7 +237,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                         else:
                             # TODO need to fix this to be coherent with bayer case
                             # pos is divided by 2 during fetching, because grey is twice smaller.
-                            local_r = fetch_robustness((thread_tl_pixel_idx+j) * 2, (thread_tl_pixel_idy+i) * 2, image_index - 1, r)
+                            local_r = fetch_robustness((coarse_ref_sub_pos[1]+j) * 2, (coarse_ref_sub_pos[0]+i) * 2, image_index - 1, r)
                         
 
             
@@ -269,10 +269,12 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                     y = max(0, quad_mat_prod(cov_i, dist))
                     # y can be slightly negative because of numerical precision.
                     # I clamp it to not explode the error with exp
+                    if bayer_mode : 
+                        w = math.exp(-0.5*y/(4*SCALE**2))
+                    else:
+                        w = math.exp(-0.5*y/SCALE**2)
                     
-                    w = math.exp(-0.5*y/(4*SCALE**2))
-                    
-                    # TODO debug
+
                     cuda.atomic.add(val, channel, c*w*local_r)
                     cuda.atomic.add(acc, channel, w*local_r)
                         

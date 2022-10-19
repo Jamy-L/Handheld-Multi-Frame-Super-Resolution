@@ -20,7 +20,7 @@ def get_params(PSNR):
         Ts = 16
         
     
-    params = {'scale' : 3,
+    params = {'scale' : 1,
               'mode' : 'bayer',
               'block matching': {
                     'tuning': {
@@ -40,7 +40,7 @@ def get_params(PSNR):
                 'robustness' : {
                     'tuning' : {
                         't' : 0.12,            # 0.12
-                        's1' : 2,           # 12
+                        's1' : 1,           # 12
                         's2' : 12,          # 2
                         'Mt' : 0.8,         # 0.8
                         }
