@@ -293,7 +293,7 @@ def plot_merge(covs_i, Dist, pos, id_plot = 0):
             d[0] = Dx_red[i]
             d[1] = Dy_red[i]
             y = d@covs_i[(image,) + pos]@d
-            weights.append(200*np.exp(-0.5*y))
+            weights.append(200)#(200*np.exp(-0.5*y))
             
         plt.scatter(Dx_red, Dy_red, s=weights, c='r', marker ='x')
         
@@ -306,7 +306,7 @@ def plot_merge(covs_i, Dist, pos, id_plot = 0):
             d[0] = Dx_blue[i]
             d[1] = Dy_blue[i]
             y = d@covs_i[(image,) + pos]@d
-            weights.append(200*np.exp(-0.5*y))
+            weights.append(200)#(200*np.exp(-0.5*y))
         plt.scatter(Dx_blue, Dy_blue, s=weights, c='b', marker ='x')
         
         for green_channel in range(2):
@@ -323,7 +323,7 @@ def plot_merge(covs_i, Dist, pos, id_plot = 0):
                 d[0] = Dx_green[i]
                 d[1] = Dy_green[i]
                 y = d@covs_i[(image,) + pos]@d
-                weights.append(200*np.exp(-0.5*y))
+                weights.append(200)#(200*np.exp(-0.5*y))
             plt.scatter(Dx_green, Dy_green, s=weights, c='g', marker ='x')
     
 
@@ -333,14 +333,14 @@ def plot_merge(covs_i, Dist, pos, id_plot = 0):
 
 #%% robustness
 
-# for im_id in range(R.shape[0]):
-#     plt.figure('r '+str(im_id))
-#     plt.imshow(r[im_id], vmax=1, vmin = 0, cmap = "gray", interpolation='none')
-    
 for im_id in range(R.shape[0]):
-    plt.figure('R '+str(im_id))
-    plt.imshow(R[im_id], vmax=1, vmin = 0, cmap = 'gray', interpolation='none')
-    plt.colorbar()
+    plt.figure('r '+str(im_id))
+    plt.imshow(r[im_id], vmax=1, vmin = 0, cmap = "gray", interpolation='none')
+    
+# for im_id in range(R.shape[0]):
+#     plt.figure('R '+str(im_id))
+#     plt.imshow(R[im_id], vmax=1, vmin = 0, cmap = 'gray', interpolation='none')
+#     plt.colorbar()
     
 
 plt.figure('accumulated r')

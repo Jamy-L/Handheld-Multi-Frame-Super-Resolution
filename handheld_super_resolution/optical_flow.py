@@ -61,11 +61,11 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params,
         print("Estimating Lucas-Kanade's optical flow")
         
     if filt : 
-        ref_img = gaussian_filter1d(ref_img, 2, axis = 0)
-        ref_img = gaussian_filter1d(ref_img, 2, axis = 1)
+        ref_img = gaussian_filter1d(ref_img, 8, axis = 0)
+        ref_img = gaussian_filter1d(ref_img, 8, axis = 1)
         
-        comp_img = gaussian_filter1d(comp_img, 2, axis = 1)
-        comp_img = gaussian_filter1d(comp_img, 2, axis = 2)
+        comp_img = gaussian_filter1d(comp_img, 8, axis = 1)
+        comp_img = gaussian_filter1d(comp_img, 8, axis = 2)
     
     if params["mode"] == "bayer" : 
         # grey level
