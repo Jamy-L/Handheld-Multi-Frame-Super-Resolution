@@ -49,21 +49,14 @@ def main(ref_img, comp_imgs, options, params):
     
     
     cuda_final_alignment = lucas_kanade_optical_flow(
-        ref_img, comp_imgs, pre_alignment, options, params['kanade'], filt=True)
+        ref_img, comp_imgs, pre_alignment, options, params['kanade'])
     
     
     if verbose : 
         current_time = time()
+
     
-    ref_img_filt = gaussian_filter1d(ref_img, 3, axis = 0)
-    ref_img_filt = gaussian_filter1d(ref_img_filt, 3, axis = 1)
-    
-    comp_img_filt = gaussian_filter1d(comp_imgs, 3, axis = 1)
-    comp_img_filt = gaussian_filter1d(comp_img_filt, 3, axis = 2)
-    
-    cuda_ref_img_filt = cuda.to_device(ref_img_filt)
-    cuda_comp_imgs_filt = cuda.to_device(comp_img_filt)
-    cuda_Robustness, cuda_robustness = compute_robustness(cuda_ref_img_filt, cuda_comp_imgs_filt, cuda_final_alignment,
+    cuda_Robustness, cuda_robustness = compute_robustness(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment,
                                              options, params['robustness'])
     if verbose : 
         current_time = getTime(

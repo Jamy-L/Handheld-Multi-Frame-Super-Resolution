@@ -119,7 +119,6 @@ def single2lrburst(image, burst_size, downsample_factor=1, transformation_params
                                 random.uniform(-max_translation, max_translation))
 
             max_rotation = transformation_params.get('max_rotation', 0.0)
-            #theta = 5
             theta = random.uniform(-max_rotation, max_rotation)
 
             max_shear = transformation_params.get('max_shear', 0.0)
@@ -183,10 +182,10 @@ def single2lrburst(image, burst_size, downsample_factor=1, transformation_params
 
 #%%
 CFA = np.array([[2, 1], [1, 0]]) #convention for bayer in synthetic burst
-transformation_params = {'max_translation':10,
+transformation_params = {'max_translation':15,
                           'max_shear': 0,
                           'max_ar_factor': 0,
-                          'max_rotation': 3}
+                          'max_rotation': 0}
 
 params = {'block matching': {
                 'mode':'bayer',
@@ -203,21 +202,18 @@ params = {'block matching': {
                 'mode':'bayer',
                 'epsilon div' : 1e-6,
                 'tuning' : {
-                    'tileSize' : 8,
-                    'tileSize Block Matching':16,
+                    'tileSize' : 16,
                     'kanadeIter': 6, # 3 
                     }},
             'robustness' : {
                 'exif':{'CFA Pattern':CFA},
                 'mode':'bayer',
                 'tuning' : {
-                    'tileSize': 8,
+                    'tileSize': 16,
                     't' : 0,            # 0.12
                     's1' : 2,          #12
                     's2' : 12,              # 2
                     'Mt' : 0.8,         # 0.8
-                    'sigma_t' : 0.03,
-                    'dt' : 1e-3,
                     }
                 },
             'merging': {
@@ -225,7 +221,7 @@ params = {'block matching': {
                 'mode':'bayer',
                 'scale': 2,
                 'tuning': {
-                    'tileSize': 8,
+                    'tileSize': 16,
                     'k_detail' : 0.33, # [0.25, ..., 0.33]
                     'k_denoise': 5,    # [3.0, ...,5.0]
                     'D_th': 0.05,      # [0.001, ..., 0.010]
@@ -274,7 +270,7 @@ for im_id, filename in tqdm(enumerate(os.listdir(DATASET_PATH)), total=N_images)
     crop = int((ground_truth.shape[0] - bicubic_output.shape[0])/2)
     PSNR["bicubic"][im_id] = computePSNR(ground_truth[crop:-crop, crop:-crop], bicubic_output)
     SSIM["bicubic"][im_id] = ssim(ground_truth[crop:-crop, crop:-crop], bicubic_output, channel_axis=2)
-
+    
 #%% ploting result
 
 PSNR_means = [np.mean(PSNR[method]) for method in PSNR.keys()]

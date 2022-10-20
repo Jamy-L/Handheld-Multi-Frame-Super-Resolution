@@ -84,7 +84,8 @@ params = {'block matching': {
             'merging': {
                 'exif':{'CFA Pattern':CFA},
                 'mode':'gray',
-                'scale': 3,
+                'scale': 2,
+                'kernel' : 'handheld',
                 'tuning': {
                     'tileSize': 16,
                     'k_detail' : 0.33, # [0.25, ..., 0.33]
@@ -106,7 +107,7 @@ output, R, r, alignment = main(np.ascontiguousarray(raw_ref_img),
                                options, params)
 #%% show output
 
-plt.figure("output")
+plt.figure("output act")
 plt.imshow(output[:,:,0], cmap="gray")
 plt.axis('off')
 

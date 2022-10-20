@@ -21,7 +21,7 @@ def get_params(PSNR):
         
     
     params = {'scale' : 1,
-              'mode' : 'bayer',
+              'mode' : 'bayer', # 'bayer' or grey if something else 
               'block matching': {
                     'tuning': {
                         # WARNING: these parameters are defined fine-to-coarse!
@@ -46,6 +46,7 @@ def get_params(PSNR):
                         }
                     },
                 'merging': {
+                    'kernel' : 'handheld', # 'act' for act kernel, other for handhel kernel
                     'tuning': {
                         'k_detail' : 0.25 + (0.33 - 0.25)*(30 - PSNR)/(30 - 6), # [0.25, ..., 0.33]
                         'k_denoise': 3 + (5 - 3)*(30 - PSNR)/(30 - 6),    # [3.0, ...,5.0]
