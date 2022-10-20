@@ -35,7 +35,7 @@ def get_params(PSNR):
                 'kanade' : {
                     'epsilon div' : 1e-6,
                     'tuning' : {
-                        'kanadeIter': 10, # 3
+                        'kanadeIter': 6, # 3
                         }},
                 'robustness' : {
                     'tuning' : {

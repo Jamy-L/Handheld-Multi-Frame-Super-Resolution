@@ -358,10 +358,10 @@ def get_closest_flow(idx_sub, idy_sub, optical_flows, tile_size, imsize, local_f
     pos = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
     pos[0] = round(idy_sub)
     pos[1] = round(idx_sub)
-    patch_idy_bottom = round((idy_sub + (tile_size//2))//(tile_size//2))
+    patch_idy_bottom = int((idy_sub + (tile_size//2))//(tile_size//2))
     patch_idy_top = patch_idy_bottom - 1
 
-    patch_idx_right = round((idx_sub + (tile_size//2))//(tile_size//2))
+    patch_idx_right = int((idx_sub + (tile_size//2))//(tile_size//2))
     patch_idx_left = patch_idx_right - 1
 
     imshape = optical_flows.shape[:2]

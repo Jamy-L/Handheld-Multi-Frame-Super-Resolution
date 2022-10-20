@@ -40,16 +40,19 @@ def cfa_to_grayscale(raw_img):
 
 
 crop_str = "[1638:2600, 1912:2938]"
+# crop_str = None#"[1002:1686, 2406:3130]"
 
 
 #%%
 
 params = get_params(PSNR = 35)
+params["scale"] = 1
 options = {'verbose' : 3}
 
-params['merging']['kernel'] = 'act'
+params['merging']['kernel'] = 'handheld'
 burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
 # burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
+# burst_path = 'P:/0001/Samsung'
 
 output, R, r, alignment = process(burst_path, options, params, crop_str)
 
@@ -64,7 +67,8 @@ exif_tags = open(first_image_path, 'rb')
 tags = exifread.process_file(exif_tags)
 
 ref_img = raw_ref_img.raw_image.copy()
-ref_img = crop(ref_img, crop_str, axis=(0,1))
+if crop_str is not None : 
+    ref_img = crop(ref_img, crop_str, axis=(0,1))
 
 xyz2cam = raw2rgb.get_xyz2cam_from_exif(first_image_path)
 
@@ -73,8 +77,8 @@ comp_images = rawpy.imread(
 for i in range(2,len(raw_path_list)):
     comp_images = np.append(comp_images, rawpy.imread(raw_path_list[i]
                                                       ).raw_image.copy()[None], axis=0)
-
-comp_images = crop(comp_images, crop_str, axis=(1,2))
+if crop_str is not None :
+    comp_images = crop(comp_images, crop_str, axis=(1,2))
 
 white_level = tags['Image Tag 0xC61D'].values[0] # there is only one white level
 
@@ -126,16 +130,18 @@ e2[:,:,1] = output[:,:,6].copy()
 e2[:,:,0]*=flat(l2)
 e2[:,:,1]*=flat(l2)
 
-D = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 2, 2))
-covs = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 2))
-for image in tqdm(range(comp_images.shape[0]+1)):
-    covs[image, :,:,0,0] = output[:,:,9+image*12].copy()
-    covs[image, :,:,0,1] = output[:,:,10+image*12].copy()
-    covs[image, :,:,1,0] = output[:,:,11+image*12].copy()
-    covs[image, :,:,1,1] = output[:,:,12+image*12].copy()
+# D = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 3))
+# covs = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 2))
+# for image in tqdm(range(comp_images.shape[0]+1)):
+#     covs[image, :,:,0,0] = output[:,:,9+image*10].copy()
+#     covs[image, :,:,0,1] = output[:,:,10+image*10].copy()
+#     covs[image, :,:,1,0] = output[:,:,11+image*10].copy()
+#     covs[image, :,:,1,1] = output[:,:,12+image*10].copy()
 
-    for i in range(8):
-        D[image, :, :, i//4, (i%4)//2, i%2] = output[:,:,13 + i + 12*image].copy() 
+#     for i in range(2):
+#         D[image, :, :, i,0] = output[:,:,13 + i*3 + 10*image].copy()
+#         D[image, :, :, i,1] = output[:,:,13 + i*3+1 + 10*image].copy()
+#         D[image, :, :, i,2] = output[:,:,13 + i*3+2 + 10*image].copy() 
 
 
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
@@ -279,54 +285,41 @@ def plot_merge(covs_i, Dist, pos, id_plot = 0):
     b_index_x = np.where(bayer ==2)[0][0]
     b_index_y = np.where(bayer ==2)[1][0]
     
+    colors = ['r', 'g', 'b']
     
     
     for image in range(Dist.shape[0]):
         D = Dist[(image,) + pos]
-        dist = abs(D[1,1,0] - D[1,0,0]) # for scale
+        dist = abs(D[0,1] - D[1,1]) # for scale
         
         
-        Dx_red = [D[r_index_y,r_index_x,0] + 2*i*dist for i in range(-1, 2)] * 3
-        Dy_red = [D[r_index_y,r_index_x,1] + 2*i*dist for i in range(-1, 2)]
-        Dy_red = [item for item in Dy_red for repetition in range(3)]
-        weights = []
-        d = np.empty(2)
-        for i in range(len(Dx_red)):
-            d[0] = Dx_red[i]
-            d[1] = Dy_red[i]
-            y = d@covs_i[(image,) + pos]@d
-            weights.append(200)#(200*np.exp(-0.5*y))
-            
-        plt.scatter(Dx_red, Dy_red, s=weights, c='r', marker ='x')
+        if D[0,2] != 1 :
+            y = 0
+            color = D[0, 2]
+        else :
+            y = 1
+            color = D[1, 2]
         
-        Dx_blue = [D[b_index_y,b_index_x,0] + 2*i*dist for i in range(-1, 2)] * 3
-        Dy_blue = [D[b_index_y,b_index_x,1] + 2*i*dist for i in range(-1, 2)]
-        Dy_blue = [item for item in Dy_blue for repetition in range(3)]
-        weights = []
-        d = np.empty(2)
-        for i in range(len(Dx_blue)):
-            d[0] = Dx_blue[i]
-            d[1] = Dy_blue[i]
-            y = d@covs_i[(image,) + pos]@d
-            weights.append(200)#(200*np.exp(-0.5*y))
-        plt.scatter(Dx_blue, Dy_blue, s=weights, c='b', marker ='x')
+        if color == 0:
+            bayer_index_x = r_index_x
+            bayer_index_y = r_index_y
+        else :
+            bayer_index_x = b_index_x
+            bayer_index_y = b_index_y
         
-        for green_channel in range(2):
-            g_index_x = np.where(bayer == 1)[0][green_channel]
-            g_index_y = np.where(bayer == 1)[1][green_channel]
-            
-        
-            Dx_green = [D[g_index_y, g_index_x, 0] + 2*i*dist for i in range(-1, 2)] * 3
-            Dy_green = [D[g_index_y, g_index_x, 1] + 2*i*dist for i in range(-1, 2)]
-            Dy_green = [item for item in Dy_green for repetition in range(3)]
-            weights = []
-            d = np.empty(2)
-            for i in range(len(Dx_green)):
-                d[0] = Dx_green[i]
-                d[1] = Dy_green[i]
-                y = d@covs_i[(image,) + pos]@d
-                weights.append(200)#(200*np.exp(-0.5*y))
-            plt.scatter(Dx_green, Dy_green, s=weights, c='g', marker ='x')
+        for idx in range(-1,2):
+            for idy in range(-1, 2):
+                x = D[0,1] + idx*dist
+                y = D[0,0] + idy*dist
+                
+                bayer_idx = (bayer_index_x + idx)%2
+                bayer_idy = (bayer_index_y + idy)%2
+                c = colors[CFA[bayer_idy, bayer_idx]]
+                d = np.array([x, y])
+                y_w = d@covs_i[(image,) + pos]@d
+                w = 200*np.exp(-0.5*y_w)
+                plt.scatter(x,y,c=c,marker='x', s=w)            
+
     
 
     plt.colorbar()
