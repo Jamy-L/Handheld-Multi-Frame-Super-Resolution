@@ -18,7 +18,7 @@ from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, h
 from .linalg import solve_2x2, solve_6x6_krylov
     
 
-def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params, debug = False, filt = False):
+def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params, debug = False):
     """
     Computes the displacement based on a naive implementation of
     Lucas-Kanade optical flow (https://www.cs.cmu.edu/~16385/s15/lectures/Lecture21.pdf)
@@ -60,13 +60,6 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params,
         current_time = time()
         print("Estimating Lucas-Kanade's optical flow")
         
-    if filt : 
-        ref_img = gaussian_filter1d(ref_img, 8, axis = 0)
-        ref_img = gaussian_filter1d(ref_img, 8, axis = 1)
-        
-        comp_img = gaussian_filter1d(comp_img, 8, axis = 1)
-        comp_img = gaussian_filter1d(comp_img, 8, axis = 2)
-    
     if params["mode"] == "bayer" : 
         # grey level
         ref_img_grey = (ref_img[::2, ::2] + ref_img[1::2, 1::2] + ref_img[::2, 1::2] + ref_img[1::2, ::2])/4

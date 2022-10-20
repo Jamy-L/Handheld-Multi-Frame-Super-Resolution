@@ -46,6 +46,8 @@ crop_str = "[1638:2600, 1912:2938]"
 
 params = get_params(PSNR = 35)
 options = {'verbose' : 3}
+
+params['merging']['kernel'] = 'act'
 burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
 # burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
 
@@ -139,7 +141,7 @@ for image in tqdm(range(comp_images.shape[0]+1)):
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 
-plt.figure("output")
+plt.figure("output {} ".format(params['merging']['kernel']))
 plt.imshow(raw2rgb.postprocess(raw_ref_img, output_img, xyz2cam=xyz2cam))
 
 
@@ -333,9 +335,9 @@ def plot_merge(covs_i, Dist, pos, id_plot = 0):
 
 #%% robustness
 
-for im_id in range(R.shape[0]):
-    plt.figure('r '+str(im_id))
-    plt.imshow(r[im_id], vmax=1, vmin = 0, cmap = "gray", interpolation='none')
+# for im_id in range(R.shape[0]):
+#     plt.figure('r '+str(im_id))
+#     plt.imshow(r[im_id], vmax=1, vmin = 0, cmap = "gray", interpolation='none')
     
 # for im_id in range(R.shape[0]):
 #     plt.figure('R '+str(im_id))

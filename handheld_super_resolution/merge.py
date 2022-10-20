@@ -51,6 +51,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
     
     CFA_pattern = params['exif']['CFA Pattern']
     bayer_mode = params['mode'] == 'bayer'
+    act = params['kernel'] == 'act'
     if bayer_mode : 
         TILE_SIZE = params['tuning']['tileSize']*2
     else:
@@ -104,7 +105,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
         return uint8(CFA_pattern[patch_pixel_idy%2, patch_pixel_idx%2])
       
     @cuda.jit
-    def accumulate(ref_img, comp_imgs, alignments, r, bayer_mode, output_img):
+    def accumulate(ref_img, comp_imgs, alignments, r, bayer_mode, act, output_img):
         """
         Cuda kernel, each block represents an output pixel. Each block contains
         a 3 by 3 neighborhood for each moving image. A single threads takes
@@ -186,9 +187,9 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
             
             # we need the position of the patch before computing the kernel
             cuda.syncthreads()
-            
+
             cov_i = cuda.shared.array((2, 2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
-            
+        
             DEBUG_E1 = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
             DEBUG_E2 = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
             DEBUG_L = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
@@ -200,14 +201,15 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
             thread_tl_pixel_idy = 2*round((patch_center_pos[0] - 0.5)/2) + 2*ty
             
             # computing kernel
-            if image_index == 0:
-                compute_interpolated_kernel_cov(ref_img, patch_center_pos, cov_i,
-                                                k_detail, k_denoise, D_th, D_tr, k_stretch,
-                                                k_shrink,DEBUG_E1, DEBUG_E2, DEBUG_L)
-            else:
-                compute_interpolated_kernel_cov(comp_imgs[image_index - 1], patch_center_pos, cov_i,
-                                                k_detail, k_denoise, D_th, D_tr, k_stretch,
-                                                k_shrink,DEBUG_E1, DEBUG_E2, DEBUG_L)
+            if not act:
+                if image_index == 0:
+                    compute_interpolated_kernel_cov(ref_img, patch_center_pos, cov_i,
+                                                    k_detail, k_denoise, D_th, D_tr, k_stretch,
+                                                    k_shrink,DEBUG_E1, DEBUG_E2, DEBUG_L)
+                else:
+                    compute_interpolated_kernel_cov(comp_imgs[image_index - 1], patch_center_pos, cov_i,
+                                                    k_detail, k_denoise, D_th, D_tr, k_stretch,
+                                                    k_shrink,DEBUG_E1, DEBUG_E2, DEBUG_L)
 
             
             cuda.syncthreads()
@@ -265,14 +267,17 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
                         output_img[output_pixel_idy, output_pixel_idx, 13 + image_index*12 + 4*i + 2*j] = dist[0]
                         output_img[output_pixel_idy, output_pixel_idx, 13 + image_index*12 + 4*i + 2*j + 1] =dist[1]
                 
-
-                    y = max(0, quad_mat_prod(cov_i, dist))
-                    # y can be slightly negative because of numerical precision.
-                    # I clamp it to not explode the error with exp
+                    if act : 
+                        y = max(0, 2*(dist[0]*dist[0] + dist[1]*dist[1]))
+                    else:
+                        y = max(0, quad_mat_prod(cov_i, dist))
+                        # y can be slightly negative because of numerical precision.
+                        # I clamp it to not explode the error with exp
                     if bayer_mode : 
                         w = math.exp(-0.5*y/(4*SCALE**2))
                     else:
                         w = math.exp(-0.5*y/SCALE**2)
+                        # w = math.exp(-(dist[0]*dist[0] + dist[1]*dist[1])/SCALE**2)
                     
 
                     cuda.atomic.add(val, channel, c*w*local_r)
@@ -305,7 +310,7 @@ def merge(ref_img, comp_imgs, alignments, r, options, params):
     current_time = time()
 
     accumulate[blockspergrid, threadsperblock](
-        ref_img, comp_imgs, alignments, r, bayer_mode, output_img)
+        ref_img, comp_imgs, alignments, r, bayer_mode, act, output_img)
     cuda.synchronize()
 
     if VERBOSE > 2:

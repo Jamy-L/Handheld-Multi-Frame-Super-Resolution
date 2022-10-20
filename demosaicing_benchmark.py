@@ -255,6 +255,7 @@ SSIM = {"handheld": np.zeros(N_images),
 
 demosaicnet_bayer = demosaicnet.BayerDemosaick()
 
+#%% 
 for im_id, filename in tqdm(enumerate(os.listdir(DATASET_PATH)), total=N_images):
     impath = DATASET_PATH/filename
     
