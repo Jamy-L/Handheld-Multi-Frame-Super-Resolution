@@ -209,7 +209,8 @@ def postprocess(raw, img=None, do_color_correction=True, do_tonemapping=False,
         ## Sharpening
         if do_sharpening:
             ## TODO: polyblur instead
-            img = filters.unsharp_mask(img)
+            img = filters.unsharp_mask(img, radius=3, amount=2,
+                                       channel_axis=2, preserve_range=True)
         ## Tone mapping
         if do_tonemapping:
             img = apply_smoothstep(img)
