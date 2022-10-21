@@ -177,6 +177,7 @@ ds['y'] = y_sample
 
 sns.pairplot(ds, kind="hist")
 
+
 #%% warp optical flow
 
 plt.figure('ref grey')    
@@ -185,11 +186,13 @@ plt.imshow(ref_grey_image, cmap= 'gray')
 
 comp_grey_images = cfa_to_grayscale(comp_images)
 grey_al = alignment.copy()
-grey_al[:,:,:,-2:]*=0.5 # pure translation are downscaled from bayer to grey
+grey_al[:,:,:,-2:]*=0.5 # pure translation are downscaled from bayer to grey 
+
 upscaled_grey_al = upscale_alignement(grey_al, ref_grey_image.shape[:2], 16) 
 for image_index in range(comp_images.shape[0]):
     warped = warp_flow(comp_grey_images[image_index], upscaled_grey_al[image_index], rgb = False)
     plt.figure("image {}".format(image_index))
+    # plt.imsave('P:/images_test/image_{:02d}.png'.format(image_index),warped, cmap = 'gray')
     plt.imshow(warped, cmap = 'gray')
     plt.figure("EQ {}".format(image_index))
     plt.imshow(np.log10((ref_grey_image - warped)**2),vmin = -4, vmax =0 , cmap="gray")
@@ -210,7 +213,7 @@ X = np.linspace(-maxrad, maxrad, 1000)
 Y = np.linspace(-maxrad, maxrad, 1000)
 Xm, Ym = np.meshgrid(X, Y)
 Z = np.stack((Xm, Ym)).transpose(1,2,0)
-
+# Z = np.stack((-Z[:,:,1], -Z[:,:,0]), axis=-1)
 flow_image = flow2img(Z, maxrad)
 plt.figure("wheel")
 plt.imshow(flow_image)

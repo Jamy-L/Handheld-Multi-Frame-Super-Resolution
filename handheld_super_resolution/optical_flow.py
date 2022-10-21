@@ -445,10 +445,10 @@ def get_closest_flow(idx_sub, idy_sub, optical_flows, tile_size, imsize, local_f
     # general case
     else:
         # Averaging patches with a window function
-        tl = hamming(pos[1]%(tile_size/2), pos[0]%(tile_size/2), tile_size)
-        tr = hamming(pos[1]%(tile_size/2), (tile_size/2) - pos[0]%(tile_size/2), tile_size)
-        bl = hamming((tile_size/2) - pos[1]%(tile_size/2), pos[0]%(tile_size/2), tile_size)
-        br = hamming((tile_size/2) - pos[1]%(tile_size/2), (tile_size/2) - pos[0]%(tile_size/2), tile_size)
+        tl = hamming(pos[0]%(tile_size/2), pos[1]%(tile_size/2), tile_size)
+        tr = hamming(pos[0]%(tile_size/2), (tile_size/2) - pos[1]%(tile_size/2), tile_size)
+        bl = hamming((tile_size/2) - pos[0]%(tile_size/2), pos[1]%(tile_size/2), tile_size)
+        br = hamming((tile_size/2) - pos[0]%(tile_size/2), (tile_size/2) - pos[1]%(tile_size/2), tile_size)
         
         k = tl + tr + br + bl
         
@@ -462,6 +462,6 @@ def get_closest_flow(idx_sub, idy_sub, optical_flows, tile_size, imsize, local_f
                   warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_left])*bl +
                   warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_right])*br)/k
     
- 
+
     local_flow[0] = flow_x
     local_flow[1] = flow_y
