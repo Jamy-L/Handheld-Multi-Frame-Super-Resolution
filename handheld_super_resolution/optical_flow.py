@@ -98,9 +98,7 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params,
             current_time, ' -- Gradients estimated')
     
     # translating BM pure tranlsation to affinity model
-    alignment = np.zeros((pre_alignment.shape[:-1] + (6,)))
-    alignment[:,:,:,4] = pre_alignment[:,:,:,0]
-    alignment[:,:,:,5] = pre_alignment[:,:,:,1]
+    alignment = pre_alignment
     
     cuda_alignment = cuda.to_device(alignment)
     cuda_ref_img_grey = cuda.to_device(np.ascontiguousarray(ref_img_grey))
@@ -183,13 +181,13 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
         pixel_global_idx = tile_size//2 * (patch_idx - 1) + pixel_local_idx # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
         pixel_global_idy = tile_size//2 * (patch_idy - 1) + pixel_local_idy
         
-        ATA = cuda.shared.array((6,6), dtype = DEFAULT_CUDA_FLOAT_TYPE)
-        ATB = cuda.shared.array(6, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+        ATA = cuda.shared.array((2,2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+        ATB = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
         
         # parallel init
-        if cuda.threadIdx.x <= 5 and cuda.threadIdx.y <=5 :
+        if cuda.threadIdx.x <= 1 and cuda.threadIdx.y <=1 :
             ATA[cuda.threadIdx.y, cuda.threadIdx.x] = 0
-        if cuda.threadIdx.y == 6 and cuda.threadIdx.x <= 5 :
+        if cuda.threadIdx.y == 2 and cuda.threadIdx.x <= 1 :
                 ATB[cuda.threadIdx.x] = 0
   
         
@@ -198,13 +196,11 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
     
         if inbound :
             # Warp I with W(x; p) to compute I(W(x; p))
-            new_idx = ((1+alignment[image_index, patch_idy, patch_idx, 0])*pixel_global_idx +
-                          alignment[image_index, patch_idy, patch_idx, 2]*pixel_global_idy +
-                          alignment[image_index, patch_idy, patch_idx, 4])
+            new_idx = alignment[image_index, patch_idy, patch_idx, 0] + pixel_global_idx 
+
             
-            new_idy = (alignment[image_index, patch_idy, patch_idx, 1]*pixel_global_idx +
-                          (1+alignment[image_index, patch_idy, patch_idx, 3])*pixel_global_idy +
-                              alignment[image_index, patch_idy, patch_idx, 5])
+            new_idy = alignment[image_index, patch_idy, patch_idx, 1] + pixel_global_idy 
+     
         
         inbound = inbound and (0 <= new_idx < imsize_x -1) and (0 <= new_idy < imsize_y - 1) # -1 for bicubic interpolation
         
@@ -251,59 +247,33 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
             sigma_square = (tile_size/2)**2
             w = exp(-r_square/(3*sigma_square)) # TODO this is not improving LK so much... 3 seems to be a good coef though.
             
-            cuda.atomic.add(ATB, 0, -pixel_global_idx*gradx*gradt*w)
-            cuda.atomic.add(ATB, 1, -pixel_global_idx*grady*gradt*w)
-            cuda.atomic.add(ATB, 2, -pixel_global_idy*gradx*gradt*w)
-            cuda.atomic.add(ATB, 3, -pixel_global_idy*grady*gradt*w)
-            cuda.atomic.add(ATB, 4, -gradx*gradt*w)
-            cuda.atomic.add(ATB, 5, -grady*gradt*w)
+            cuda.atomic.add(ATB, 0, -gradx*gradt*w)
+            cuda.atomic.add(ATB, 1, -grady*gradt*w)
+
             
             # Compute the Hessian matrix
-            for i in range(6):
-                for j in range(6):
-                    a = 1
-                    if i<= 1:
-                        a*= pixel_global_idx
-                    elif i<= 3:
-                        a*= pixel_global_idy
-                    
-                    if i%2 == 0:
-                        a*=gradx
-                    else:
-                        a*=grady
-                        
-                        
-                    if j<= 1:
-                        a*= pixel_global_idx
-                    elif j<= 3:
-                        a*= pixel_global_idy
-                    
-                    if j%2 == 0:
-                        a*=gradx
-                    else:
-                        a*=grady
-                    
-                    cuda.atomic.add(ATA, (i, j), a*w)
+            cuda.atomic.add(ATA, (0, 0), gradx*gradx*w)
+            cuda.atomic.add(ATA, (0, 1), gradx*grady*w)
+            cuda.atomic.add(ATA, (1, 0), gradx*grady*w)
+            cuda.atomic.add(ATA, (1, 1), grady*grady*w)
                         
         # TODO is there a clever initialisation for delta p ?
         # Zero init of delta p
-        alignment_step = cuda.shared.array(6, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-        if cuda.threadIdx.x <= 5 and cuda.threadIdx.y == 0:    
+        alignment_step = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        if cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:    
             alignment_step[cuda.threadIdx.x] = 0
             
-        cuda.syncthreads()
-        solvable = solve_6x6_krylov(ATA, ATB, alignment_step, 7)
-        # We cannot know in advance if the system is solvable. If it is not, the 
-        # flow is not updated                     
-        if solvable and cuda.threadIdx.x <= 5 and cuda.threadIdx.y == 0:
+        cuda.syncthreads()               
+        if abs(ATA[0, 0]*ATA[1, 1] - ATA[0, 1]*ATA[1, 0])>EPSILON and cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:
             # No racing condition, one thread for one id
+            solve_2x2(ATA, ATB, alignment_step)
             alignment[image_index, patch_idy, patch_idx, cuda.threadIdx.x] += alignment_step[cuda.threadIdx.x]
         
         cuda.syncthreads()
         if pixel_local_idx == 0 and pixel_local_idy == 0: # single threaded section
             if upscaled_flow : #uspcaling because grey img is 2x smaller
-                alignment[image_index, patch_idy, patch_idx, 4] *= 2
-                alignment[image_index, patch_idy, patch_idx, 5] *= 2
+                alignment[image_index, patch_idy, patch_idx, 0] *= 2
+                alignment[image_index, patch_idy, patch_idx, 1] *= 2
     
     current_time = time()
     
@@ -320,13 +290,14 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
 
     return alignment
 
+# TODo this can be rewritten but it is ketp for compatibility with affinity method
 @cuda.jit(device=True)
 def warp_flow_x(pos, local_flow):
-    return local_flow[0]*pos[1] + local_flow[2]*pos[0] + local_flow[4]
+    return local_flow[0]
 
 @cuda.jit(device=True)
 def warp_flow_y(pos, local_flow):
-    return local_flow[1]*pos[1] + local_flow[3]*pos[0] + local_flow[5]
+    return local_flow[1]
 
 
 @cuda.jit(device=True)
