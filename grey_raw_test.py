@@ -25,6 +25,7 @@ from handheld_super_resolution.optical_flow import get_closest_flow, lucas_kanad
 
 
 burst_path = 'P:/aether-4K/aether-4K_defense'
+# burst_path = 'P:/aether-4K/aether-4K_beach'
 
 
 raw_path_list = glob.glob(os.path.join(burst_path, '*.tiff'))
@@ -47,6 +48,7 @@ mini = min(np.min(raw_ref_img), np.max(comp_images))
 
 raw_ref_img = (raw_ref_img - mini)/(maxi - mini)
 comp_images = (comp_images - mini)/(maxi - mini)
+# comp_images = comp_images[:20]
 
 
 #%% params
@@ -107,18 +109,18 @@ output, R, r, alignment = main(np.ascontiguousarray(raw_ref_img),
                                options, params)
 #%% show output
 
-plt.figure("output act")
+plt.figure("output 2")
 plt.imshow(output[:,:,0], cmap="gray")
-plt.axis('off')
+
 
 #%% plot burst
 plt.figure("ref image")
 plt.imshow(raw_ref_img, cmap="gray")
-plt.axis('off')
+
 
 
 for image_index in range(comp_images.shape[0]):
     plt.figure("image {}".format(image_index))
     plt.imshow(comp_images[image_index], cmap="gray")
-    plt.axis('off')
+
 
