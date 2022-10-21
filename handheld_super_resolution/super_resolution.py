@@ -51,10 +51,6 @@ def main(ref_img, comp_imgs, options, params):
     cuda_final_alignment = lucas_kanade_optical_flow(
         ref_img, comp_imgs, pre_alignment, options, params['kanade'])
     
-    # Debug
-    # upscaled_al = np.zeros(pre_alignment.shape[:-1]+(6,))
-    # upscaled_al[:,:,:,-2:] = pre_alignment
-    # cuda_final_alignment = cuda.to_device(upscaled_al)
     
     
     if verbose : 
