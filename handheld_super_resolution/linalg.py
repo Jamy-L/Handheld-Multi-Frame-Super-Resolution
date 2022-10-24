@@ -5,7 +5,7 @@ Created on Thu Sep  1 08:41:58 2022
 @author: jamyl
 """
 
-from math import sqrt, isnan, isinf, copysign
+from math import sqrt, isnan, isinf, copysign, modf
 
 from numba import uint8, uint16, float32, float64, jit, njit, cuda
 
@@ -293,16 +293,16 @@ def get_eighen_elmts_2x2(M, l, e1, e2):
     
 @cuda.jit(device=True)
 def interpolate_cov(covs, center_pos, interpolated_cov):
-    reframed_posx = (center_pos[1]-0.5)%2 # these positions are between 0 and 2
-    reframed_posy = (center_pos[0]-0.5)%2
-    # cov 00 is in (0,0) ; cov 01 in (0, 2) ; cov 01 in (2, 0), cov 11 in (2, 2)
+    reframed_posx, _ = modf(center_pos[1]) # these positions are between 0 and 1
+    reframed_posy, _ = modf(center_pos[0])
+    # cov 00 is in (0,0) ; cov 01 in (0, 1) ; cov 01 in (1, 0), cov 11 in (1, 1)
     
     for i in range(2):
         for j in range(2):
-            interpolated_cov[i, j] = (covs[0,0,i,j]*(2 - reframed_posx)*(2 - reframed_posy) +
-                                      covs[0,1,i,j]*(reframed_posx)*(2 - reframed_posy) + 
-                                      covs[1,0,i,j]*(2 - reframed_posx)*(reframed_posy) + 
-                                      covs[1,1,i,j]*reframed_posx*reframed_posy )/4
+            interpolated_cov[i, j] = (covs[0,0,i,j]*(1 - reframed_posx)*(1 - reframed_posy) +
+                                      covs[0,1,i,j]*(reframed_posx)*(1 - reframed_posy) + 
+                                      covs[1,0,i,j]*(1 - reframed_posx)*(reframed_posy) + 
+                                      covs[1,1,i,j]*reframed_posx*reframed_posy )
 
 @cuda.jit(device=True)
 def bicubic_interpolation(values, pos):
