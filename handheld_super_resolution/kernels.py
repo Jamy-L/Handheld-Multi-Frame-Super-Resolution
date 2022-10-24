@@ -179,18 +179,18 @@ def cuda_estimate_kernel(gradsx, gradsy,
     cuda.syncthreads()
     if inbound :
         grad[0] = (gradsx[image_index, thread_pixel_idy+1, thread_pixel_idx] + gradsx[image_index, thread_pixel_idy, thread_pixel_idx])/2
-        grad[1] = (gradsy[image_index, thread_pixel_idy, thread_pixel_idx+1] + gradsx[image_index, thread_pixel_idy, thread_pixel_idx])/2
+        grad[1] = (gradsy[image_index, thread_pixel_idy, thread_pixel_idx+1] + gradsy[image_index, thread_pixel_idy, thread_pixel_idx])/2
     
     
     
     # each 4 cov coefs are processed in parallel, for each 4 gradient point (2 parallelisations)
-    if tz == 0:
+    if tz == 0 and inbound:
         cuda.atomic.add(structure_tensor, (0, 0), grad[0]*grad[0])
-    elif tz == 1 :
+    elif tz == 1 and inbound:
         cuda.atomic.add(structure_tensor, (0, 1), grad[0]*grad[1])
-    elif tz == 2:
+    elif tz == 2 and inbound:
         cuda.atomic.add(structure_tensor, (1, 0), grad[0]*grad[1])
-    else:
+    elif inbound:
         cuda.atomic.add(structure_tensor, (1, 1), grad[1]*grad[1])
     
     cuda.syncthreads()
@@ -213,10 +213,18 @@ def cuda_estimate_kernel(gradsx, gradsy,
         k1 = k[1]
         k2 = k[0]
         if tz == 0:
+            # covs[image_index, pixel_idy, pixel_idx, 0, 0] = structure_tensor[0, 0]
+            # covs[image_index, pixel_idy, pixel_idx, 0, 0] = e1[0]
             covs[image_index, pixel_idy, pixel_idx, 0, 0] = k1*e1[0]*e1[0] + k2*e2[0]*e2[0]
         elif tz == 1:
+            # covs[image_index, pixel_idy, pixel_idx, 0, 1] = structure_tensor[0, 1]
+            # covs[image_index, pixel_idy, pixel_idx, 0, 1] = e2[0]
             covs[image_index, pixel_idy, pixel_idx, 0, 1] = k1*e1[0]*e1[1] + k2*e2[0]*e2[1]
         elif tz == 2:
+            # covs[image_index, pixel_idy, pixel_idx, 1, 0] = structure_tensor[1, 0]
+            # covs[image_index, pixel_idy, pixel_idx, 1, 0] = e1[1]
             covs[image_index, pixel_idy, pixel_idx, 1, 0] = k1*e1[0]*e1[1] + k2*e2[0]*e2[1]
         else:
+            # covs[image_index, pixel_idy, pixel_idx, 1, 1] = structure_tensor[1, 1]
+            # covs[image_index, pixel_idy, pixel_idx, 1, 1] = e2[1]
             covs[image_index, pixel_idy, pixel_idx, 1, 1] = k1*e1[1]*e1[1] + k2*e2[1]*e2[1]

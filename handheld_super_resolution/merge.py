@@ -249,10 +249,17 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
                                                 ty, tx]
             cuda.syncthreads()
             # interpolating covs at the desired spot
-            if tx ==0 and ty == 0: # single threaded
+            if tx == 0 and ty == 0: # single threaded interpolation # TODO we may parallelize later
                 interpolate_cov(close_covs, grey_pos, interpolated_cov)
                 if interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0] > 1e-6:
                     invert_2x2(interpolated_cov, cov_i)
+                else:
+                    cov_i[0, 0] = 1
+                    cov_i[0, 1] = 0
+                    cov_i[1, 0] = 0
+                    cov_i[1, 1] = 1
+                    # TODO switching for act kernels in this case would be great
+                    
         
         cuda.syncthreads()
         
@@ -276,7 +283,6 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
                                            thread_pixel_idy,
                                            image_index - 1, r) # r is different for every thread
             else:
-                # TODO need to fix this to be coherent with bayer case
                 # pos is divided by 2 during fetching, because grey is twice smaller.
                 local_r = fetch_robustness(thread_pixel_idx * 2, thread_pixel_idy * 2, image_index - 1, r)
             

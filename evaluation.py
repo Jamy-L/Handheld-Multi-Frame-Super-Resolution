@@ -221,28 +221,26 @@ def align_lk(dec_burst, params):
     options = {'verbose' : 2}
     pre_alignment, aligned_tiles = alignBurst(dec_burst[0], dec_burst[1:],params['block matching'], options)
     pre_alignment = pre_alignment[:, :, :, ::-1]
-    
-    tile_size_bm = params["kanade"]['tuning']['tileSize Block Matching']
-    tile_size_lk = params["kanade"]['tuning']['tileSize']
+
+    tile_size = params["kanade"]['tuning']['tileSize']
 
     lk_alignment = lucas_kanade_optical_flow(
-        dec_burst[0], dec_burst[1:], pre_alignment, options, params['kanade'], debug=True, filt=False)
-    lk_alignment[-1][ :, :, :, -2:]/=2 #last alignment is multiplied by 2 by the LK flow function
+        dec_burst[0], dec_burst[1:], pre_alignment, options, params['kanade'], debug=True)
+    lk_alignment[-1]/=2 #last alignment is multiplied by 2 by the LK flow function
     for i,x in enumerate(lk_alignment):
-        lk_alignment[i][ :, :, :, -2:] = 2*x[:, :, :, -2:]
+        lk_alignment[i] *=2
     
-    augmented_pre_alignment = np.zeros(pre_alignment.shape[:-1] + (6,)) #from pure translation to complex homography
-    augmented_pre_alignment[:,:,:,-2:] = pre_alignment
-    lk_alignment.insert(0, augmented_pre_alignment)
+    
+    lk_alignment.insert(0, pre_alignment)
 
 
     imsize = (dec_burst.shape[1], dec_burst.shape[2])
     
     upscaled = np.empty((len(lk_alignment), dec_burst.shape[0]-1, dec_burst.shape[1], dec_burst.shape[2], 2))
     
-    upscaled[0] = upscale_alignement(np.array(lk_alignment[0]), imsize, tile_size_bm*2) # bm and lk tile size are different
+    upscaled[0] = upscale_alignement(np.array(lk_alignment[0]), imsize, tile_size*2) # bm and lk tile size are different
     for i in range(1, len(lk_alignment)): # x2 because coordinates are on bayer scale
-        upscaled[i] = upscale_alignement(np.array(lk_alignment[i]), imsize, tile_size_lk*2)
+        upscaled[i] = upscale_alignement(np.array(lk_alignment[i]), imsize, tile_size*2)
     # we need to upscale because estimated_al is patchwise
 
     return lk_alignment, upscaled
@@ -406,7 +404,7 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 #                 'exif':{'CFA Pattern':CFA},
 #                 'mode':'bayer',
 #                 'scale': 1,
-#                  'kernel' : 'handheld',
+#                   'kernel' : 'handheld',
 #                 'tuning': {
 #                     'tileSize': 16,
 #                     'k_detail' : 0.33, # [0.25, ..., 0.33]
@@ -427,7 +425,7 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 # transformation_params = {'max_translation':10,
 #                           'max_shear': 0,
 #                           'max_ar_factor': 0,
-#                           'max_rotation': 0.3}
+#                           'max_rotation': 0}
 # burst, flow = single2lrburst(img, 15, downsample_factor=1, transformation_params=transformation_params)
 # # flow is unussable because it is pointing from moving frame to ref. We would need the opposite
 
@@ -457,7 +455,7 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
 # print('farneback evaluated : ', time()-t1)
 
 # #%% evaluating lk bayer
-# lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255,  label = "LK (no extrapolated)", imshow=False, params=params)
+# lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255,  label = "LK", imshow=False, params=params)
 # fb_warped_images, fb_im_EQ = evaluate_alignment(fb_alignment[None], burst[1:]/255, burst[0]/255, label = "FarneBack", imshow=True, params=params)
 
 # #%% ploting burst
