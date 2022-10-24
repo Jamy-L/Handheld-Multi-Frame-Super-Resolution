@@ -39,9 +39,9 @@ def cfa_to_grayscale(raw_img):
 
 
 
-# crop_str = "[1638:2600, 1912:2938]"
+crop_str = "[1638:2600, 1912:2938]"
 # crop_str = None#"[1002:1686, 2406:3130]"
-crop_str=None
+# crop_str=None
 
 
 #%%
@@ -55,7 +55,7 @@ burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
 # burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
 # burst_path = 'P:/0001/Samsung'
 
-output, R, r, alignment = process(burst_path, options, params, crop_str)
+output, R, r, alignment, covs = process(burst_path, options, params, crop_str)
 
 
 #%% extracting images locally for comparison 
@@ -115,34 +115,13 @@ upscaled_al = upscale_alignement(alignment, ref_img.shape, 16*2)
 output_img = output[:,:,:3].copy()
 imsize = output_img.shape
 
-l1 = output[:,:,7].copy()
-l2 = output[:,:,8].copy()
 
-e1 = np.empty((output.shape[0], output.shape[1], 2))
-e1[:,:,0] = output[:,:,3].copy()
-e1[:,:,1] = output[:,:,4].copy()
-e1[:,:,0]*=flat(l1)
-e1[:,:,1]*=flat(l1)
-
-
-e2 = np.empty((output.shape[0], output.shape[1], 2))
-e2[:,:,0] = output[:,:,5].copy()
-e2[:,:,1] = output[:,:,6].copy()
-e2[:,:,0]*=flat(l2)
-e2[:,:,1]*=flat(l2)
-
-# D = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 3))
-# covs = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 2))
-# for image in tqdm(range(comp_images.shape[0]+1)):
-#     covs[image, :,:,0,0] = output[:,:,9+image*10].copy()
-#     covs[image, :,:,0,1] = output[:,:,10+image*10].copy()
-#     covs[image, :,:,1,0] = output[:,:,11+image*10].copy()
-#     covs[image, :,:,1,1] = output[:,:,12+image*10].copy()
-
-#     for i in range(2):
-#         D[image, :, :, i,0] = output[:,:,13 + i*3 + 10*image].copy()
-#         D[image, :, :, i,1] = output[:,:,13 + i*3+1 + 10*image].copy()
-#         D[image, :, :, i,2] = output[:,:,13 + i*3+2 + 10*image].copy() 
+D = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 3))
+for image in tqdm(range(comp_images.shape[0]+1)):
+    for i in range(2):
+        D[image, :, :, i,0] = output[:,:,3 + i*3 + 6*image].copy()
+        D[image, :, :, i,1] = output[:,:,3 + i*3+1 + 6*image].copy()
+        D[image, :, :, i,2] = output[:,:,3 + i*3+2 + 6*image].copy() 
 
 
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))

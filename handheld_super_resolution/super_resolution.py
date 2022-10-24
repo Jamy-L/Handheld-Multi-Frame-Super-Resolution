@@ -66,7 +66,7 @@ def main(ref_img, comp_imgs, options, params):
         
     if verbose : 
         print('Estimating kernels')
-    
+
     cuda_kernels = estimate_kernels(ref_img, comp_imgs, options, params['merging'])
     
     if verbose : 
@@ -75,9 +75,12 @@ def main(ref_img, comp_imgs, options, params):
         
     
     output = merge(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment, cuda_kernels, cuda_robustness, options, params['merging'])
+    if verbose : 
+        current_time = getTime(
+            current_time, 'Merge finished (Total)')
     if verbose:
         print('\nTotal ellapsed time : ', time() - t1)
-    return output, cuda_Robustness.copy_to_host(), cuda_robustness.copy_to_host(), cuda_final_alignment.copy_to_host()
+    return output, cuda_Robustness.copy_to_host(), cuda_robustness.copy_to_host(), cuda_final_alignment.copy_to_host(), cuda_kernels.copy_to_host()
 
 #%%
 

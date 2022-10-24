@@ -160,125 +160,18 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
     n_iter = params['tuning']['kanadeIter']
     
     tile_size = params['tuning']['tileSize']
-        
-    EPSILON =  params['epsilon div']
+
     n_images, imsize_y, imsize_x = comp_img.shape
     
     _, n_patch_y, n_patch_x, _ = alignment.shape
     
     if verbose_2 : 
         print(" -- Lucas-Kanade iteration {}".format(iter_index))
-        
-        
-    @cuda.jit
-    def get_new_flow(ref_img, comp_img, gradsx, gradsy, alignment, upscaled_flow):
-        
-        
-        image_index, patch_idy, patch_idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
-        pixel_local_idx = cuda.threadIdx.x # Position relative to the patch
-        pixel_local_idy = cuda.threadIdx.y
-        
-        pixel_global_idx = tile_size//2 * (patch_idx - 1) + pixel_local_idx # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
-        pixel_global_idy = tile_size//2 * (patch_idy - 1) + pixel_local_idy
-        
-        ATA = cuda.shared.array((2,2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
-        ATB = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
-        
-        # parallel init
-        if cuda.threadIdx.x <= 1 and cuda.threadIdx.y <=1 :
-            ATA[cuda.threadIdx.y, cuda.threadIdx.x] = 0
-        if cuda.threadIdx.y == 2 and cuda.threadIdx.x <= 1 :
-                ATB[cuda.threadIdx.x] = 0
-  
-        
-        
-        inbound = (0 <= pixel_global_idx < imsize_x) and (0 <= pixel_global_idy < imsize_y)
-    
-        if inbound :
-            # Warp I with W(x; p) to compute I(W(x; p))
-            new_idx = alignment[image_index, patch_idy, patch_idx, 0] + pixel_global_idx 
-
-            
-            new_idy = alignment[image_index, patch_idy, patch_idx, 1] + pixel_global_idy 
-     
-        
-        inbound = inbound and (0 <= new_idx < imsize_x -1) and (0 <= new_idy < imsize_y - 1) # -1 for bicubic interpolation
-        
-        if inbound:
-            # bicubic interpolation
-            buffer_val = cuda.local.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
-            pos = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE) # y, x
-            normalised_pos_x, floor_x = modf(new_idx) # https://www.rollpie.com/post/252
-            normalised_pos_y, floor_y = modf(new_idy) # separating floor and floating part
-            floor_x = int(floor_x)
-            floor_y = int(floor_y)
-            
-            ceil_x = floor_x + 1
-            ceil_y = floor_y + 1
-            pos[0] = normalised_pos_y
-            pos[1] = normalised_pos_x
-            
-            # Warp the gradient of I with W(x; p)
-            buffer_val[0, 0] = gradsx[image_index, floor_y, floor_x]
-            buffer_val[0, 1] = gradsx[image_index, floor_y, ceil_x]
-            buffer_val[1, 0] = gradsx[image_index, ceil_y, floor_x]
-            buffer_val[1, 1] = gradsx[image_index, ceil_y, ceil_x]
-            gradx = bicubic_interpolation(buffer_val, pos)
-            # gradx = gradsx[image_index, new_idy, new_idx]
-            
-            buffer_val[0, 0] = gradsy[image_index, floor_y, floor_x]
-            buffer_val[0, 1] = gradsy[image_index, floor_y, ceil_x]
-            buffer_val[1, 0] = gradsy[image_index, ceil_y, floor_x]
-            buffer_val[1, 1] = gradsy[image_index, ceil_y, ceil_x]
-            grady = bicubic_interpolation(buffer_val, pos)
-            # grady = gradsy[image_index, new_idy, new_idx]
-            
-            buffer_val[0, 0] = comp_img[image_index, floor_y, floor_x]
-            buffer_val[0, 1] = comp_img[image_index, floor_y, ceil_x]
-            buffer_val[1, 0] = comp_img[image_index, ceil_y, floor_x]
-            buffer_val[1, 1] = comp_img[image_index, ceil_y, ceil_x]
-            comp_val = bicubic_interpolation(buffer_val, pos)
-            gradt = comp_val- ref_img[pixel_global_idy, pixel_global_idx]
-            # gradt = comp_img[image_index, new_idy, new_idx] - ref_img[pixel_global_idy, pixel_global_idx]
-            
-            # exponentially decreasing window, of size tile_size_lk
-            r_square = ((pixel_local_idx - tile_size/2)**2 +
-                        (pixel_local_idy - tile_size/2)**2)
-            sigma_square = (tile_size/2)**2
-            w = exp(-r_square/(3*sigma_square)) # TODO this is not improving LK so much... 3 seems to be a good coef though.
-            
-            cuda.atomic.add(ATB, 0, -gradx*gradt*w)
-            cuda.atomic.add(ATB, 1, -grady*gradt*w)
-
-            
-            # Compute the Hessian matrix
-            cuda.atomic.add(ATA, (0, 0), gradx*gradx*w)
-            cuda.atomic.add(ATA, (0, 1), gradx*grady*w)
-            cuda.atomic.add(ATA, (1, 0), gradx*grady*w)
-            cuda.atomic.add(ATA, (1, 1), grady*grady*w)
-                        
-        # TODO is there a clever initialisation for delta p ?
-        # Zero init of delta p
-        alignment_step = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-        if cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:    
-            alignment_step[cuda.threadIdx.x] = 0
-            
-        cuda.syncthreads()               
-        if abs(ATA[0, 0]*ATA[1, 1] - ATA[0, 1]*ATA[1, 0])>EPSILON and cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:
-            # No racing condition, one thread for one id
-            solve_2x2(ATA, ATB, alignment_step)
-            alignment[image_index, patch_idy, patch_idx, cuda.threadIdx.x] += alignment_step[cuda.threadIdx.x]
-        
-        cuda.syncthreads()
-        if pixel_local_idx == 0 and pixel_local_idy == 0: # single threaded section
-            if upscaled_flow : #uspcaling because grey img is 2x smaller
-                alignment[image_index, patch_idy, patch_idx, 0] *= 2
-                alignment[image_index, patch_idy, patch_idx, 1] *= 2
     
     current_time = time()
     
     get_new_flow[[(n_images, n_patch_y, n_patch_x), (tile_size, tile_size)]
-        ](ref_img, comp_img, gradsx, gradsy, alignment, 
+        ](ref_img, comp_img, gradsx, gradsy, alignment, tile_size,
             ((n_iter - 1) == iter_index) and (params['mode'] == 'bayer'))   
             # last 2 components (fixed translation) must be doubled during the
             # last iteration in bayer mode, because the real image is twice as big
@@ -289,6 +182,125 @@ def lucas_kanade_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, align
             current_time, ' --- Systems calculated and solved')
 
     return alignment
+
+
+
+
+
+@cuda.jit
+def get_new_flow(ref_img, comp_img, gradsx, gradsy, alignment, tile_size, upscaled_flow):
+    n_images, imsize_y, imsize_x = comp_img.shape
+    
+    image_index, patch_idy, patch_idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
+    pixel_local_idx = cuda.threadIdx.x # Position relative to the patch
+    pixel_local_idy = cuda.threadIdx.y
+    
+    pixel_global_idx = tile_size//2 * (patch_idx - 1) + pixel_local_idx # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
+    pixel_global_idy = tile_size//2 * (patch_idy - 1) + pixel_local_idy
+    
+    ATA = cuda.shared.array((2,2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    ATB = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    
+    # parallel init
+    if cuda.threadIdx.x <= 1 and cuda.threadIdx.y <=1 :
+        ATA[cuda.threadIdx.y, cuda.threadIdx.x] = 0
+    if cuda.threadIdx.y == 2 and cuda.threadIdx.x <= 1 :
+            ATB[cuda.threadIdx.x] = 0
+  
+    
+    
+    inbound = (0 <= pixel_global_idx < imsize_x) and (0 <= pixel_global_idy < imsize_y)
+
+    if inbound :
+        # Warp I with W(x; p) to compute I(W(x; p))
+        new_idx = alignment[image_index, patch_idy, patch_idx, 0] + pixel_global_idx 
+
+        
+        new_idy = alignment[image_index, patch_idy, patch_idx, 1] + pixel_global_idy 
+ 
+    
+    inbound = inbound and (0 <= new_idx < imsize_x -1) and (0 <= new_idy < imsize_y - 1) # -1 for bicubic interpolation
+    
+    if inbound:
+        # bicubic interpolation
+        buffer_val = cuda.local.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
+        pos = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE) # y, x
+        normalised_pos_x, floor_x = modf(new_idx) # https://www.rollpie.com/post/252
+        normalised_pos_y, floor_y = modf(new_idy) # separating floor and floating part
+        floor_x = int(floor_x)
+        floor_y = int(floor_y)
+        
+        ceil_x = floor_x + 1
+        ceil_y = floor_y + 1
+        pos[0] = normalised_pos_y
+        pos[1] = normalised_pos_x
+        
+        # Warp the gradient of I with W(x; p)
+        buffer_val[0, 0] = gradsx[image_index, floor_y, floor_x]
+        buffer_val[0, 1] = gradsx[image_index, floor_y, ceil_x]
+        buffer_val[1, 0] = gradsx[image_index, ceil_y, floor_x]
+        buffer_val[1, 1] = gradsx[image_index, ceil_y, ceil_x]
+        gradx = bicubic_interpolation(buffer_val, pos)
+        # gradx = gradsx[image_index, new_idy, new_idx]
+        
+        buffer_val[0, 0] = gradsy[image_index, floor_y, floor_x]
+        buffer_val[0, 1] = gradsy[image_index, floor_y, ceil_x]
+        buffer_val[1, 0] = gradsy[image_index, ceil_y, floor_x]
+        buffer_val[1, 1] = gradsy[image_index, ceil_y, ceil_x]
+        grady = bicubic_interpolation(buffer_val, pos)
+        # grady = gradsy[image_index, new_idy, new_idx]
+        
+        buffer_val[0, 0] = comp_img[image_index, floor_y, floor_x]
+        buffer_val[0, 1] = comp_img[image_index, floor_y, ceil_x]
+        buffer_val[1, 0] = comp_img[image_index, ceil_y, floor_x]
+        buffer_val[1, 1] = comp_img[image_index, ceil_y, ceil_x]
+        comp_val = bicubic_interpolation(buffer_val, pos)
+        gradt = comp_val- ref_img[pixel_global_idy, pixel_global_idx]
+        # gradt = comp_img[image_index, new_idy, new_idx] - ref_img[pixel_global_idy, pixel_global_idx]
+        
+        # exponentially decreasing window, of size tile_size_lk
+        r_square = ((pixel_local_idx - tile_size/2)**2 +
+                    (pixel_local_idy - tile_size/2)**2)
+        sigma_square = (tile_size/2)**2
+        w = exp(-r_square/(3*sigma_square)) # TODO this is not improving LK so much... 3 seems to be a good coef though.
+        
+        cuda.atomic.add(ATB, 0, -gradx*gradt*w)
+        cuda.atomic.add(ATB, 1, -grady*gradt*w)
+
+        
+        # Compute the Hessian matrix
+        cuda.atomic.add(ATA, (0, 0), gradx*gradx*w)
+        cuda.atomic.add(ATA, (0, 1), gradx*grady*w)
+        cuda.atomic.add(ATA, (1, 0), gradx*grady*w)
+        cuda.atomic.add(ATA, (1, 1), grady*grady*w)
+                    
+    # TODO is there a clever initialisation for delta p ?
+    # Zero init of delta p
+    alignment_step = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+    if cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:    
+        alignment_step[cuda.threadIdx.x] = 0
+        
+    cuda.syncthreads()               
+    if abs(ATA[0, 0]*ATA[1, 1] - ATA[0, 1]*ATA[1, 0])> 1e-6 and cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:
+        # No racing condition, one thread for one id
+        solve_2x2(ATA, ATB, alignment_step)
+        alignment[image_index, patch_idy, patch_idx, cuda.threadIdx.x] += alignment_step[cuda.threadIdx.x]
+    
+    cuda.syncthreads()
+    if pixel_local_idx == 0 and pixel_local_idy == 0: # single threaded section
+        if upscaled_flow : #uspcaling because grey img is 2x smaller
+            alignment[image_index, patch_idy, patch_idx, 0] *= 2
+            alignment[image_index, patch_idy, patch_idx, 1] *= 2
+
+
+
+
+
+
+
+
+
+
 
 # TODo this can be rewritten but it is ketp for compatibility with affinity method
 @cuda.jit(device=True)
