@@ -40,6 +40,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
     
     bayer_mode = params['mode']=='bayer'
     VERBOSE = options['verbose']
+    r_on = params['on']
     
     CFA_pattern = params['exif']['CFA Pattern']
     
@@ -58,8 +59,6 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
     else:
         rgb_imshape_y, rgb_imshape_x = imshape_y, imshape_x
 
-    r = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x))
-    R = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x))
     rgb_imshape = (rgb_imshape_y, rgb_imshape_x)
     
     
@@ -437,23 +436,30 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         
         
         
+    if r_on : 
+        r = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x))
+        R = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x))
         
-    if VERBOSE > 1:
-        current_time = time()
-        print("Estimating Robustness")
+        if VERBOSE > 1:
+            current_time = time()
+            print("Estimating Robustness")
+            
+        cuda_compute_robustness[(n_images, rgb_imshape_y, rgb_imshape_x), (3, 3)
+            ](ref_img, comp_imgs, flows,cuda_diff_curve, cuda_std_curve, bayer_mode, R)
+        cuda.synchronize()
+        if VERBOSE > 2:
+            current_time = getTime(
+                current_time, ' - Robustness Estimated')
         
-    cuda_compute_robustness[(n_images, rgb_imshape_y, rgb_imshape_x), (3, 3)
-        ](ref_img, comp_imgs, flows,cuda_diff_curve, cuda_std_curve, bayer_mode, R)
-    cuda.synchronize()
-    if VERBOSE > 2:
-        current_time = getTime(
-            current_time, ' - Robustness Estimated')
-    
-    compute_local_min[(n_images, rgb_imshape_y, rgb_imshape_x), (5, 5)](R, r)
-    cuda.synchronize()
-    if VERBOSE > 2:
-        current_time = getTime(
-            current_time, ' - Robustness locally minimized')
+        compute_local_min[(n_images, rgb_imshape_y, rgb_imshape_x), (5, 5)](R, r)
+        cuda.synchronize()
+        if VERBOSE > 2:
+            current_time = getTime(
+                current_time, ' - Robustness locally minimized')
+    else: 
+        temp = np.ones(n_images, rgb_imshape_y, rgb_imshape_x)
+        r = cuda.to_device(temp)
+        R = cuda.to_device(temp)
     return R, r
 
 @cuda.jit(device=True)

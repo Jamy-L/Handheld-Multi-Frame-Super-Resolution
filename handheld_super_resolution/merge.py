@@ -19,7 +19,7 @@ from .linalg import quad_mat_prod
 from .robustness import fetch_robustness
 
 
-def merge(ref_img, comp_imgs, alignments, r, options, params):
+def merge(ref_img, comp_imgs, alignments, kernels, r, options, params):
     """
     Merges all the images, based on the alignments previously estimated.
     The size of the merge_result is adjustable with params['scale']
