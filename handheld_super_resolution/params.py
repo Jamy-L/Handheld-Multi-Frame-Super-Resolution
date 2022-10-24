@@ -33,7 +33,6 @@ def get_params(PSNR):
                         'subpixels': [False, True, True, True]
                         }},
                 'kanade' : {
-                    'epsilon div' : 1e-6,
                     'tuning' : {
                         'kanadeIter': 6, # 3
                         }},

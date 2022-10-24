@@ -85,7 +85,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
             current_time = getTime(
                 current_time, ' - Robustness locally minimized')
     else: 
-        temp = np.ones(n_images, rgb_imshape_y, rgb_imshape_x)
+        temp = np.ones((n_images, rgb_imshape_y, rgb_imshape_x))
         r = cuda.to_device(temp)
         R = cuda.to_device(temp)
     return R, r

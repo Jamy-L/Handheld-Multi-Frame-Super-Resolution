@@ -73,6 +73,7 @@ params = {'block matching': {
                     'kanadeIter': 6, # 3 
                     }},
             'robustness' : {
+                'on':False,
                 'exif':{'CFA Pattern':CFA},
                 'mode':'gray',
                 'tuning' : {
@@ -86,7 +87,7 @@ params = {'block matching': {
             'merging': {
                 'exif':{'CFA Pattern':CFA},
                 'mode':'gray',
-                'scale': 2,
+                'scale': 3,
                 'kernel' : 'handheld',
                 'tuning': {
                     'tileSize': 16,
@@ -104,9 +105,9 @@ options = {'verbose' : 3}
 
 #%%
 
-output, R, r, alignment = main(np.ascontiguousarray(raw_ref_img),
-                               np.ascontiguousarray(comp_images),
-                               options, params)
+output, R, r, alignment, covs = main(np.ascontiguousarray(raw_ref_img),
+                                     np.ascontiguousarray(comp_images),
+                                     options, params)
 #%% show output
 
 plt.figure("output 2")

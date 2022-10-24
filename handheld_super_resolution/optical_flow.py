@@ -302,7 +302,7 @@ def get_new_flow(ref_img, comp_img, gradsx, gradsy, alignment, tile_size, upscal
 
 
 
-# TODo this can be rewritten but it is ketp for compatibility with affinity method
+# TODo this can be rewritten but it is kept for compatibility with affinity method
 @cuda.jit(device=True)
 def warp_flow_x(pos, local_flow):
     return local_flow[0]

@@ -10,6 +10,7 @@ from time import time
 
 from tqdm import tqdm
 import numpy as np
+from math import modf
 import cv2
 from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda, int32
 import exifread
@@ -39,10 +40,10 @@ def cfa_to_grayscale(raw_img):
 
 
 
-crop_str = "[1638:2600, 1912:2938]"
-# crop_str = None#"[1002:1686, 2406:3130]"
-# crop_str=None
-
+# crop_str = "[1638:2600, 1912:2938]"
+crop_str = "[1002:1686, 2406:3130]"
+crop_str=None
+# crop_str = "[0:1500, 0:1000]"
 
 #%%
 
@@ -51,8 +52,9 @@ params["scale"] = 1
 options = {'verbose' : 3}
 
 params['merging']['kernel'] = 'handheld'
-burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
-# burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
+params['robustness']['on'] = False
+# burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
+burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
 # burst_path = 'P:/0001/Samsung'
 
 output, R, r, alignment, covs = process(burst_path, options, params, crop_str)
@@ -116,12 +118,12 @@ output_img = output[:,:,:3].copy()
 imsize = output_img.shape
 
 
-D = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 3))
-for image in tqdm(range(comp_images.shape[0]+1)):
-    for i in range(2):
-        D[image, :, :, i,0] = output[:,:,3 + i*3 + 6*image].copy()
-        D[image, :, :, i,1] = output[:,:,3 + i*3+1 + 6*image].copy()
-        D[image, :, :, i,2] = output[:,:,3 + i*3+2 + 6*image].copy() 
+# D = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 3))
+# for image in tqdm(range(comp_images.shape[0]+1)):
+#     for i in range(2):
+#         D[image, :, :, i,0] = output[:,:,3 + i*3 + 6*image]
+#         D[image, :, :, i,1] = output[:,:,3 + i*3+1 + 6*image]
+#         D[image, :, :, i,2] = output[:,:,3 + i*3+2 + 6*image]
 
 
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
@@ -141,6 +143,30 @@ base = colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(ref_img, pattern=patt
 
 plt.figure("original bicubic")
 plt.imshow(cv2.resize(raw2rgb.postprocess(raw_ref_img, base, xyz2cam=xyz2cam), None, fx = params["merging"]['scale'], fy = params["merging"]['scale'], interpolation=cv2.INTER_CUBIC))
+
+#%%
+e1 = covs[0,:,:,:,0]
+e2 = covs[0,:,:,:,1]
+
+grey_ref_img = (ref_img[::2,::2,] + ref_img[1::2, ::2] + ref_img[::2, 1::2] + ref_img[1::2, 1::2])/4
+imsize = grey_ref_img.shape
+
+# quivers for eighenvectors
+# Lower res because pyplot's quiver is really not made for that (=slow)
+plt.figure('quiver')
+scale = 5*1e1
+downscale_coef = 4
+ix, iy = 1, 0
+patchx, patchy = int(imsize[1]/downscale_coef), int(imsize[0]/downscale_coef)
+plt.imshow(grey_ref_img[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1)], cmap="gray")
+
+# minus sign because pyplot takes y axis growing towards top. but we need the opposite
+plt.quiver(e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
+            -e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1],width=0.001,linewidth=0.0001, scale=scale)
+plt.quiver(e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
+            -e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale, color='b')
+
+
 
 #%%
 x = upscaled_al[:,:,:,0]%2
@@ -248,14 +274,27 @@ def plot_local_flow(pos, upscaled_flow):
     
     
 
-def plot_merge(covs_i, Dist, pos, id_plot = 0):
-    cov_i = covs_i[(id_plot,) + pos]
+def plot_merge(covs, Dist, pos):
+    reframed_posx, x = modf(pos[1]/(2*params['scale'])) # these positions are between 0 and 1
+    reframed_posy, y = modf(pos[0]/(2*params['scale']))
+    x=int(x); y=int(y)
+    
+    int_cov = (covs[0, y, x]*(1 - reframed_posx)*(1 - reframed_posy) +
+               covs[0, y, x+1]*(reframed_posx)*(1 - reframed_posy) + 
+               covs[0, y+1, x]*(1 - reframed_posx)*(reframed_posy) + 
+               covs[0, y+1, y+1]*reframed_posx*reframed_posy)
+    
+    cov_i = np.linalg.inv(int_cov*4*params['scale']**2)
+    print(int_cov.shape)
+    
+
+    
+    
     L = np.linspace(-5, 5, 100)
     Xm, Ym = np.meshgrid(L,L)
     Z = np.empty_like(Xm)
     Z = cov_i[0,0] * Xm**2 + (cov_i[1, 0] + cov_i[0, 1])*Xm*Ym + cov_i[1, 1]*Ym**2
-    plt.figure("merge in (x = {}, y = {}) {}".format(pos[1],pos[0], id_plot))
-    plt.title("kernel of image {} represented".format(id_plot))
+    plt.figure("merge in (x = {}, y = {})".format(pos[1],pos[0]))
     plt.pcolor(Xm, Ym, np.exp(-Z/2), vmin = 0, vmax=1)
     plt.gca().invert_yaxis()
     plt.scatter([0], [0], c='k', marker ='o')
@@ -299,9 +338,7 @@ def plot_merge(covs_i, Dist, pos, id_plot = 0):
                 bayer_idy = (bayer_index_y + idy)%2
                 c = colors[CFA[bayer_idy, bayer_idx]]
                 d = np.array([x, y])
-                y_w = d@covs_i[(image,) + pos]@d
-                w = 200*np.exp(-0.5*y_w)
-                plt.scatter(x,y,c=c,marker='x', s=w)            
+                plt.scatter(x,y,c=c,marker='x')            
 
     
 
@@ -355,7 +392,7 @@ plt.imshow(np.sum(r, axis = 0)/r.shape[0], vmax=1, vmin = 0, cmap = "gray", inte
 
 # # minus sign because pyplot takes y axis growing towards top. but we need the opposite
 # plt.quiver(e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
-#            -e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale)
+#             -e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale)
 # plt.quiver(e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
-#            -e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale, color='b')
+#             -e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale, color='b')
 
