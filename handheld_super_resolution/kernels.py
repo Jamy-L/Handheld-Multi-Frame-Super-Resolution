@@ -6,6 +6,7 @@ Created on Sat Aug  6 17:26:48 2022
 """
 
 from math import sqrt
+from time import time
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -142,14 +143,14 @@ def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
 
 
     """
-    # k_stretch = 1
-    # k_shrink = 1
+    k_stretch = 1
+    k_shrink = 1
     
-    k_stretch = 4
-    k_shrink = 2
+    # k_stretch = 4
+    # k_shrink = 2
     
-    k_stretch = sqrt(k_stretch)
-    k_shrink = sqrt(k_shrink)
+    # k_stretch = sqrt(k_stretch)
+    # k_shrink = sqrt(k_shrink)
     
     
     # TODO debug
@@ -337,14 +338,7 @@ def compute_interpolated_kernel_cov(image, fine_center_pos, cov_i,
     # TODO debug
         if interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0] > 1e-6:
             invert_2x2(interpolated_cov, cov_i)
-        # cov_i[0, 0] = interpolated_cov[0, 0]
-        # cov_i[0, 1] = interpolated_cov[0, 1]
-        # cov_i[1, 0] = interpolated_cov[1, 0]
-        # cov_i[1, 1] = interpolated_cov[1, 1]
-        # cov_i[0, 0] = 2
-        # cov_i[0, 1] = 0
-        # cov_i[1, 0] = 0
-        # cov_i[1, 1] = 2
+
         
         
         else:
@@ -354,4 +348,148 @@ def compute_interpolated_kernel_cov(image, fine_center_pos, cov_i,
             cov_i[0, 1] = 0
             cov_i[1, 0] = 1
             cov_i[1, 1] = 0
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def estimate_kernels(ref_img, comp_imgs, options, params):
+    """
+    Returns the kernels covariance for each frame, for each Bayer quad 
+
+    Parameters
+    ----------
+    ref_img : TYPE
+        DESCRIPTION.
+    comp_imgs : TYPE
+        DESCRIPTION.
+    options : TYPE
+        DESCRIPTION.
+    params : TYPE
+        DESCRIPTION.
+
+    Returns
+    -------
+    None.
+
+    """
+    t1 = time()
+    n_images, imshape_y, imshape_x = comp_imgs.shape
+    imsize = (imshape_y, imshape_x)
+    
+    bayer_mode = params['mode']=='bayer'
+    VERBOSE = options['verbose']
+    
+    k_detail =params['tuning']['k_detail']
+    k_denoise = params['tuning']['k_denoise']
+    D_th = params['tuning']['D_th']
+    D_tr = params['tuning']['D_tr']
+    k_stretch = params['tuning']['k_stretch']
+    k_shrink = params['tuning']['k_shrink']
+    
+
+    
+    if params["mode"] == "bayer" : 
+        # grey level
+        ref_img_grey = (ref_img[::2, ::2] + ref_img[1::2, 1::2] + ref_img[::2, 1::2] + ref_img[1::2, ::2])/4
+        comp_img_grey = (comp_imgs[:,::2, ::2] + comp_imgs[:,1::2, 1::2] + comp_imgs[:,::2, 1::2] + comp_imgs[:,1::2, ::2])/4
+        
+        covs = cuda.device_array((n_images+1,
+                                  int(imshape_y/2), int(imshape_x/2), 2,2))
+    
+    else :
+        ref_img_grey = ref_img # no need to copy now, they will be copied to gpu later.
+        comp_img_grey = comp_imgs
+        
+        covs = cuda.device_array((n_images+1, imshape_y, imshape_x, 2,2))
+    
+    _, grey_imshape_y, grey_imshape_x, _, _ = covs.shape
+    
+    gradsx = np.empty((n_images+1, grey_imshape_y, grey_imshape_x-1))
+    gradsx[0] = ref_img_grey[:,:-1] - ref_img_grey[:,1:]
+    gradsx[1:] = comp_img_grey[:, :,:-1] - comp_img_grey[:, :,1:]
+    
+    gradsy = np.empty((n_images+1, grey_imshape_y-1, grey_imshape_x))
+    gradsy[0] = ref_img_grey[:-1,:] - ref_img_grey[1:,:]
+    gradsy[1:] = comp_img_grey[:, :-1,:] - comp_img_grey[:, 1:, :]
+    
+    print("grads_estimated ", time()-t1)
+    
+    @cuda.jit
+    def cuda_estimate_kernel(gradsx, gradsy, covs):
+        image_index, pixel_idx, pixel_idy = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z 
+        tx = cuda.threadIdx.x # tx, ty for the 4 gradient point
+        ty = cuda.threadIdx.y
+        
+        tz = cuda.threadIdx.z #tz for the cov 4 coefs
+        
+        structure_tensor = cuda.shared.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
+        grad = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE) #x, y
+        
+        # top left pixel among the 4 that accululates for 1 grad
+        thread_pixel_idx = pixel_idx - 1 + tx
+        thread_pixel_idy = pixel_idy - 1 + ty
+        
+        inbound = (0 < thread_pixel_idy < ref_img_grey.shape[0]-1) and (0 < thread_pixel_idx < ref_img_grey.shape[1]-1)
+                    
+        
+        structure_tensor[ty, tx] = 0 # multithreaded zero init
+            
+        cuda.syncthreads()
+        if inbound :
+            grad[0] = (gradsx[image_index, thread_pixel_idy+1, thread_pixel_idx] + gradsx[image_index, thread_pixel_idy, thread_pixel_idx])/2
+            grad[1] = (gradsy[image_index, thread_pixel_idy, thread_pixel_idx+1] + gradsx[image_index, thread_pixel_idy, thread_pixel_idx])/2
+        
+        # each 4 cov coefs are processed in parallel, for each 4 gradient point (2 parallelisations)
+        if tz == 0:
+            cuda.atomic.add(structure_tensor, (0, 0), grad[0]*grad[0])
+        elif tz == 1 :
+            cuda.atomic.add(structure_tensor, (0, 1), grad[0]*grad[1])
+        elif tz == 2:
+            cuda.atomic.add(structure_tensor, (1, 0), grad[0]*grad[1])
+        else:
+            cuda.atomic.add(structure_tensor, (1, 1), grad[1]*grad[1])
+        
+        cuda.syncthreads()
+        # structure tensor is computed at this point. Now calculating covs
+        
+        if (tx == 0 and ty ==0): # TODO maybe we can optimize this single threaded section
+            l = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+            e1 = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+            e2 = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+            k = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+
+            # get_eighen_elmts_2x2(structure_tensor, l, e1, e2)
+
+            compute_k(l[0], l[1], k, k_detail, k_denoise, D_th, D_tr, k_stretch,
+            k_shrink)
+    
+            # k's are inverted compared to the original article
+            k1 = k[1]
+            k2 = k[0]
+            if tz == 0:
+                covs[image_index, pixel_idy, pixel_idx, 0, 0] = k1*e1[0]*e1[0] + k2*e2[0]*e2[0]
+            elif tz == 1:
+                covs[image_index, pixel_idy, pixel_idx, 0, 1] = k1*e1[0]*e1[1] + k2*e2[0]*e2[1]
+            elif tz == 2:
+                covs[image_index, pixel_idy, pixel_idx, 1, 0] = k1*e1[0]*e1[1] + k2*e2[0]*e2[1]
+            else:
+                covs[image_index, pixel_idy, pixel_idx, 1, 1] = k1*e1[1]*e1[1] + k2*e2[1]*e2[1]
+        
+    
+    cuda_estimate_kernel[(covs.shape[0], ref_img_grey.shape[1], ref_img_grey.shape[0]),
+                         (2,2,4)](gradsx, gradsy, covs)  
+    cuda.synchronize()
+    
+    return covs
     

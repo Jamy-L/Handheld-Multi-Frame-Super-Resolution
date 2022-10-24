@@ -98,7 +98,7 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params,
             current_time, ' -- Gradients estimated')
     
     # translating BM pure tranlsation to affinity model
-    alignment = pre_alignment
+    alignment = np.ascontiguousarray(pre_alignment)
     
     cuda_alignment = cuda.to_device(alignment)
     cuda_ref_img_grey = cuda.to_device(np.ascontiguousarray(ref_img_grey))

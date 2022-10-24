@@ -39,8 +39,9 @@ def cfa_to_grayscale(raw_img):
 
 
 
-crop_str = "[1638:2600, 1912:2938]"
+# crop_str = "[1638:2600, 1912:2938]"
 # crop_str = None#"[1002:1686, 2406:3130]"
+crop_str=None
 
 
 #%%

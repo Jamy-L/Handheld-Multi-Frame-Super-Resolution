@@ -19,6 +19,7 @@ from scipy.ndimage import gaussian_filter1d
 
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, crop
 from .merge import merge
+from .kernels import estimate_kernels
 from .block_matching import alignBurst
 from .optical_flow import lucas_kanade_optical_flow
 from .robustness import compute_robustness
@@ -62,8 +63,18 @@ def main(ref_img, comp_imgs, options, params):
     if verbose : 
         current_time = getTime(
             current_time, 'Robustness estimated (Total)')
+        
+    if verbose : 
+        print('Estimating kernels')
     
-    output = merge(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment, cuda_robustness, options, params['merging'])
+    cuda_kernels = estimate_kernels(ref_img, comp_imgs, options, params['merging'])
+    
+    if verbose : 
+        current_time = getTime(
+            current_time, 'Kernels estimated (Total)')
+        
+    
+    output = merge(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment, cuda_kernels, cuda_robustness, options, params['merging'])
     if verbose:
         print('\nTotal ellapsed time : ', time() - t1)
     return output, cuda_Robustness.copy_to_host(), cuda_robustness.copy_to_host(), cuda_final_alignment.copy_to_host()

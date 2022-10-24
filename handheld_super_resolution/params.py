@@ -38,6 +38,7 @@ def get_params(PSNR):
                         'kanadeIter': 6, # 3
                         }},
                 'robustness' : {
+                    'on':True,
                     'tuning' : {
                         't' : 0.12,            # 0.12
                         's1' : 1,           # 12
