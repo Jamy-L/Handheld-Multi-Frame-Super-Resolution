@@ -40,10 +40,10 @@ def cfa_to_grayscale(raw_img):
 
 
 
-# crop_str = "[1638:2600, 1912:2938]"
-crop_str = "[1002:1686, 2406:3130]"
-crop_str=None
-# crop_str = "[0:1500, 0:1000]"
+crop_str = "[1638:2600, 1912:2938]"
+# crop_str = "[1002:1686, 2406:3130]"
+# crop_str=None
+# crop_str = "[2000:3000, 1500:2500]"
 
 #%%
 
@@ -53,8 +53,8 @@ options = {'verbose' : 3}
 
 params['merging']['kernel'] = 'handheld'
 params['robustness']['on'] = False
-# burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
-burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
+burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
+# burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
 # burst_path = 'P:/0001/Samsung'
 
 output, R, r, alignment, covs = process(burst_path, options, params, crop_str)
@@ -130,7 +130,8 @@ print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 
 plt.figure("output {} ".format(params['merging']['kernel']))
-plt.imshow(raw2rgb.postprocess(raw_ref_img, output_img, xyz2cam=xyz2cam))
+postprocessed_output = raw2rgb.postprocess(raw_ref_img, output_img, xyz2cam=xyz2cam) 
+plt.imshow(postprocessed_output)
 
 
 colors = "RGB"
@@ -142,7 +143,23 @@ base = colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(ref_img, pattern=patt
 
 
 plt.figure("original bicubic")
-plt.imshow(cv2.resize(raw2rgb.postprocess(raw_ref_img, base, xyz2cam=xyz2cam), None, fx = params["merging"]['scale'], fy = params["merging"]['scale'], interpolation=cv2.INTER_CUBIC))
+postprocessed_bicubic = cv2.resize(raw2rgb.postprocess(raw_ref_img, base, xyz2cam=xyz2cam), None, fx = params["merging"]['scale'], fy = params["merging"]['scale'], interpolation=cv2.INTER_CUBIC)
+plt.imshow(postprocessed_bicubic)
+
+#%% ploting images in crops
+crops_x = 2
+crops_y = 2
+crop_size = (int(output.shape[0]/crops_y), int(output.shape[1]/crops_x))
+
+for i in range(crops_y):
+    for j in range(crops_x):
+        plt.figure("output handheld {} {}".format(i,j))
+        plt.imshow(postprocessed_output[i*crop_size[0]:(i+1)*crop_size[0], j*crop_size[1]:(j+1)*crop_size[1]])
+        
+        plt.figure("original bicubic {} {}".format(i,j))
+        plt.imshow(postprocessed_bicubic[i*crop_size[0]:(i+1)*crop_size[0], j*crop_size[1]:(j+1)*crop_size[1]])
+
+
 
 #%%
 e1 = covs[0,:,:,:,0]

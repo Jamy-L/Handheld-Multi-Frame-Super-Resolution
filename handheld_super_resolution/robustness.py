@@ -373,16 +373,6 @@ def compute_local_stats(guide_patch_ref, guide_patch_comp,
     # are staying at 0. Maybe it's not that bad because we are capping with the 
     # model's values later
 
-
-@cuda.jit(device=True)
-def fetch_robustness(pos_x, pos_y, image_index, R):
-
-    downscaled_posx = round((pos_x - 0.5)/2)
-    downscaled_posy = round((pos_y - 0.5)/2)
-    
-    # TODO Neirest neighboor is made here. Maybe bilinear interpolation is better ?
-    return max(0, R[image_index, downscaled_posy, downscaled_posx])
-
         
 @cuda.jit(device=True)
 def compute_m(flows, mini, maxi, bayer_mode, rgb_imsize, tile_size, M):

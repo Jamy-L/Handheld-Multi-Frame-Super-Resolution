@@ -16,7 +16,6 @@ from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, E
 from .optical_flow import get_closest_flow
 from .kernels import interpolate_cov
 from .linalg import quad_mat_prod, invert_2x2
-from .robustness import fetch_robustness
 
 
 def merge(ref_img, comp_imgs, alignments, covs, r, options, params):
@@ -222,15 +221,16 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
             # fetching the 4 closest covs
             close_covs = cuda.shared.array((2, 2, 2 ,2), DEFAULT_CUDA_FLOAT_TYPE)
             grey_pos = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
-            if bayer_mode and tx==0 and ty==0:  
-                grey_pos[0] = patch_center_pos[0]/2
-                grey_pos[1] = patch_center_pos[1]/2
+            if bayer_mode and tx==0 and ty==0:
+                grey_pos[0] = (patch_center_pos[0]-0.5)/2 # grey grid is offseted and twice more sparse
+                grey_pos[1] = (patch_center_pos[1]-0.5)/2
+                
             elif tx==0 and ty==0:
                 grey_pos[0] = patch_center_pos[0]
                 grey_pos[1] = patch_center_pos[1]
             
             cuda.syncthreads()
-            if tx < 2 and ty <2:
+            if tx < 2 and ty <2: # TODO sides can get negative grey indexes. It leads to weird covs.
                 close_covs[0, 0, ty, tx] = covs[image_index, 
                                                 int(math.floor(grey_pos[0])),
                                                 int(math.floor(grey_pos[1])),
@@ -279,14 +279,15 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
             local_r = 1 # for all 9 threads and each 4 pixels
         elif 0 <= thread_pixel_idx < input_size_x - 1 and 0 <= thread_pixel_idx < input_size_y - 1: # inbound
             if bayer_mode : 
-                local_r = fetch_robustness(thread_pixel_idx,
-                                           thread_pixel_idy,
-                                           image_index - 1, r) # r is different for every thread
-            else:
-                # pos is divided by 2 during fetching, because grey is twice smaller.
-                local_r = fetch_robustness(thread_pixel_idx * 2, thread_pixel_idy * 2, image_index - 1, r)
-            
+                local_r = r[image_index - 1,
+                            round((thread_pixel_idy-0.5)/2),
+                            round((thread_pixel_idx-0.5)/2)]
 
+            else:
+                local_r = r[image_index - 1,
+                            thread_pixel_idy,
+                            thread_pixel_idx]
+            
 
 
         # in bounds conditions
@@ -320,9 +321,9 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
             # y can be slightly negative because of numerical precision.
             # I clamp it to not explode the error with exp
         if bayer_mode : 
-            w = math.exp(-0.5*y/(4*scale**2))
-        else:
             w = math.exp(-0.5*y/scale**2)
+        else:
+            w = math.exp(-0.5*4*y/scale**2) # original kernel constants are designed for bayer distances, not greys.
         
         cuda.atomic.add(val, channel, c*w*local_r)
         cuda.atomic.add(acc, channel, w*local_r)
