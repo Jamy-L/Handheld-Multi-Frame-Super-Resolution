@@ -40,21 +40,23 @@ def cfa_to_grayscale(raw_img):
 
 
 
-crop_str = "[1638:2600, 1912:2938]"
-# crop_str = "[1002:1686, 2406:3130]"
+# crop_str = "[1638:2600, 1912:2938]" # for friant
+crop_str = "[1002:1686, 2406:3130]" # for rue4 (arrondissement)
+# crop_str = "[1002:1686, 2000:2700]" # for rue4 (truck plate)
+# crop_str = "[500:2500, 1000:2500]" # for samsung 0
 # crop_str=None
-# crop_str = "[2000:3000, 1500:2500]"
+# crop_str = "[1500:2500, 2000:3000]" # for samsung 1
 
 #%%
 
 params = get_params(PSNR = 35)
-params["scale"] = 1
+params["scale"] = 3
 options = {'verbose' : 3}
 
 params['merging']['kernel'] = 'handheld'
 params['robustness']['on'] = False
-burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
-# burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
+# burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
+burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
 # burst_path = 'P:/0001/Samsung'
 
 output, R, r, alignment, covs = process(burst_path, options, params, crop_str)
@@ -118,18 +120,18 @@ output_img = output[:,:,:3].copy()
 imsize = output_img.shape
 
 
-# D = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 3))
-# for image in tqdm(range(comp_images.shape[0]+1)):
-#     for i in range(2):
-#         D[image, :, :, i,0] = output[:,:,3 + i*3 + 6*image]
-#         D[image, :, :, i,1] = output[:,:,3 + i*3+1 + 6*image]
-#         D[image, :, :, i,2] = output[:,:,3 + i*3+2 + 6*image]
+D = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 3))
+for image in tqdm(range(comp_images.shape[0]+1)):
+    for i in range(2):
+        D[image, :, :, i,0] = output[:,:,3 + i*3 + 6*image]
+        D[image, :, :, i,1] = output[:,:,3 + i*3+1 + 6*image]
+        D[image, :, :, i,2] = output[:,:,3 + i*3+2 + 6*image]
 
 
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 
-plt.figure("output {} ".format(params['merging']['kernel']))
+plt.figure("output, kernel {} New LK".format(params['merging']['kernel']))
 postprocessed_output = raw2rgb.postprocess(raw_ref_img, output_img, xyz2cam=xyz2cam) 
 plt.imshow(postprocessed_output)
 
@@ -161,7 +163,27 @@ for i in range(crops_y):
 
 
 
-#%%
+#%% Anisotropy and D
+D = covs[:, :, :, 0, 0]
+A = covs[:, :, :, 0, 1]
+l1 = covs[:, :, :, 1, 0]
+im_id = 0
+
+
+plt.figure("D {} (bayer grad)".format(im_id))
+plt.imshow(D[im_id], cmap="gray", vmin=0, vmax = 1)
+plt.colorbar()
+
+plt.figure("A {}".format(im_id))
+plt.imshow(A[im_id], cmap="gray", vmin=1, vmax = 2)
+plt.colorbar()
+
+plt.figure("L1 {}".format(im_id))
+plt.imshow(l1[im_id], cmap="gray", vmin=0, vmax = 0.01)
+plt.colorbar()
+
+
+#%% eighen vectors
 e1 = covs[0,:,:,:,0]
 e2 = covs[0,:,:,:,1]
 
@@ -173,7 +195,7 @@ imsize = grey_ref_img.shape
 plt.figure('quiver')
 scale = 5*1e1
 downscale_coef = 4
-ix, iy = 1, 0
+ix, iy = 0, 0
 patchx, patchy = int(imsize[1]/downscale_coef), int(imsize[0]/downscale_coef)
 plt.imshow(grey_ref_img[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1)], cmap="gray")
 
@@ -218,7 +240,7 @@ for image_index in range(comp_images.shape[0]):
     # plt.imsave('P:/images_test/image_{:02d}.png'.format(image_index),warped, cmap = 'gray')
     plt.imshow(warped, cmap = 'gray')
     plt.figure("EQ {}".format(image_index))
-    plt.imshow(np.log10((ref_grey_image - warped)**2),vmin = -4, vmax =0 , cmap="gray")
+    plt.imshow(np.log10((ref_grey_image - warped)**2),vmin = -6, vmax =0 , cmap="gray")
     plt.colorbar()
     
     print("Im {}, EQM = {}".format(image_index, np.mean((ref_grey_image - warped)**2)))
@@ -397,19 +419,14 @@ plt.imshow(np.sum(r, axis = 0)/r.shape[0], vmax=1, vmin = 0, cmap = "gray", inte
 
 
 
-#%% eighen vectors
-# # quivers for eighenvectors
-# # Lower res because pyplot's quiver is really not made for that (=slow)
-# plt.figure('quiver')
-# scale = 5*1e1
-# downscale_coef = 4
-# ix, iy = 2, 1
-# patchx, patchy = int(imsize[1]/downscale_coef), int(imsize[0]/downscale_coef)
-# plt.imshow(raw2rgb.postprocess(output_img[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1)]/1023))
+#%% D curve
 
-# # minus sign because pyplot takes y axis growing towards top. but we need the opposite
-# plt.quiver(e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
-#             -e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale)
-# plt.quiver(e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
-#             -e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale, color='b')
+D_tr = params["merging"]['tuning']['D_tr']
+D_th = params["merging"]['tuning']['D_th']
 
+L = np.linspace(0, 1.5*(D_tr + D_tr*D_th)**2, 300)
+Y = np.clip(1-np.sqrt(L)/D_tr + D_th, 0, 1)
+plt.figure('D curve')
+plt.plot(L, Y)
+plt.xlabel('Lambda 1')
+plt.ylabel('D')

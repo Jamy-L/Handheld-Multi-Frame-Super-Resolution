@@ -16,7 +16,7 @@ DEFAULT_CUDA_FLOAT_TYPE = float32
 DEFAULT_CUDA_COMPLEX_TYPE = complex64
 DEFAULT_NUMPY_FLOAT_TYPE = np.float32
 DEFAULT_NUMPY_COMPLEX_TYPE = np.complex64
-EPSILON = 0#1e-6
+EPSILON = 0 #1e-6
 
 
 def getTime(currentTime, labelName, printTime=True, spaceSize=50):

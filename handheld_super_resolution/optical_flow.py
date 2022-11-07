@@ -7,15 +7,16 @@ Created on Sun Jul 31 00:00:36 2022
 
 from time import time
 
-from math import floor, ceil, modf, exp
+from math import floor, ceil, modf, exp, sqrt
 import numpy as np
 import cv2
 from numba import cuda, float32, float64, int16
+from numba.cuda.random import create_xoroshiro128p_states, init_xoroshiro128p_states, xoroshiro128p_uniform_float32
 from scipy.ndimage import gaussian_filter1d
 
 from .linalg import bicubic_interpolation
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, hann, hamming
-from .linalg import solve_2x2, solve_6x6_krylov
+from .linalg import solve_2x2, solve_6x6_krylov, get_eighen_val_2x2
     
 
 def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params, debug = False):
@@ -274,18 +275,40 @@ def get_new_flow(ref_img, comp_img, gradsx, gradsy, alignment, tile_size, upscal
         cuda.atomic.add(ATA, (1, 0), gradx*grady*w)
         cuda.atomic.add(ATA, (1, 1), grady*grady*w)
                     
-    # TODO is there a clever initialisation for delta p ?
-    # Zero init of delta p
+
     alignment_step = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-    if cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:    
-        alignment_step[cuda.threadIdx.x] = 0
-        
-    cuda.syncthreads()               
-    if abs(ATA[0, 0]*ATA[1, 1] - ATA[0, 1]*ATA[1, 0])> 1e-6 and cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:
-        # No racing condition, one thread for one id
-        solve_2x2(ATA, ATB, alignment_step)
-        alignment[image_index, patch_idy, patch_idx, cuda.threadIdx.x] += alignment_step[cuda.threadIdx.x]
+    cuda.syncthreads()
     
+    # l = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+    
+    # if cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:
+    #     # fetching eighen values only
+    #     get_eighen_val_2x2(ATA, l)
+    #     A = 1 + sqrt((l[0] - l[1])/(l[0] + l[1]))
+        
+    #     if A > 1.9: # system is only "partialy solvable" : edge case
+    #         if cuda.threadIdx.x == 0:
+    #             u = (ATB[0]+ATB[1])*(ATA[0, 0] + ATA[0, 1])/((ATA[0, 0] + ATA[0, 1])**2 + (ATA[1, 1] + ATA[0, 1])**2)
+    #             v = (ATB[0]+ATB[1])*(ATA[1, 1] + ATA[0, 1])/((ATA[0, 0] + ATA[0, 1])**2 + (ATA[1, 1] + ATA[0, 1])**2) 
+                
+    #             alignment[image_index, patch_idy, patch_idx, 0] += u
+    #             alignment[image_index, patch_idy, patch_idx, 1] += v
+    #         # alignment[image_index, patch_idy, patch_idx, cuda.threadIdx.x] = 0/0
+    #     elif l[0] > 1e-3 : # non edge, non zero feature
+    #         solve_2x2(ATA, ATB, alignment_step)
+    #         alignment[image_index, patch_idy, patch_idx, cuda.threadIdx.x] += alignment_step[cuda.threadIdx.x]
+    #     else:
+    #         pass
+        
+        
+        
+    if cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:
+        if abs(ATA[0, 0]*ATA[1, 1] - ATA[0, 1]*ATA[1, 0])> 1e-5: # system is solvable 
+            # No racing condition, one thread for one id
+            solve_2x2(ATA, ATB, alignment_step)
+            alignment[image_index, patch_idy, patch_idx, cuda.threadIdx.x] += alignment_step[cuda.threadIdx.x]
+
+            
     cuda.syncthreads()
     if pixel_local_idx == 0 and pixel_local_idy == 0: # single threaded section
         if upscaled_flow : #uspcaling because grey img is 2x smaller

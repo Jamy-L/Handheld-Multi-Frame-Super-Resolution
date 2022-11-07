@@ -189,10 +189,10 @@ def single2lrburst(image, burst_size, downsample_factor=1, transformation_params
 
 #%%
 CFA = np.array([[2, 1], [1, 0]]) #convention for bayer in synthetic burst
-transformation_params = {'max_translation':10,
+transformation_params = {'max_translation':3,
                           'max_shear': 0,
                           'max_ar_factor': 0,
-                          'max_rotation': 3}
+                          'max_rotation': 0}
 
 params = {'block matching': {
                 'mode':'bayer',
@@ -211,11 +211,12 @@ params = {'block matching': {
                 'tuning' : {
                     'tileSize' : 16,
                     'tileSize Block Matching':16,
-                    'kanadeIter': 10, # 3 
+                    'kanadeIter': 6, # 3 
                     }},
             'robustness' : {
                 'exif':{'CFA Pattern':CFA},
                 'mode':'bayer',
+                'on':False,
                 'tuning' : {
                     'tileSize': 16,
                     't' : 0,            # 0.12
@@ -227,6 +228,7 @@ params = {'block matching': {
             'merging': {
                 'exif':{'CFA Pattern':CFA},
                 'mode':'bayer',
+                'kernel':'handheld',
                 'scale': 1,
                 'tuning': {
                     'tileSize': 16,
@@ -292,6 +294,21 @@ for im_id, filename in tqdm(enumerate(os.listdir(DATASET_PATH)), total=N_images)
     PSNR["mosaicnet"][im_id] = computePSNR(ground_truth[crop:-crop, crop:-crop], mosaicnet_output)
     SSIM["mosaicnet"][im_id] = ssim(ground_truth[crop:-crop, crop:-crop], mosaicnet_output, channel_axis=2)
     
+    
+    print('\nPSNR')
+    print('\tHandheld : {}'.format( PSNR["handheld"][im_id]))
+    print('\tmalvar : {}'.format( PSNR["malvar"][im_id]))
+    print('\tbilinear : {}'.format( PSNR["bilinear"][im_id]))
+    print('\tmosaicnet : {}'.format( PSNR["mosaicnet"][im_id]))
+    
+    print('\nSSIM')
+    print('\tHandheld : {}'.format( SSIM["handheld"][im_id]))
+    print('\tmalvar : {}'.format( SSIM["malvar"][im_id]))
+    print('\tbilinear : {}'.format( SSIM["bilinear"][im_id]))
+    print('\tmosaicnet : {}'.format( SSIM["mosaicnet"][im_id]))
+    
+    if im_id ==0:
+        break
 
 #%% ploting result
 

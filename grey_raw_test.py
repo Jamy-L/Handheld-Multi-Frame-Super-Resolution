@@ -87,7 +87,7 @@ params = {'block matching': {
             'merging': {
                 'exif':{'CFA Pattern':CFA},
                 'mode':'gray',
-                'scale': 3,
+                'scale': 2,
                 'kernel' : 'handheld',
                 'tuning': {
                     'tileSize': 16,

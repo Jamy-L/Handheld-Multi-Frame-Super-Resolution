@@ -25,7 +25,7 @@ def get_params(PSNR):
               'block matching': {
                     'tuning': {
                         # WARNING: these parameters are defined fine-to-coarse!
-                        'factors': [1, 2, 2, 2],
+                        'factors': [1, 2, 2, 4],
                         'tileSizes': [Ts, Ts, Ts, int(Ts/2)],
                         'searchRadia': [1, 4, 4, 4],
                         'distances': ['L1', 'L2', 'L2', 'L2'],

@@ -291,7 +291,7 @@ def get_eighen_elmts_2x2(M, l, e1, e2):
     
     
     
-@cuda.jit(device=True) # TODo this can be parallelized ! 
+@cuda.jit(device=True) # TODO this can be parallelized ! 
 def interpolate_cov(covs, center_pos, interpolated_cov):
     reframed_posx, _ = modf(center_pos[1]) # these positions are between 0 and 1
     reframed_posy, _ = modf(center_pos[0])
@@ -303,6 +303,7 @@ def interpolate_cov(covs, center_pos, interpolated_cov):
                                       covs[0,1,i,j]*(reframed_posx)*(1 - reframed_posy) + 
                                       covs[1,0,i,j]*(1 - reframed_posx)*(reframed_posy) + 
                                       covs[1,1,i,j]*reframed_posx*reframed_posy )
+            # interpolated_cov[i, j]=covs[0,0,i,j]
 
 @cuda.jit(device=True)
 def bicubic_interpolation(values, pos):

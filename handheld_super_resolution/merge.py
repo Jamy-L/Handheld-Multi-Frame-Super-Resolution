@@ -230,7 +230,7 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
                 grey_pos[1] = patch_center_pos[1]
             
             cuda.syncthreads()
-            if tx < 2 and ty <2: # TODO sides can get negative grey indexes. It leads to weird covs.
+            if tx >= 0 and ty >= 0: # TODO sides can get negative grey indexes. It leads to weird covs.
                 close_covs[0, 0, ty, tx] = covs[image_index, 
                                                 int(math.floor(grey_pos[0])),
                                                 int(math.floor(grey_pos[1])),
@@ -251,14 +251,15 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
             # interpolating covs at the desired spot
             if tx == 0 and ty == 0: # single threaded interpolation # TODO we may parallelize later
                 interpolate_cov(close_covs, grey_pos, interpolated_cov)
-                if interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0] > 1e-6:
+                
+                
+                if abs(interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0]) > 1e-6: # checking if cov is invertible
                     invert_2x2(interpolated_cov, cov_i)
                 else:
                     cov_i[0, 0] = 1
                     cov_i[0, 1] = 0
                     cov_i[1, 0] = 0
                     cov_i[1, 1] = 1
-                    # TODO switching for act kernels in this case would be great
                     
         
         cuda.syncthreads()
@@ -279,6 +280,7 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
             local_r = 1 # for all 9 threads and each 4 pixels
         elif 0 <= thread_pixel_idx < input_size_x - 1 and 0 <= thread_pixel_idx < input_size_y - 1: # inbound
             if bayer_mode : 
+                # TODO there is a mistake, R is already in ref frame refrential : must be fetched without optical flow
                 local_r = r[image_index - 1,
                             round((thread_pixel_idy-0.5)/2),
                             round((thread_pixel_idx-0.5)/2)]
@@ -298,15 +300,14 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
                 c = comp_imgs[image_index - 1, thread_pixel_idy, thread_pixel_idx]
 
 
-
+        dist = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         # applying invert transformation and upscaling
         fine_sub_pos_x = scale * (thread_pixel_idx - local_optical_flow[0])
         fine_sub_pos_y = scale * (thread_pixel_idy - local_optical_flow[1])
-
-    
-        dist = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         dist[0] = (fine_sub_pos_x - output_pixel_idx)
         dist[1] = (fine_sub_pos_y - output_pixel_idy)
+
+
     
         # TODO Debugging
         if tx==0 and ty >= 0 :
