@@ -45,32 +45,35 @@ def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
 
 
     """
-    k_stretch = 1
-    k_shrink = 1
+    # k_stretch = 1
+    # k_shrink = 1
     
-    # k_stretch = 4
-    # k_shrink = 2
-    
-    # k_stretch = sqrt(k_stretch)
-    # k_shrink = sqrt(k_shrink)
+    k_stretch = 4
+    k_shrink = 2
+
     
     
     # TODO debug
     
     A = 1+sqrt((l1 - l2)/(l1 + l2))
+    # This is a very agressive way of driving anisotropy, but it works well so far.
+    if A <1.9:
+        A = 1
+    else:
+        A = 2
+
     D = clamp(1 - sqrt(l1)/D_tr + D_th, 0, 1)
+    
+    D = 0
     # k_1 = k_detail*k_stretch*A
     # k_2 = k_detail/(k_shrink*A)
-    k_1 = k_detail*A/(k_shrink)
-    k_2 = k_detail*k_stretch/A
+    k_1 = k_detail* (k_stretch*(A -1) + (2 - A))
+    k_2 = k_detail/(k_shrink*(A - 1) + (2 - A))
     
 
     k_1 = ((1-D)*k_1 + D*k_detail*k_denoise)**2
     k_2 = ((1-D)*k_2 + D*k_detail*k_denoise)**2
     
-    
-    # k_2 = clamp(k_2, 0.8, 1/0)
-    # k_1 = clamp(k_1, 0.8, 1/0)
     
     k[0] = k_1
     k[1] = k_2 
@@ -141,8 +144,8 @@ def estimate_kernels(ref_img, comp_imgs, options, params):
     gradsy[0] = ref_img_grey[1:,:] - ref_img_grey[:-1,:]
     gradsy[1:] = comp_img_grey[:, 1:,:] - comp_img_grey[:, :-1, :]
     
-    cuda_gradsx = cuda.to_device(gradsx)
-    cuda_gradsy = cuda.to_device(gradsy)
+    cuda_gradsx = cuda.to_device(gradsx/2)
+    cuda_gradsy = cuda.to_device(gradsy/2)
 
 
     cuda_estimate_kernel[(n_images+1, grey_imshape_x, grey_imshape_y),
@@ -216,15 +219,19 @@ def cuda_estimate_kernel(gradsx, gradsy,
         k2 = k[0]
         if tz == 0:
             # covs[image_index, pixel_idy, pixel_idx, 0, 0] = structure_tensor[0, 0]
-            # covs[image_index, pixel_idy, pixel_idx, 0, 0] = e1[0]
+            # covs[image_index, pixel_idy, pixel_idx, 0, 0] = e1[0] # eighen vectors
+            # covs[image_index, pixel_idy, pixel_idx, 0, 0] = clamp(1 - sqrt(l[0])/D_tr + D_th, 0, 1)
             covs[image_index, pixel_idy, pixel_idx, 0, 0] = k1*e1[0]*e1[0] + k2*e2[0]*e2[0]
         elif tz == 1:
             # covs[image_index, pixel_idy, pixel_idx, 0, 1] = structure_tensor[0, 1]
             # covs[image_index, pixel_idy, pixel_idx, 0, 1] = e2[0]
+            # covs[image_index, pixel_idy, pixel_idx, 0, 1] = 1+sqrt((l[0] - l[1])/(l[0] + l[1]))
             covs[image_index, pixel_idy, pixel_idx, 0, 1] = k1*e1[0]*e1[1] + k2*e2[0]*e2[1]
+            
         elif tz == 2:
             # covs[image_index, pixel_idy, pixel_idx, 1, 0] = structure_tensor[1, 0]
             # covs[image_index, pixel_idy, pixel_idx, 1, 0] = e1[1]
+            # covs[image_index, pixel_idy, pixel_idx, 1, 0] = l[0]
             covs[image_index, pixel_idy, pixel_idx, 1, 0] = k1*e1[0]*e1[1] + k2*e2[0]*e2[1]
         else:
             # covs[image_index, pixel_idy, pixel_idx, 1, 1] = structure_tensor[1, 1]

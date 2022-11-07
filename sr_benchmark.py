@@ -182,7 +182,7 @@ def single2lrburst(image, burst_size, downsample_factor=1, transformation_params
 
 #%%
 CFA = np.array([[2, 1], [1, 0]]) #convention for bayer in synthetic burst
-transformation_params = {'max_translation':15,
+transformation_params = {'max_translation':3,
                           'max_shear': 0,
                           'max_ar_factor': 0,
                           'max_rotation': 0}
@@ -208,6 +208,7 @@ params = {'block matching': {
             'robustness' : {
                 'exif':{'CFA Pattern':CFA},
                 'mode':'bayer',
+                'on':False,
                 'tuning' : {
                     'tileSize': 16,
                     't' : 0,            # 0.12
@@ -219,6 +220,7 @@ params = {'block matching': {
             'merging': {
                 'exif':{'CFA Pattern':CFA},
                 'mode':'bayer',
+                'kernel':'handhled',
                 'scale': 2,
                 'tuning': {
                     'tileSize': 16,
@@ -252,7 +254,7 @@ for im_id, filename in tqdm(enumerate(os.listdir(DATASET_PATH)), total=N_images)
     if ground_truth.shape[1]%2 == 1:
         ground_truth = ground_truth[:,:-1]
         
-    burst, _ = single2lrburst(ground_truth, 10, downsample_factor=2, transformation_params=transformation_params)
+    burst, _ = single2lrburst(ground_truth, 15, downsample_factor=2, transformation_params=transformation_params)
     dec_burst = decimate(burst).astype(np.float32)
     
     handheld_output = main(dec_burst[0], dec_burst[1:], options, params)[0][:, :, :3].astype(np.float64)
@@ -270,6 +272,15 @@ for im_id, filename in tqdm(enumerate(os.listdir(DATASET_PATH)), total=N_images)
     crop = int((ground_truth.shape[0] - bicubic_output.shape[0])/2)
     PSNR["bicubic"][im_id] = computePSNR(ground_truth[crop:-crop, crop:-crop], bicubic_output)
     SSIM["bicubic"][im_id] = ssim(ground_truth[crop:-crop, crop:-crop], bicubic_output, channel_axis=2)
+    
+    print('\nPSNR')
+    print('\tHandheld : {}'.format( PSNR["handheld"][im_id]))
+    print('\tbicubic : {}'.format( PSNR["bicubic"][im_id]))
+
+    print('\nSSIM')
+    print('\tHandheld : {}'.format( SSIM["handheld"][im_id]))
+    print('\tbicubic : {}'.format( SSIM["bicubic"][im_id]))
+
     
 #%% ploting result
 
