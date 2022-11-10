@@ -26,6 +26,7 @@ from handheld_super_resolution.optical_flow import get_closest_flow, lucas_kanad
 from handheld_super_resolution.robustness import compute_robustness
 from handheld_super_resolution.kernels import estimate_kernels
 from handheld_super_resolution.merge import merge
+from plot_flow import flow2img
 
 
 #%% Single img to burst
@@ -233,20 +234,17 @@ def align_lk(dec_burst, params):
 
     lk_alignment = lucas_kanade_optical_flow(
         dec_burst[0], dec_burst[1:], pre_alignment, options, params['kanade'], debug=True)
-    lk_alignment[-1]/=2 #last alignment is multiplied by 2 by the LK flow function
-    for i,x in enumerate(lk_alignment):
-        lk_alignment[i] *=2
+    if params["kanade"]['grey method'] == 'decimating':
+        for i in range(len(lk_alignment) - 1):
+            lk_alignment[i] *=2 # last term has already been multiplied
+            # during the last iteration
     
-    
+
     lk_alignment.insert(0, pre_alignment)
-
-
     imsize = (dec_burst.shape[1], dec_burst.shape[2])
     
     upscaled = np.empty((len(lk_alignment), dec_burst.shape[0]-1, dec_burst.shape[1], dec_burst.shape[2], 2))
-    
-    upscaled[0] = upscale_alignement(np.array(lk_alignment[0]), imsize, tile_size*2) # bm and lk tile size are different
-    for i in range(1, len(lk_alignment)): # x2 because coordinates are on bayer scale
+    for i in range(len(lk_alignment)): # x2 because coordinates are on bayer scale
         upscaled[i] = upscale_alignement(np.array(lk_alignment[i]), imsize, tile_size*2)
     # we need to upscale because estimated_al is patchwise
 
@@ -298,7 +296,7 @@ def im_MSE(ground_truth, warped):
     return np.mean(im_SE(ground_truth, warped))
 
 
-def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=False, params=None):
+def evaluate_alignment(comp_alignment, comp_imgs, ref_img, gt_flow, label="", imshow=False, params=None):
     """
     
 
@@ -319,14 +317,18 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
     warped_images = np.empty(comp_alignment.shape[:-1]+(3,))
     
     im_EQ = np.empty(comp_alignment.shape[:-1])
+    mean_flow_qe = np.empty(comp_alignment.shape[0])
     print("Evaluating {}".format(label))
-    for image_index in tqdm(range(comp_alignment.shape[1])):
-        for iteration in range(comp_alignment.shape[0]):
+    for iteration in  tqdm(range(comp_alignment.shape[0])):
+        for image_index in range(comp_alignment.shape[1]):
             warped_images[iteration, image_index] = warp_flow(comp_imgs[image_index],
                                                               comp_alignment[iteration, image_index], rgb=True)
             im_EQ[iteration, image_index] = im_SE(ref_img,
                                                   warped_images[iteration, image_index])
-
+        # [it, image, posy, posx, flowxy
+        # gt flow : image, flowxyu -> it=None, image, poxy=None, posx=None, flowy
+        mean_flow_qe[iteration] = np.mean(np.linalg.norm(gt_flow[None][None][None].transpose((0,3,1,2,4)) - comp_alignment[iteration], axis=4), axis=(1,2,3))
+    
     last_im_MSE = np.mean(im_EQ[-1])
     if comp_alignment.shape[0] > 1:
         # plt.figure("flow MSE")
@@ -346,6 +348,12 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
         plt.xlabel('lk iteration')
         plt.ylabel('mean norm of optical flow')
         plt.legend()
+        
+        plt.figure("quadratic error on flow")
+        plt.plot(mean_flow_qe, label=label)
+        plt.xlabel('lk iteration')
+        plt.ylabel("quadratic error on flow")
+        plt.legend()
     
         plt.figure("flow step")
         plt.plot([np.mean(np.linalg.norm(2*comp_alignment[i+1] - 2*comp_alignment[i], axis=3)) for i in range(comp_alignment.shape[0]-1)], label=label)
@@ -361,6 +369,18 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, label="", imshow=Fals
         plt.plot([params['kanade']['tuning']['kanadeIter']], [last_im_MSE], marker = 'x', label = "Farneback")
         plt.legend()
         
+        plt.figure("flow norm")
+        plt.plot([params['kanade']['tuning']['kanadeIter']], [np.mean(np.linalg.norm(comp_alignment[0], axis=3))] , marker = 'x', label = "Farneback")
+        plt.xlabel('lk iteration')
+        plt.ylabel('mean norm of optical flow')
+        plt.legend()
+        
+        print(mean_flow_qe)
+        plt.figure("quadratic error on flow")
+        plt.plot([params['kanade']['tuning']['kanadeIter']], [mean_flow_qe[0]], marker = 'x', label = "Farneback")
+        plt.xlabel('lk iteration')
+        plt.ylabel("quadratic error on flow")
+        plt.legend()
         
     if imshow : 
         for i in range(im_EQ.shape[0]):
@@ -392,14 +412,16 @@ params = {'block matching': {
             'kanade' : {
                 'mode':'bayer',
                 'epsilon div' : 1e-6,
+                'grey method':"decimating",
                 'tuning' : {
                     'tileSize' : 16,
-                    'kanadeIter': 6, # 3 
+                    'kanadeIter': 20, # 3 
+                    'sigma blur':0,
                     }},
             'robustness' : {
                 'exif':{'CFA Pattern':CFA},
-                'mode':'act',
                 'on':False,
+                'mode':"bayer",
                 'tuning' : {
                     'tileSize': 16,
                     't' : 0.12,            # 0.12
@@ -411,7 +433,7 @@ params = {'block matching': {
             'merging': {
                 'exif':{'CFA Pattern':CFA},
                 'mode':'bayer',
-                'scale': 2,
+                'scale': 1,
                   'kernel' : 'handheld',
                 'tuning': {
                     'tileSize': 16,
@@ -426,17 +448,20 @@ params = {'block matching': {
 params['robustness']['std_curve'] = np.load('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/data/noise_model_std_ISO_50.npy')
 params['robustness']['diff_curve'] = np.load('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/data/noise_model_diff_ISO_50.npy')
 options = {'verbose' : 3}
-
+params['scale'] = params['merging']['scale']
 #%% generating burst
 if __name__=="__main__":
+    # img = plt.imread("P:/Kodak/1.png")*255
     # img = plt.imread("P:/mire.png")[:,:,:3]*255
-    img = plt.imread("P:/DIV2K_valid_HR/DIV2K_valid_HR/0820.png")*255
+    # img = plt.imread("P:/DIV2K_valid_HR/DIV2K_valid_HR/0820.png")*255
     #img = plt.imread("P:/Urban100_SR/image_SRF_4/img_040_SRF_4_HR.png")*255
+    # img = plt.imread("P:/0002/Canon/im.JPG")
+    img = plt.imread("P:/DIV2K_valid_HR/DIV2K_valid_HR/0900.png")*255
     transformation_params = {'max_translation':3,
                               'max_shear': 0,
                               'max_ar_factor': 0,
                               'max_rotation': 0}
-    burst, flow = single2lrburst(img, 15, downsample_factor=2, transformation_params=transformation_params)
+    burst, flow = single2lrburst(img, 4, downsample_factor=2, transformation_params=transformation_params)
     # flow is unussable because it is pointing from moving frame to ref. We would need the opposite
     
     
@@ -450,23 +475,55 @@ if __name__=="__main__":
     params["merging"]["mode"] = 'bayer'
     params["robustness"]["mode"] = 'bayer'
     
-    output, R, r, alignment, kernel = main(dec_burst[0], dec_burst[1:], options, params)
-    plt.figure("merge on bayer images")
+    params["kanade"]["grey method"] = "FFT"
+    output, R, r, alignment, covs = main(dec_burst[0], dec_burst[1:], options, params)
+    plt.figure("merge on bayer images new")
     plt.imshow(output[:,:,:3])
     plt.figure("ref")
     plt.imshow(cv2.resize(colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(dec_burst[0], pattern='BGGR'), None, fx = params["merging"]['scale'], fy = params["merging"]['scale'], interpolation=cv2.INTER_CUBIC))
 
 #%% aligning LK on bayer
+    ground_truth_flow = flow[1:,:,0,0]
+    
     params["block matching"]["mode"] = 'bayer'
     params["kanade"]["mode"] = 'bayer'
+    
+    params["kanade"]["grey method"] = "decimating"
     raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params)
+    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow,  label = "LK decimating", imshow=False, params=params)
+
+    params["kanade"]["grey method"] = "FFT"
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params)
+    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = "LK FFT", imshow=False, params=params)
+
+    params["kanade"]["grey method"] = "demosaicing"
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params)
+    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = "LK demosaicing", imshow=False, params=params)
+
     t1 = time()
     fb_alignment = align_fb(dec_burst*255)
     print('farneback evaluated : ', time()-t1)
+    fb_warped_images, fb_im_EQ = evaluate_alignment(fb_alignment[None], burst[1:]/255, burst[0]/255, ground_truth_flow, label = "FarneBack", imshow=True, params=params)
 
-#%% evaluating lk bayer
-    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255,  label = "LK", imshow=True, params=params)
-    fb_warped_images, fb_im_EQ = evaluate_alignment(fb_alignment[None], burst[1:]/255, burst[0]/255, label = "FarneBack", imshow=True, params=params)
+#%% plot flow
+    maxrad = 10
+    
+    for image_index in range(dec_burst.shape[0]-1):
+        flow_image = flow2img(upscaled_lk_alignment[-1, image_index], maxrad)
+        plt.figure("flow FFT {}".format(image_index))
+        plt.imshow(flow_image)
+        if image_index==1 : 
+            break
+    
+    # Making color wheel
+    X = np.linspace(-maxrad, maxrad, 1000)
+    Y = np.linspace(-maxrad, maxrad, 1000)
+    Xm, Ym = np.meshgrid(X, Y)
+    Z = np.stack((Xm, Ym)).transpose(1,2,0)
+    # Z = np.stack((-Z[:,:,1], -Z[:,:,0]), axis=-1)
+    flow_image = flow2img(Z, maxrad)
+    plt.figure("wheel")
+    plt.imshow(flow_image)
 
 #%% ploting burst
     plt.figure("ref")
@@ -479,7 +536,7 @@ if __name__=="__main__":
 
     plt.figure("ref")
     plt.imshow(burst[0]/255)
-    for i in range(lk_warped_images.shape[1]):
+    for i in range(fb_warped_images.shape[1]):
         plt.figure("{}".format(i))
         plt.imshow(lk_warped_images[-1, i])
 
@@ -541,7 +598,7 @@ if __name__=="__main__":
                                               options, params['robustness'])
     
     cuda_kernels = estimate_kernels(dec_burst[0], dec_burst[1:], options, params['merging'])  
-    
+    covs = cuda_kernels.copy_to_host()
     output = merge(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment, cuda_kernels, cuda_robustness, options, params['merging'])
 
 #%% ploting
@@ -581,32 +638,62 @@ if __name__=="__main__":
                 plt.imshow(postprocessed_bicubic[i*crop_size[0]:(i+1)*crop_size[0], j*crop_size[1]:(j+1)*crop_size[1]])
                 plt.scatter(crop_size[0]/2, crop_size[1]/2, marker='x', c='r')
 
-#%% invert warping
-    def cfa_to_grayscale(raw_img):
-        return (raw_img[..., 0::2, 0::2] + 
-                raw_img[..., 1::2, 0::2] + 
-                raw_img[..., 0::2, 1::2] + 
-                raw_img[..., 1::2, 1::2])/4
+#%% plotting merge
+
+    # D : Dx, Dy, bayer pixel (0, 1, 2 or 3). DIstance to the central pixel of the 3x3 patch,
+    # and associated channel
+    D = np.empty((dec_burst.shape[0]+1, output.shape[0], output.shape[1], 3))
+    for image in tqdm(range(dec_burst.shape[0]+1)):
+        D[image, :, :,0] = output[:,:,3 + 3*image]
+        D[image, :, :,1] = output[:,:,3 + 3*image + 1]
+        D[image, :, :,2] = output[:,:,3 + 3*image + 2]
+            
     
-    
-    plt.figure('ref grey')    
-    ref_grey_image = cfa_to_grayscale(dec_burst[0])
-    plt.imshow(ref_grey_image, cmap= 'gray')
-    plt.scatter(60, 60, marker='x', c='r')  
-    
-    comp_grey_images = cfa_to_grayscale(dec_burst[1:])
-    grey_al = ground_truth_flow.copy()
-    grey_al[:,:,:,-2:]*=0.5 # pure translation are downscaled from bayer to grey 
-    
-    upscaled_grey_al = upscale_alignement(grey_al, ref_grey_image.shape[:2], 16) 
-    for image_index in range(dec_burst.shape[0]-1):
-        warped = warp_flow(comp_grey_images[image_index], upscaled_grey_al[image_index], rgb = False)
-        plt.figure("image {}".format(image_index))
-        # plt.imsave('P:/images_test/image_{:02d}.png'.format(image_index),warped, cmap = 'gray')
-        plt.imshow(warped, cmap = 'gray')
-        plt.scatter(60, 60, marker='x', c='r')
-        # plt.figure("EQ {}".format(image_index))
-        # plt.imshow(np.log10((ref_grey_image - warped)**2),vmin = -4, vmax =0 , cmap="gray")
-        # plt.colorbar()
+    def plot_merge(covs, Dist, pos):
+        bayer= CFA
+        reframed_posx, x = math.modf(pos[1]/(2*params['scale'])) # these positions are between 0 and 1
+        reframed_posy, y = math.modf(pos[0]/(2*params['scale']))
+        x=int(x); y=int(y)
         
-        # print("Im {}, EQM = {}".format(image_index, np.mean((ref_grey_image - warped)**2)))
+        int_cov = (covs[0, y, x]*(1 - reframed_posx)*(1 - reframed_posy) +
+                   covs[0, y, x+1]*(reframed_posx)*(1 - reframed_posy) + 
+                   covs[0, y+1, x]*(1 - reframed_posx)*(reframed_posy) + 
+                   covs[0, y+1, y+1]*reframed_posx*reframed_posy)
+        
+        cov_i = np.linalg.inv(int_cov*params['scale']**2)
+    
+        
+        # plotting kernel
+        L = np.linspace(-5, 5, 100)
+        Xm, Ym = np.meshgrid(L,L)
+        Z = np.empty_like(Xm)
+        Z = cov_i[0,0] * Xm**2 + (cov_i[1, 0] + cov_i[0, 1])*Xm*Ym + cov_i[1, 1]*Ym**2
+        plt.figure("merge in (x = {}, y = {})".format(pos[1],pos[0]))
+        plt.pcolor(Xm, Ym, np.exp(-Z/2), vmin = 0, vmax=1)
+        plt.gca().invert_yaxis()
+        plt.scatter([0], [0], c='k', marker ='o')
+        
+        
+        
+        colors = ['r', 'g', 'b']
+        
+        # scattering frames pixels.
+        for image in range(Dist.shape[0]):
+            D = Dist[(image,) + pos]
+            x_center, y_center, channel = D
+            # [0, 1, 2, 3] -> [0, 1]x[0, 1]
+            bayer_idy_center, bayer_idx_center = channel//2, channel%2 
+            
+            for idx in range(-1,2):
+                for idy in range(-1, 2):
+                    x = x_center + idx*params["scale"]
+                    y = y_center + idy*params["scale"]
+
+                    bayer_idx =int((bayer_idx_center + idx)%2)
+                    bayer_idy = int((bayer_idy_center + idy)%2)
+                    c = colors[CFA[bayer_idy, bayer_idx]]
+                    plt.scatter(x,y,c=c,marker='x')            
+
+        
+    
+        plt.colorbar()

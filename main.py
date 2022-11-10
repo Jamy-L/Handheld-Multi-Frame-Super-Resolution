@@ -7,20 +7,24 @@ Created on Mon Sep 12 11:34:02 2022
 import os
 import glob
 from time import time
+# import logging
 
 from tqdm import tqdm
 import numpy as np
 from math import modf
 import cv2
+import torch
 from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda, int32
 import exifread
 import rawpy
 import matplotlib.pyplot as plt
 import colour_demosaicing
+# colour_demosaicing.demosaicing_CFA_Bayer_Menon2007
 # pip install colour-demosaicing
 import seaborn as sns
 import pandas as pd
 
+# import demosaicnet
 from handheld_super_resolution import process, raw2rgb, get_params
 from evaluation import warp_flow, upscale_alignement
 from plot_flow import flow2img
@@ -39,6 +43,8 @@ def cfa_to_grayscale(raw_img):
             raw_img[..., 1::2, 1::2])/4
 
 
+# logger = logging.getLogger()
+# logger.setLevel(logging.WARNING)
 
 # crop_str = "[1638:2600, 1912:2938]" # for friant
 crop_str = "[1002:1686, 2406:3130]" # for rue4 (arrondissement)
@@ -120,18 +126,18 @@ output_img = output[:,:,:3].copy()
 imsize = output_img.shape
 
 
-D = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 3))
-for image in tqdm(range(comp_images.shape[0]+1)):
-    for i in range(2):
-        D[image, :, :, i,0] = output[:,:,3 + i*3 + 6*image]
-        D[image, :, :, i,1] = output[:,:,3 + i*3+1 + 6*image]
-        D[image, :, :, i,2] = output[:,:,3 + i*3+2 + 6*image]
+# D = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 3))
+# for image in tqdm(range(comp_images.shape[0]+1)):
+#     for i in range(2):
+#         D[image, :, :, i,0] = output[:,:,3 + i*3 + 6*image]
+#         D[image, :, :, i,1] = output[:,:,3 + i*3+1 + 6*image]
+#         D[image, :, :, i,2] = output[:,:,3 + i*3+2 + 6*image]
 
 
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 
-plt.figure("output, kernel {} New LK".format(params['merging']['kernel']))
+plt.figure("output, kernel {}, {} LK".format(params['merging']['kernel'], params['kanade']['grey method']))
 postprocessed_output = raw2rgb.postprocess(raw_ref_img, output_img, xyz2cam=xyz2cam) 
 plt.imshow(postprocessed_output)
 
@@ -147,6 +153,13 @@ base = colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(ref_img, pattern=patt
 plt.figure("original bicubic")
 postprocessed_bicubic = cv2.resize(raw2rgb.postprocess(raw_ref_img, base, xyz2cam=xyz2cam), None, fx = params["merging"]['scale'], fy = params["merging"]['scale'], interpolation=cv2.INTER_CUBIC)
 plt.imshow(postprocessed_bicubic)
+
+# demosaicnet_bayer = demosaicnet.BayerDemosaick()
+# mosaicnet_output = demosaicnet_bayer(torch.from_numpy(raw_ref_img.raw_image).flip(-1).unsqueeze(0)).squeeze(0).cpu().numpy()
+# mosaicnet_output = np.clip(mosaicnet_output, 0, 1).transpose(1,2,0).astype(np.float64).fliplr()
+
+# plt.figure('mosaicnet output')
+# plt.figure(mosaicnet_output)
 
 #%% ploting images in crops
 crops_x = 2
@@ -227,8 +240,13 @@ sns.pairplot(ds, kind="hist")
 
 plt.figure('ref grey')    
 ref_grey_image = cfa_to_grayscale(ref_img)
-plt.imshow(ref_grey_image, cmap= 'gray')  
+plt.imshow(ref_grey_image, cmap= 'gray')
+#%%
+plt.figure('im 1')    
+ref_grey_image = cfa_to_grayscale(comp_images[1])
+plt.imshow(ref_grey_image, cmap= 'gray')
 
+#%%
 comp_grey_images = cfa_to_grayscale(comp_images)
 grey_al = alignment.copy()
 grey_al[:,:,:,-2:]*=0.5 # pure translation are downscaled from bayer to grey 
