@@ -307,8 +307,6 @@ for im_id, filename in tqdm(enumerate(os.listdir(DATASET_PATH)), total=N_images)
     print('\tbilinear : {}'.format( SSIM["bilinear"][im_id]))
     print('\tmosaicnet : {}'.format( SSIM["mosaicnet"][im_id]))
     
-    if im_id ==0:
-        break
 
 #%% ploting result
 

@@ -69,11 +69,46 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         if VERBOSE > 1:
             current_time = time()
             print("Estimating Robustness")
+            if VERBOSE > 1:
+                print("Decimating images to RGB")
+                
+        # decimating images to RGB
+        if params["mode"]=='bayer':
+            ref_rgb_img = np.zeros((rgb_imshape)+(3,))
+            comp_rgb_imgs = np.zeros((n_images,)+(rgb_imshape)+(3,))
+            for i in range(2):
+                for j in range(2):
+                    channel = CFA_pattern[i,j]
+                    ref_rgb_img[:,:,channel] += ref_img[:i,:j]
+                    comp_rgb_imgs[:,:,:,channel] += comp_imgs[:, :i, :j]
+            ref_rgb_img[:,:,1]/=2
+            comp_rgb_imgs[:, :,:,1]/=2
             
-        cuda_compute_robustness[(n_images, rgb_imshape_y, rgb_imshape_x), (3, 3)
-            ](ref_img, comp_imgs, flows,cuda_diff_curve, cuda_std_curve,
-              bayer_mode, tile_size, CFA_pattern,
-              s1, s2, t, Mt, R)
+            ref_local_stats = cuda.device_array((rgb_imshape)+(2, 3), dtype=DEFAULT_NUMPY_FLOAT_TYPE)
+            comp_local_stats = cuda.device_array(((n_images,)+rgb_imshape)+(3), dtype=DEFAULT_NUMPY_FLOAT_TYPE)
+        else:
+            ref_rgb_img = ref_img[None].transpose((1,2,0))
+            comp_rgb_imgs = comp_imgs[None].transpose((1,2,3,0)) # adding dimension 1 for single channel
+            
+            ref_local_stats = cuda.device_array((rgb_imshape)+(2, 1), dtype=DEFAULT_NUMPY_FLOAT_TYPE)
+            comp_local_stats = cuda.device_array(((n_images,)+rgb_imshape)+(1), dtype=DEFAULT_NUMPY_FLOAT_TYPE)
+            
+        cuda_ref_rgb_img = cuda.to_device(ref_rgb_img)
+        cuda_comp_rgb_imgs = cuda.to_device(comp_rgb_imgs)
+        # Computing local stats (before applying optical flow)
+        # 2 channels for mu, sigma
+
+        compute_local_stats2[(n_images, rgb_imshape_y, rgb_imshape_x), (3, 3)](
+            cuda_ref_rgb_img, cuda_comp_rgb_imgs, bayer_mode,
+            ref_local_stats, comp_local_stats)
+        
+        
+        
+        
+        # cuda_compute_robustness[(n_images+1, rgb_imshape_y, rgb_imshape_x), (3, 3)
+        #     ](ref_img, comp_imgs, flows,cuda_diff_curve, cuda_std_curve,
+        #       bayer_mode, tile_size, CFA_pattern,
+        #       s1, s2, t, Mt, R)
         cuda.synchronize()
         if VERBOSE > 2:
             current_time = getTime(
@@ -90,8 +125,65 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         R = cuda.to_device(temp)
     return R, r
 
+@cuda.jit
+def compute_local_stats2(ref_rgb_img, comp_rgb_imgs, bayer_mode,
+                        ref_local_stats, comp_local_stats):
+    """
+    Computes the mean color and variance associated for each 3 by 3 patches
+
+    Parameters
+    ----------
+    ref_img : shared Array[imsize_y, imsize_x]
+        ref image.
+    comp_imgs : shrred Array[n_images, imsize_y, imsize_x]
+        compared images.
+    flows : shared Array[n_images, n_patchs_y, n_patchs_y, 2]
+        optical flows
+    local_stats_ref : shared Array[2]
+        empty array that will contain mu and sigma for the ref image
+    local_stats_comp : shared Array[2]
+        empty Array that will contain mu and sigma for the compared image
 
 
+    """
+    tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
+    im_id, idy, idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
+    # single threaded zeros init
+    if tx == 0 and ty ==0:
+        if im_id == 0:
+            for chan in range(ref_rgb_img.shape[2]):
+                ref_local_stats[idy, idx, chan] = 0
+        else:
+            for chan in range(ref_rgb_img.shape[2]):
+                comp_local_stats[im_id-1, idy, idx, chan] = 0
+
+    cuda.syncthreads()
+    thread_idy = clamp(idy + ty -1, 0, ref_rgb_img.shape[0]-1)
+    thread_idx = clamp(idx + tx -1, 0, ref_rgb_img.shape[1]-1)
+    if im_id == 0:
+        for chan in range(ref_rgb_img.shape[2]): # might be 3 for bayer and 1 for grey images
+            thread_value = ref_rgb_img[thread_idy, thread_idx, chan]
+            cuda.atomic.add(ref_local_stats, (idy, idx, 0, chan), thread_value)
+            cuda.atomic.add(ref_local_stats, (idy, idx, 1, chan), thread_value**2)
+        cuda.syncthreads()
+        if ty == 0 and bayer_mode:
+            # normalizing
+            ref_local_stats[idy, idx, 0, tx] /= 9 # one thread for each color channel = no racing condition
+            ref_local_stats[idy, idx, 1, tx] = ref_local_stats[idy, idx, 1, tx]/9 -  ref_local_stats[idy, idx, 0, tx]**2
+            
+    else:
+        for chan in range(ref_rgb_img.shape[2]): # might be 3 for bayer and 1 for grey images
+            thread_value = comp_rgb_imgs[im_id -1, thread_idy, thread_idx, chan]
+            cuda.atomic.add(comp_local_stats, (im_id-1, idy, idx, 0, chan), thread_value)
+            cuda.atomic.add(comp_local_stats, (im_id-1, idy, idx, 1, chan), thread_value**2)
+        cuda.syncthreads()
+        if ty == 0 and bayer_mode:
+            # normalizing
+            comp_local_stats[im_id-1, idy, idx, 0, tx] /= 9 # one thread for each color channel = no racing condition
+            comp_local_stats[im_id-1, idy, idx, 1, tx] = comp_local_stats[im_id-1, idy, idx, 1, tx]/9 -  comp_local_stats[im_id-1, idy, idx, 0, tx]**2
+    
+    
+    
 @cuda.jit
 def cuda_compute_robustness(ref_img, comp_imgs, flows,
                             cuda_diff_curve, cuda_std_curve,

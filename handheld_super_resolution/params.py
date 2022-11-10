@@ -33,15 +33,19 @@ def get_params(PSNR):
                         'subpixels': [False, True, True, True]
                         }},
                 'kanade' : {
+                    # FFT, demosaicing, decimating
+                    'grey method':"FFT",
                     'tuning' : {
                         'kanadeIter': 6, # 3
+                        # gaussian blur before computing grads. If 0, no blur is applied
+                        'sigma blur':0,
                         }},
                 'robustness' : {
                     'on':True,
                     'tuning' : {
-                        't' : 0.12,            # 0.12
+                        't' : 0.12,         # 0.12
                         's1' : 2,           # 12
-                        's2' : 237,          # 2
+                        's2' : 237,         # 2
                         'Mt' : 0.8,         # 0.8
                         }
                     },

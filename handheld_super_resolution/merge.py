@@ -280,15 +280,14 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
             local_r = 1 # for all 9 threads and each 4 pixels
         elif 0 <= thread_pixel_idx < input_size_x - 1 and 0 <= thread_pixel_idx < input_size_y - 1: # inbound
             if bayer_mode : 
-                # TODO there is a mistake, R is already in ref frame refrential : must be fetched without optical flow
                 local_r = r[image_index - 1,
-                            round((thread_pixel_idy-0.5)/2),
-                            round((thread_pixel_idx-0.5)/2)]
+                            int((coarse_ref_sub_pos[0] + ty-0.5)/2),
+                            int((coarse_ref_sub_pos[1] + tx-0.5)/2)]
 
             else:
                 local_r = r[image_index - 1,
-                            thread_pixel_idy,
-                            thread_pixel_idx]
+                            int(coarse_ref_sub_pos[0] + ty),
+                            int(coarse_ref_sub_pos[1] + tx)]
             
 
 
@@ -310,10 +309,10 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
 
     
         # TODO Debugging
-        if tx==0 and ty >= 0 :
-            output_img[output_pixel_idy, output_pixel_idx, 3 + image_index*6 + 0 + 3*ty] = dist[0]
-            output_img[output_pixel_idy, output_pixel_idx, 3 + image_index*6 + 1 + 3*ty] = dist[1]
-            output_img[output_pixel_idy, output_pixel_idx, 3 + image_index*6 + 2 + 3*ty] = channel
+        if tx==0 and ty == 0 :
+            output_img[output_pixel_idy, output_pixel_idx, 3 + image_index*3 + 0] = dist[0]
+            output_img[output_pixel_idy, output_pixel_idx, 3 + image_index*3 + 1] = dist[1]
+            output_img[output_pixel_idy, output_pixel_idx, 3 + image_index*3 + 2] = 2*thread_pixel_idy%2 + thread_pixel_idx
     
         if act : 
             y = max(0, 2*(dist[0]*dist[0] + dist[1]*dist[1]))

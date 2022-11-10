@@ -50,8 +50,6 @@ def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
     
     k_stretch = 4
     k_shrink = 2
-
-    
     
     # TODO debug
     
