@@ -20,11 +20,13 @@ import colour_demosaicing
 import math
 from skimage import filters
 
+from handheld_super_resolution.utils_image import compute_grey_images
 from handheld_super_resolution.super_resolution import main
 from handheld_super_resolution.block_matching import alignBurst
 from handheld_super_resolution.optical_flow import get_closest_flow, lucas_kanade_optical_flow
 from handheld_super_resolution.robustness import compute_robustness
 from handheld_super_resolution.kernels import estimate_kernels
+from handheld_super_resolution.params import get_params
 from handheld_super_resolution.merge import merge
 from plot_flow import flow2img
 
@@ -223,18 +225,42 @@ def upscale_alignement(alignment, imsize, tile_size):
     get_flow[blockspergrid, threadsperblock](upscaled_alignment, cuda_alignment)
     return upscaled_alignment.copy_to_host()
 
-def align_lk(dec_burst, params):
-    # warning this does not support grey mode, only bayer
+def align_bm(dec_burst, params):
+    """returns tile wise BM alignment to the coarse scale"""
+    grey_method_bm = params['block matching']['grey method']
+    bayer_mode = params['mode']=='bayer'
+    print("global mode :", params['mode'])
+    print("BM grey mode :", params['block matching']['grey method'])
+    print("BM color mode :", params['block matching']['mode'])
+    
+    if bayer_mode :
+        ref_grey, comp_grey = compute_grey_images(dec_burst[0], dec_burst[1:], grey_method_bm)
+    else:
+        ref_grey, comp_grey = dec_burst[0], dec_burst[1:]
 
+    pre_alignment, _ = alignBurst(ref_grey, comp_grey,params['block matching'], options)
+    pre_alignment = pre_alignment[:, :, :, ::-1] # swapping x and y direction (x must be first)
+    if grey_method_bm in ["gauss", "decimating"] and bayer_mode:
+        pre_alignment*=2
+        # BM is always in grey mode, so input scale is output scale.
+        # we choose by convention, to always return flow on the coarse scale, so x2 if grey is 2x smaller
+    return pre_alignment
+    
+def align_lk(dec_burst, params, pre_alignment):
+    # warning this does not support grey mode, only bayer
+    grey_method_lk = params['kanade']['grey method']
     options = {'verbose' : 2}
-    pre_alignment, aligned_tiles = alignBurst(dec_burst[0], dec_burst[1:],params['block matching'], options)
-    pre_alignment = pre_alignment[:, :, :, ::-1]
+    ref_grey, comp_grey = compute_grey_images(dec_burst[0], dec_burst[1:], grey_method_lk)
+    
+    print("global mode :", params['mode'])
+    print("LK grey mode :", params['kanade']['grey method'])
+    print("LK color mode :", params['kanade']['mode'])
 
     tile_size = params["kanade"]['tuning']['tileSize']
 
     lk_alignment = lucas_kanade_optical_flow(
-        dec_burst[0], dec_burst[1:], pre_alignment, options, params['kanade'], debug=True)
-    if params["kanade"]['grey method'] == 'decimating':
+        ref_grey, comp_grey, pre_alignment, options, params['kanade'], debug=True)
+    if params["kanade"]['grey method'] in ['gauss', 'decimating']:
         for i in range(len(lk_alignment) - 1):
             lk_alignment[i] *=2 # last term has already been multiplied
             # during the last iteration
@@ -245,34 +271,30 @@ def align_lk(dec_burst, params):
     
     upscaled = np.empty((len(lk_alignment), dec_burst.shape[0]-1, dec_burst.shape[1], dec_burst.shape[2], 2))
     for i in range(len(lk_alignment)): # x2 because coordinates are on bayer scale
-        upscaled[i] = upscale_alignement(np.array(lk_alignment[i]), imsize, tile_size*2)
+        if grey_method_lk in ['FFT', 'demosaicing']:
+            upscaled[i] = upscale_alignement(np.array(lk_alignment[i]), imsize, tile_size)
+        else:
+            upscaled[i] = upscale_alignement(np.array(lk_alignment[i]), imsize, tile_size*2)
     # we need to upscale because estimated_al is patchwise
 
     return lk_alignment, upscaled
 
-def align_fb(dec_burst):
-    ref_grey = np.empty((int(dec_burst.shape[1]/2), int(dec_burst.shape[2]/2)))
-    ref_grey[:,:] = (dec_burst[0, ::2, ::2] + dec_burst[0, 1::2, ::2] + dec_burst[0, ::2, 1::2] + dec_burst[0,1::2, 1::2])/4  
-
-
-    farnback_flow = np.empty((dec_burst.shape[0] - 1, int(dec_burst.shape[1]/2), int(dec_burst.shape[2]/2), 2))
-
-    for i in range(dec_burst.shape[0] - 1):
-         
-        # Capture another frame and convert to gray scale
+def align_fb(dec_burst, params):
+    grey_method_fb = 'FFT'
+    ref_grey, comp_grey = compute_grey_images(dec_burst[0], dec_burst[1:], grey_method_fb)
         
-        comp_grey = np.empty((int(dec_burst.shape[1]/2), int(dec_burst.shape[2]/2)))
-        comp_grey[:,:] = (dec_burst[i+1, ::2, ::2] + dec_burst[i+1, 1::2, ::2] + dec_burst[i+1, ::2, 1::2] + dec_burst[i+1,1::2, 1::2])/4  
-        
-        
-        # Optical flow is now calculated
-        farnback_flow[i] = cv2.calcOpticalFlowFarneback(ref_grey, comp_grey, None, 0.5, 3, 16, 3, 5, 1.2, 0)
+    # Optical flow is now calculated
+    farnback_flow = np.empty(comp_grey.shape+(2,))
+    print(ref_grey.shape, comp_grey.shape)
+    for i in range(farnback_flow.shape[0]):
+        farnback_flow[i] = cv2.calcOpticalFlowFarneback(ref_grey, comp_grey[i], None, 0.5, 3, 16, 3, 5, 1.2, 0)
     upscaled_fb = np.empty( (dec_burst.shape[0] - 1, ) + dec_burst.shape[1:] + (2, ))
-    upscaled_fb[:, ::2, ::2, :] = farnback_flow
-    upscaled_fb[:, 1::2, ::2, :] = farnback_flow
-    upscaled_fb[:, ::2, 1::2, :] = farnback_flow
-    upscaled_fb[:, 1::2, 1::2, :] = farnback_flow
-    return upscaled_fb*2 # greys are twice smaller
+    # TODO upscale if methode is gauss or decimating
+    upscaled_fb = farnback_flow
+    if grey_method_fb in ['gauss', 'decimating']:
+        return upscaled_fb*2 # greys are twice smaller
+    else:
+        return upscaled_fb
 
 def warp_flow(image, flow, rgb=False):
     Y = np.linspace(0, image.shape[0] - 1, image.shape[0])
@@ -398,57 +420,60 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, gt_flow, label="", im
 #Warning : tileSize is expressed in terms of grey pixels.
 CFA = np.array([[2, 1], [1, 0]])
 
-params = {'block matching': {
-                'mode':'bayer',
-                'tuning': {
-                    # WARNING: these parameters are defined fine-to-coarse!
-                    'factors': [1, 2, 2, 2],
-                    'tileSizes': [16, 16, 16, 8],
-                    'searchRadia': [1, 4, 4, 4],
-                    'distances': ['L1', 'L2', 'L2', 'L2'],
-                    # if you want to compute subpixel tile alignment at each pyramid level
-                    'subpixels': [False, True, True, True]
-                    }},
-            'kanade' : {
-                'mode':'bayer',
-                'epsilon div' : 1e-6,
-                'grey method':"decimating",
-                'tuning' : {
-                    'tileSize' : 16,
-                    'kanadeIter': 20, # 3 
-                    'sigma blur':0,
-                    }},
-            'robustness' : {
-                'exif':{'CFA Pattern':CFA},
-                'on':False,
-                'mode':"bayer",
-                'tuning' : {
-                    'tileSize': 16,
-                    't' : 0.12,            # 0.12
-                    's1' : 12,          #12
-                    's2' : 2,           # 2
-                    'Mt' : 0.8,         # 0.8
-                    }
-                },
-            'merging': {
-                'exif':{'CFA Pattern':CFA},
-                'mode':'bayer',
-                'scale': 1,
-                  'kernel' : 'handheld',
-                'tuning': {
-                    'tileSize': 16,
-                    'k_detail' : 0.33, # [0.25, ..., 0.33]
-                    'k_denoise': 5,    # [3.0, ...,5.0]
-                    'D_th': 0.05,      # [0.001, ..., 0.010]
-                    'D_tr': 0.014,     # [0.006, ..., 0.020]
-                    'k_stretch' : 4,   # 4
-                    'k_shrink' : 2,    # 2
-                    }
-                }}
+
+params = get_params(PSNR=35)
+
+###### Change paramaters here
+
+params['block matching']['tuning']['factors'] = [1, 2, 2, 2] # a bit smaller because div 2k is not 4k
+params['block matching']['grey method'] = "gauss"
+params['kanade']['grey method'] = "gauss"
+params['kanade']['tuning']['kanadeIter'] = 15
+params['robustness']['on'] = False
+
+################################
+params['robustness']['exif'] = {}
+params['merging']['exif'] = {}
+params['merging']['exif']['CFA Pattern'] = CFA
+params['robustness']['exif']['CFA Pattern'] = CFA
+
+# copying parameters values in sub-dictionaries
+if 'scale' not in params["merging"].keys() :
+    params["merging"]["scale"] = params["scale"]
+if 'tileSize' not in params["kanade"]["tuning"].keys():
+    params["kanade"]["tuning"]['tileSize'] = params['block matching']['tuning']['tileSizes'][0]
+if 'tileSize' not in params["robustness"]["tuning"].keys():
+    params["robustness"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
+if 'tileSize' not in params["merging"]["tuning"].keys():
+    params["merging"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
+
+# if 'mode' not in params["block matching"].keys():
+#     params["block matching"]["mode"] = params['mode']
+if 'mode' not in params["kanade"].keys():
+    params["kanade"]["mode"] = params['mode']
+if 'mode' not in params["robustness"].keys():
+    params["robustness"]["mode"] = params['mode']
+if 'mode' not in params["merging"].keys():
+    params["merging"]["mode"] = params['mode']
+
+# systematically grey, so we can control internally how grey is obtained
+params["block matching"]["mode"] = 'grey'
+if params["block matching"]["grey method"] in ["FFT", "demosaicing"]:
+    params["block matching"]['tuning']["tileSizes"] = [ts*2 for ts in params["block matching"]['tuning']["tileSizes"]]
+if params["kanade"]["grey method"] in ["FFT", "demosaicing"]:
+    params["kanade"]['tuning']["tileSize"] *= 2
+
+
 params['robustness']['std_curve'] = np.load('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/data/noise_model_std_ISO_50.npy')
 params['robustness']['diff_curve'] = np.load('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/data/noise_model_diff_ISO_50.npy')
 options = {'verbose' : 3}
-params['scale'] = params['merging']['scale']
+
+small_tileSizes = params["block matching"]['tuning']["tileSizes"].copy()
+small_Ts = small_tileSizes[0]
+
+big_tileSizes = [ts*2 for ts in small_tileSizes]
+big_Ts = small_Ts*2
+
 #%% generating burst
 if __name__=="__main__":
     # img = plt.imread("P:/Kodak/1.png")*255
@@ -475,7 +500,7 @@ if __name__=="__main__":
     params["merging"]["mode"] = 'bayer'
     params["robustness"]["mode"] = 'bayer'
     
-    params["kanade"]["grey method"] = "FFT"
+    
     output, R, r, alignment, covs = main(dec_burst[0], dec_burst[1:], options, params)
     plt.figure("merge on bayer images new")
     plt.imshow(output[:,:,:3])
@@ -485,23 +510,86 @@ if __name__=="__main__":
 #%% aligning LK on bayer
     ground_truth_flow = flow[1:,:,0,0]
     
-    params["block matching"]["mode"] = 'bayer'
-    params["kanade"]["mode"] = 'bayer'
+    ## FFT BM
+    params["block matching"]["grey method"] = "FFT"
+    params["block matching"]['tuning']["tileSizes"] = big_tileSizes
+    
+    
+    pre_alignment = align_bm(dec_burst, params)
     
     params["kanade"]["grey method"] = "decimating"
-    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params)
-    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow,  label = "LK decimating", imshow=False, params=params)
+    params["kanade"]['tuning']['tileSize'] = small_Ts
+    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
+    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow,  label = label, imshow=False, params=params)
+
+    # params["kanade"]["grey method"] = "gauss"
+    # params["kanade"]['tuning']['tileSize'] = small_Ts
+    # label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
+    # raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
+    # lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow,  label = label, imshow=False, params=params)
 
     params["kanade"]["grey method"] = "FFT"
-    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params)
-    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = "LK FFT", imshow=False, params=params)
+    params["kanade"]['tuning']['tileSize'] = big_Ts
+    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
+    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
 
     params["kanade"]["grey method"] = "demosaicing"
-    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params)
-    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = "LK demosaicing", imshow=False, params=params)
+    params["kanade"]['tuning']['tileSize'] = big_Ts
+    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
+    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+
+    # demosaicing BM
+    params["block matching"]["grey method"] = "demosaicing"
+    params["block matching"]['tuning']["tileSizes"] = big_tileSizes
+    pre_alignment = align_bm(dec_burst, params)
+    
+    params["kanade"]["grey method"] = "decimating"
+    params["kanade"]['tuning']['tileSize'] = small_Ts
+    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
+    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow,  label = label, imshow=False, params=params)
+
+    params["kanade"]["grey method"] = "FFT"
+    params["kanade"]['tuning']['tileSize'] = big_Ts
+    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
+    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+
+    params["kanade"]["grey method"] = "demosaicing"
+    params["kanade"]['tuning']['tileSize'] = big_Ts
+    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
+    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+
+    # gauss BM
+    params["block matching"]["grey method"] = "gauss"
+    params["block matching"]['tuning']["tileSizes"] = small_tileSizes
+    pre_alignment = align_bm(dec_burst, params)
+    
+    params["kanade"]["grey method"] = "decimating"
+    params["kanade"]['tuning']['tileSize'] = small_Ts
+    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
+    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow,  label = label, imshow=False, params=params)
+
+    params["kanade"]["grey method"] = "FFT"
+    params["kanade"]['tuning']['tileSize'] = big_Ts
+    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
+    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+
+    params["kanade"]["grey method"] = "demosaicing"
+    params["kanade"]['tuning']['tileSize'] = big_Ts
+    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
+    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+
 
     t1 = time()
-    fb_alignment = align_fb(dec_burst*255)
+    fb_alignment = align_fb(dec_burst*255, params)
     print('farneback evaluated : ', time()-t1)
     fb_warped_images, fb_im_EQ = evaluate_alignment(fb_alignment[None], burst[1:]/255, burst[0]/255, ground_truth_flow, label = "FarneBack", imshow=True, params=params)
 

@@ -23,6 +23,7 @@ def get_params(PSNR):
     params = {'scale' : 1,
               'mode' : 'bayer', # 'bayer' or grey if something else 
               'block matching': {
+                    'grey method':"FFT",
                     'tuning': {
                         # WARNING: these parameters are defined fine-to-coarse!
                         'factors': [1, 2, 2, 4],
@@ -33,7 +34,7 @@ def get_params(PSNR):
                         'subpixels': [False, True, True, True]
                         }},
                 'kanade' : {
-                    # FFT, demosaicing, decimating
+                    # FFT, demosaicing, decimating, gauss
                     'grey method':"FFT",
                     'tuning' : {
                         'kanadeIter': 6, # 3

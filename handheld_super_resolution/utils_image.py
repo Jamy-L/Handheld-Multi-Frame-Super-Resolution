@@ -33,8 +33,53 @@ from scipy import signal
 from scipy.ndimage import gaussian_filter
 from numba import vectorize, guvectorize, uint8, uint16, float32, float64
 
-from .utils import getSigned, isTypeInt
-from .fft import fft2, ifft2
+import colour_demosaicing
+from .utils import getSigned, isTypeInt, DEFAULT_NUMPY_FLOAT_TYPE
+from scipy.fft import fft2, ifft2, fftshift, ifftshift
+
+def compute_grey_images(ref_img, comp_img, method):
+    _, *imsize = n_images, imsize_y, imsize_x = comp_img.shape
+    if method == "decimating":
+        ref_img_grey = (ref_img[::2, ::2] + ref_img[1::2, 1::2] + ref_img[::2, 1::2] + ref_img[1::2, ::2])/4
+        comp_img_grey = (comp_img[:,::2, ::2] + comp_img[:,1::2, 1::2] + comp_img[:,::2, 1::2] + comp_img[:,1::2, ::2])/4
+    elif method == "FFT":
+            ref_img_grey = fftshift(fft2(ref_img))
+            # lowpass filtering
+            ref_img_grey[:imsize_y//4, :] = 0
+            ref_img_grey[:, :imsize_x//4] = 0
+            ref_img_grey[-imsize_y//4:, :] = 0
+            ref_img_grey[:, -imsize_x//4:] = 0
+            
+            ref_img_grey = np.real(ifft2(ifftshift(ref_img_grey)))
+            
+            comp_img_grey = np.empty_like(comp_img)
+            for im_id in range(n_images):
+                grey = fftshift(fft2(comp_img[im_id]))
+                # lowpass filtering
+                grey[:imsize_y//4, :] = 0
+                grey[:, :imsize_x//4] = 0
+                grey[-imsize_y//4:, :] = 0
+                grey[:, -imsize_x//4:] = 0
+                
+                comp_img_grey[im_id] = np.real(ifft2(ifftshift(grey)))
+    elif method == "demosaicing":
+            ref_img_dem = colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(ref_img)
+            comp_imgs_dem = []
+            for i in range(comp_img.shape[0]):
+                comp_imgs_dem.append(colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(comp_img[i]))
+            comp_imgs_dem=np.array(comp_imgs_dem)
+            
+            ref_img_grey = np.mean(ref_img_dem, axis=2)
+            comp_img_grey = np.mean(comp_imgs_dem, axis=3)
+    elif method == "gauss":
+        ref_img_grey = downsample(ref_img, kernel='bayer')
+        comp_img_grey = np.empty((comp_img.shape[0],)+ref_img_grey.shape)
+        for i in range(comp_img_grey.shape[0]):
+            comp_img_grey[i] = downsample(comp_img[i], kernel='bayer')
+    else:
+        raise ValueError('unknown method : {}'.format(method))
+    
+    return ref_img_grey.astype(DEFAULT_NUMPY_FLOAT_TYPE), comp_img_grey.astype(DEFAULT_NUMPY_FLOAT_TYPE)
 
 
 @vectorize([uint8(float32), uint8(float64)], target='parallel')
@@ -185,26 +230,6 @@ def computeL2Distance__(win, ref, dum, res):
                         sum += (win[n, i + p, j + q] - ref[n, p, q])**2
                 # Store the distance
                 res[n, i, j] = sum
-
-
-## Note: FFT-based L2 distance computation. It may be slow anyway because of homemade numba FFT.
-# @guvectorize(['void(float32[:, :, :], float32[:, :, :], float32[:, :, :], float32[:, :, :])'], '(n, w, w), (n, p, p), (n, t, t) -> (n, t, t)')
-# def computeL2Distance_(win, ref, dum, res):
-#     # Dummy array dum only here to know the output size. Won't be used.
-#     # Get the shapes: sW = m, sP = n, sT = m-n+1
-#     hw, sW, sP, sT = win.shape[0], win.shape[1], ref.shape[1], win.shape[1] - ref.shape[1] + 1
-#     # Compute the norm of T once -> globally summed squared entries of T
-#     for n in range(hw):
-#         res[n] = np.sum(ref[n] * ref[n])
-#     # FFT-based box filtering of I -> slided summed squared entries of I
-#     # FFT and IFFT are done on the two last entries of the arrays (cf .fft.py)
-#     box = np.zeros((sW, sW), dtype=win.dtype)
-#     box[:sP, :sP] = np.ones((sP, sP), dtype=win.dtype)
-#     res += ifft2(fft2(box) * fft2(win * win)).real[..., sP-1:sP-1+sT, sP-1:sP-1+sT]  # (n,t,t)
-#     # FFT-based cross-correlation between T and I
-#     ref_padded = np.zeros_like(win)
-#     ref_padded[..., :sP, :sP] = ref  # do zero-padding to fit win's size
-#     res -= 2 * ifft2(fft2(ref_padded).conjugate() * fft2(win)).real[..., :sT, :sT]  # (n,t,t) -- ref must be conjugated since it is the "filter"
 
 
 def computeDistance(refPatch, searchArea, distance='L2'):

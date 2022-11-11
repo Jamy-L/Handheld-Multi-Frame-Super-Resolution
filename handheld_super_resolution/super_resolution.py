@@ -16,8 +16,11 @@ import exifread
 import rawpy
 import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter1d
+from scipy.fft import fft2, ifft2, fftshift, ifftshift
 
+import colour_demosaicing
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, crop
+from .utils_image import downsample, compute_grey_images
 from .merge import merge
 from .kernels import estimate_kernels
 from .block_matching import alignBurst
@@ -25,21 +28,44 @@ from .optical_flow import lucas_kanade_optical_flow
 from .robustness import compute_robustness
 
 NOISE_MODEL_PATH = Path(os.getcwd()) / 'data' 
-
+        
 def main(ref_img, comp_imgs, options, params):
     verbose = options['verbose'] > 1
     verbose_2 = options['verbose'] > 2
+    bayer_mode = params['mode']=='bayer'
     
+    grey_method_lk = params['kanade']['grey method']
+    grey_method_bm = params['block matching']['grey method']
     
+    if bayer_mode :
+        t1 = time()
+        ref_grey, comp_grey = compute_grey_images(ref_img, comp_imgs, grey_method_bm)
+        
+        if verbose_2 :
+            currentTime = getTime(t1, "- BM grey images estimated by {}".format(grey_method_bm))
+    else:
+        ref_grey, comp_grey = ref_img, comp_imgs
     t1 = time()
     if verbose :
         print('Beginning block matching')
-    pre_alignment, _ = alignBurst(ref_img, comp_imgs,params['block matching'], options)
+
+    pre_alignment, _ = alignBurst(ref_grey, comp_grey,params['block matching'], options)
     pre_alignment = pre_alignment[:, :, :, ::-1] # swapping x and y direction (x must be first)
+    if grey_method_bm in ["gauss", "decimating"] and bayer_mode:
+        pre_alignment*=2
+        # BM is always in grey mode, so input scale is output scale.
+        # we choose by convention, to always return flow on the coarse scale, so x2 if grey is 2x smaller
     
     if verbose : 
         current_time = getTime(t1, 'Block Matching (Total)')
-    
+        
+    if bayer_mode:
+        ref_grey, comp_grey = compute_grey_images(ref_img, comp_imgs, grey_method_lk)
+        if verbose_2 :
+            currentTime = getTime(currentTime, "- LK grey images estimated by {}".format(grey_method_lk))
+    else:
+        ref_grey, comp_grey = ref_img, comp_imgs
+        
     
     cuda_ref_img = cuda.to_device(ref_img)
     cuda_comp_imgs = cuda.to_device(comp_imgs)
@@ -49,9 +75,8 @@ def main(ref_img, comp_imgs, options, params):
             current_time, 'Arrays moved to GPU')
     
     cuda_final_alignment = lucas_kanade_optical_flow(
-        ref_img, comp_imgs, pre_alignment, options, params['kanade'])
+        ref_grey, comp_grey, pre_alignment, options, params['kanade'])
 
-    
     
     if verbose : 
         current_time = time()
@@ -158,14 +183,23 @@ def process(burst_path, options, params, crop_str=None):
     if 'tileSize' not in params["merging"]["tuning"].keys():
         params["merging"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
 
-    if 'mode' not in params["block matching"].keys():
-        params["block matching"]["mode"] = params['mode']
+    # if 'mode' not in params["block matching"].keys():
+    #     params["block matching"]["mode"] = params['mode']
     if 'mode' not in params["kanade"].keys():
         params["kanade"]["mode"] = params['mode']
     if 'mode' not in params["robustness"].keys():
         params["robustness"]["mode"] = params['mode']
     if 'mode' not in params["merging"].keys():
         params["merging"]["mode"] = params['mode']
+    
+    # systematically grey, so we can control internally how grey is obtained
+    params["block matching"]["mode"] = 'grey'
+    if params["block matching"]["grey method"] in ["FFT", "demosaicing"]:
+        params["block matching"]['tuning']["tileSizes"] = [ts*2 for ts in params["block matching"]['tuning']["tileSizes"]]
+    if params["kanade"]["grey method"] in ["FFT", "demosaicing"]:
+        params["kanade"]['tuning']["tileSize"] *= 2
+        
+
     
     if np.issubdtype(type(ref_raw[0,0]), np.integer):
         ## Here do black and white level correction and white balance processing for all image in comp_images

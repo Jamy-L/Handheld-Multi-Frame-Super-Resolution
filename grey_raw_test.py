@@ -24,24 +24,31 @@ from handheld_super_resolution.block_matching import alignBurst
 from handheld_super_resolution.optical_flow import get_closest_flow, lucas_kanade_optical_flow
 
 
-burst_path = 'P:/aether-4K/aether-4K_defense'
+# burst_path = 'P:/aether-4K/aether-4K_defense'
 # burst_path = 'P:/aether-4K/aether-4K_beach'
+burst_path = 'P:/results_surecavi_20220325/results_anger/20220325/data/exp2-stack'
 
 
-raw_path_list = glob.glob(os.path.join(burst_path, '*.tiff'))
+# raw_path_list = glob.glob(os.path.join(burst_path, '*.tiff'))
+raw_path_list = glob.glob(os.path.join(burst_path, '*.png'))
 
 
 
 first_image_path = raw_path_list[0]
 
-raw_ref_img =  np.array(Image.open(first_image_path))[::2, ::2]
+# raw_ref_img =  np.array(Image.open(first_image_path))[::2, ::2]
+raw_ref_img = cv2.imread(first_image_path, -1)
 
 
 
-comp_images = np.array(Image.open(raw_path_list[1]))[::2,::2][None]
+# comp_images = np.array(Image.open(raw_path_list[1]))[::2,::2][None]
+comp_images = cv2.imread(raw_path_list[1], -1)[None]/2
 for i in range(2,len(raw_path_list)):
-    comp_images = np.append(comp_images, np.array(Image.open(raw_path_list[i]
-                                                      ))[::2, ::2][None], axis=0)
+    # comp_images = np.append(comp_images, np.array(Image.open(raw_path_list[i]
+    #                                                   ))[::2, ::2][None], axis=0)
+    comp_images = np.append(comp_images, cv2.imread(raw_path_list[i], -1)[None], axis=0)
+    if i > 8:
+        break
 
 maxi = max(np.max(raw_ref_img), np.max(comp_images))
 mini = min(np.min(raw_ref_img), np.max(comp_images))
@@ -68,9 +75,11 @@ params = {'block matching': {
             'kanade' : {
                 'mode':'gray',
                 'epsilon div' : 1e-6,
+                'grey method':'FFT',
                 'tuning' : {
                     'tileSize' : 16,
                     'kanadeIter': 6, # 3 
+                    'sigma blur':0,
                     }},
             'robustness' : {
                 'on':False,
@@ -105,8 +114,8 @@ options = {'verbose' : 3}
 
 #%%
 
-output, R, r, alignment, covs = main(np.ascontiguousarray(raw_ref_img),
-                                     np.ascontiguousarray(comp_images),
+output, R, r, alignment, covs = main(np.ascontiguousarray(raw_ref_img).astype(np.float32),
+                                     np.ascontiguousarray(comp_images).astype(np.float32),
                                      options, params)
 #%% show output
 
@@ -123,5 +132,7 @@ plt.imshow(raw_ref_img, cmap="gray")
 for image_index in range(comp_images.shape[0]):
     plt.figure("image {}".format(image_index))
     plt.imshow(comp_images[image_index], cmap="gray")
+    if image_index > 2:
+        break
 
 
