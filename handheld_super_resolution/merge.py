@@ -156,11 +156,15 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
     input_imsize = (input_size_y, input_size_x)
     
     if bayer_mode:
+        n_channels = 3
         acc = cuda.shared.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         val = cuda.shared.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
     else:
+        n_channels = 1
         acc = cuda.shared.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         val = cuda.shared.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+
+
     
     coarse_ref_sub_pos = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) # y, x
     
@@ -170,21 +174,35 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
         coarse_ref_sub_pos[0] = output_pixel_idy / scale          
         coarse_ref_sub_pos[1] = output_pixel_idx / scale
         
-        acc[0] = 0
-        if bayer_mode : 
-            acc[1] = 0
-            acc[2] = 0
-
-        val[0] = 0
-        if bayer_mode:
-            val[1] = 0
-            val[2] = 0
+        for chan in range(n_channels):
+            acc[chan] = 0
+            val[chan] = 0
 
     patch_center_pos = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE) # y, x
     local_optical_flow = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
     for image_index in range(n_images + 1):
-        if tx == 0 and ty == 0: # Single threaded fetch of the flow
+        inbound = (0 <= coarse_ref_sub_pos[1] + tx < input_size_x and
+                   0 <= coarse_ref_sub_pos[0] + ty < input_size_y)
+        
+        # fetching robustness
+        if image_index == 0:
+            local_r = 1 # for all 9 threads
+        elif inbound: 
+            if bayer_mode : 
+                local_r = r[image_index - 1,
+                            round((coarse_ref_sub_pos[0] + ty-0.5)/2),
+                            round((coarse_ref_sub_pos[1] + tx-0.5)/2)]
+
+            else:
+                local_r = r[image_index - 1,
+                            int(coarse_ref_sub_pos[0] + ty),
+                            int(coarse_ref_sub_pos[1] + tx)]
+        
+        
+        
+        # Single threaded fetch of the flow
+        if tx == 0 and ty == 0: 
             if image_index == 0:  # ref image
                 # no optical flow
                 local_optical_flow[0] = 0
@@ -215,9 +233,12 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
         thread_pixel_idx = round(patch_center_pos[1]) + tx
         thread_pixel_idy = round(patch_center_pos[0]) + ty
         
+        # updating inbound condition
+        inbound &= (0 <= thread_pixel_idx < input_size_x and
+                    0 <= thread_pixel_idy < input_size_y)
+        
         # computing kernel
         if not act:
-            
             # fetching the 4 closest covs
             close_covs = cuda.shared.array((2, 2, 2 ,2), DEFAULT_CUDA_FLOAT_TYPE)
             grey_pos = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
@@ -226,7 +247,7 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
                 grey_pos[1] = (patch_center_pos[1]-0.5)/2
                 
             elif tx==0 and ty==0:
-                grey_pos[0] = patch_center_pos[0]
+                grey_pos[0] = patch_center_pos[0] # grey grid is exactly the coarse grid
                 grey_pos[1] = patch_center_pos[1]
             
             cuda.syncthreads()
@@ -265,7 +286,6 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
         cuda.syncthreads()
         
         
-        
         # checking if pixel is r, g or b
         if bayer_mode : 
             channel = get_channel(thread_pixel_idx,
@@ -273,26 +293,9 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
                                   CFA_pattern)
         else:
             channel = 0
-        
-        
-        # fetching robustness
-        if image_index == 0:
-            local_r = 1 # for all 9 threads and each 4 pixels
-        elif 0 <= thread_pixel_idx < input_size_x - 1 and 0 <= thread_pixel_idx < input_size_y - 1: # inbound
-            if bayer_mode : 
-                local_r = r[image_index - 1,
-                            int((coarse_ref_sub_pos[0] + ty-0.5)/2),
-                            int((coarse_ref_sub_pos[1] + tx-0.5)/2)]
-
-            else:
-                local_r = r[image_index - 1,
-                            int(coarse_ref_sub_pos[0] + ty),
-                            int(coarse_ref_sub_pos[1] + tx)]
             
-
-
-        # in bounds conditions
-        if 0 <= thread_pixel_idx < input_size_x and 0 <= thread_pixel_idy < input_size_y: # inbound
+            
+        if inbound: 
             if image_index == 0:
                 c = ref_img[thread_pixel_idy, thread_pixel_idx]
             else:
@@ -325,12 +328,13 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
         else:
             w = math.exp(-0.5*4*y/scale**2) # original kernel constants are designed for bayer distances, not greys.
         
-        cuda.atomic.add(val, channel, c*w*local_r)
-        cuda.atomic.add(acc, channel, w*local_r)
+        if inbound :
+            cuda.atomic.add(val, channel, c*w*local_r)
+            cuda.atomic.add(acc, channel, w*local_r)
             
         # We need to wait the accumulation of all the pixels before going for
         # the next image, because sharred arrays will be overwritten
         cuda.syncthreads()
     if tx == 0 and ty == 0:
-        for chan in range(3): # TODO bayer case
+        for chan in range(n_channels):
             output_img[output_pixel_idy, output_pixel_idx, chan] = val[chan]/(acc[chan] + EPSILON) 

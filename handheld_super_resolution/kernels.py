@@ -62,9 +62,7 @@ def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
 
     D = clamp(1 - sqrt(l1)/D_tr + D_th, 0, 1)
     
-    D = 0
-    # k_1 = k_detail*k_stretch*A
-    # k_2 = k_detail/(k_shrink*A)
+    # D = 0
     k_1 = k_detail* (k_stretch*(A -1) + (2 - A))
     k_2 = k_detail/(k_shrink*(A - 1) + (2 - A))
     
