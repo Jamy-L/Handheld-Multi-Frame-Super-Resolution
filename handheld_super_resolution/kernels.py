@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from numba import uint8, uint16, float32, float64, cuda
 
 from .linalg import get_eighen_elmts_2x2, invert_2x2, interpolate_cov
-from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
+from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, getTime
 
 
 @cuda.jit(device=True)
@@ -25,11 +25,11 @@ def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
     Parameters
     ----------
     l1 : float
-        lambda1
+        lambda1 (dominant eighen value)
     l2 : float
         lambda2
     k : shared Array[2]
-        empty vector where k1 and k2 are stored
+        empty vector where k1 and k2 will be stored
     k_detail : TYPE
         DESCRIPTION.
     k_denoise : TYPE
@@ -80,33 +80,38 @@ def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
 
 
 def estimate_kernels(ref_img, comp_imgs, options, params):
-    """
-    Returns the kernels covariance for each frame, for each Bayer quad 
+    """ Returns the kernels covariance matrix for each frame, sampled at the
+    center of every bayer quad (or at the center of every grey pixel in grey
+    mode).
 
     Parameters
     ----------
-    ref_img : TYPE
-        DESCRIPTION.
-    comp_imgs : TYPE
-        DESCRIPTION.
-    options : TYPE
-        DESCRIPTION.
-    params : TYPE
-        DESCRIPTION.
+    ref_img : numpy Array[imshape_y, imshape_x]
+        raw reference image
+    comp_imgs : numpy Array[n_images, imshape_y, imshape_x]
+        raw images of the burst
+    options : dict
+        options
+    params : dict
+        ['mode'] : {"bayer", "grey"}
+            Wether the burst is raw or grey
+        params['tuning'] : dict
+            parameters driving the kernel shape
 
     Returns
     -------
-    None.
+    covs : device Array[n_images+1, imshape_y/2, imshape_x/2]
+        covarince matrices samples at the center of each bayer quad, for each
+        frame (including reference).
 
     """
     t1 = time()
     n_images, imshape_y, imshape_x = comp_imgs.shape
-    imsize = (imshape_y, imshape_x)
     
     bayer_mode = params['mode']=='bayer'
     VERBOSE = options['verbose']
     
-    k_detail =params['tuning']['k_detail']
+    k_detail = params['tuning']['k_detail']
     k_denoise = params['tuning']['k_denoise']
     D_th = params['tuning']['D_th']
     D_tr = params['tuning']['D_tr']
@@ -115,13 +120,13 @@ def estimate_kernels(ref_img, comp_imgs, options, params):
     
 
     
-    if params["mode"] == "bayer" : 
+    if bayer_mode : 
         # grey level
         ref_img_grey = (ref_img[::2, ::2] + ref_img[1::2, 1::2] + ref_img[::2, 1::2] + ref_img[1::2, ::2])/4
         comp_img_grey = (comp_imgs[:,::2, ::2] + comp_imgs[:,1::2, 1::2] + comp_imgs[:,::2, 1::2] + comp_imgs[:,1::2, ::2])/4
-        
-
     
+        if VERBOSE>2:
+            t1 = getTime(t1, "- Decimated Images")
     else :
         ref_img_grey = ref_img # no need to copy now, they will be copied to gpu later.
         comp_img_grey = comp_imgs
@@ -132,6 +137,8 @@ def estimate_kernels(ref_img, comp_imgs, options, params):
     
     grey_imshape_y, grey_imshape_x = ref_img_grey.shape
     
+    # TODO The method is good but the implementation seems dirty. Maybe a 
+    # clean convolution with cv2 would be faster?
     gradsx = np.empty((n_images+1, grey_imshape_y, grey_imshape_x-1))
     gradsx[0] = ref_img_grey[:,1:] - ref_img_grey[:,:-1]
     gradsx[1:] = comp_img_grey[:, :,1:] - comp_img_grey[:, :,:-1]
@@ -143,6 +150,8 @@ def estimate_kernels(ref_img, comp_imgs, options, params):
     cuda_gradsx = cuda.to_device(gradsx/2)
     cuda_gradsy = cuda.to_device(gradsy/2)
 
+    if VERBOSE>2:
+        t1 = getTime(t1, "- Gradients computed")
 
     cuda_estimate_kernel[(n_images+1, grey_imshape_x, grey_imshape_y),
                          (2, 2, 4)](cuda_gradsx, cuda_gradsy,

@@ -18,36 +18,51 @@ from scipy.fft import fft2, ifft2, fftshift, ifftshift
 import colour_demosaicing
 import matplotlib.pyplot as plt
 
-from .linalg import bicubic_interpolation
+from .linalg import bilinear_interpolation
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, hann, hamming
 from .linalg import solve_2x2, solve_6x6_krylov, get_eighen_val_2x2
     
 
 def ICA_optical_flow(ref_img, comp_img, pre_alignment, options, params, debug = False):
-    """
-    Computes the displacement based on a naive implementation of
-    Lucas-Kanade optical flow (https://www.cs.cmu.edu/~16385/s15/lectures/Lecture21.pdf)
-    (The first method). This method is iterated multiple times, given by :
-    params['tuning']['kanadeIter']
+    """ Computes optical flow between the ref_img and all images of comp_imgs 
+    based on the ICA method (http://www.ipol.im/pub/art/2016/153/).
+    The optical flow follows a translation per patch model, such that :
+    ref_img(X) ~= comp_img(X + flow(X))
+    
 
     Parameters
     ----------
-    ref_img : Array[imsize_y, imsize_x]
-        The reference image
-    comp_img : Array[n_images, imsize_y, imsize_x]
-        The images to rearrange and compare to the reference
-    pre_alignment : Array[n_images, n_tiles_y, n_tiles_x, 2]
-        The alignment vectors obtained by the coarse to fine pyramid search.
-    options : Dict
-        Options to pass
-    params : Dict
-        parameters
-    debug : When True, returns a list of the alignments of every Lucas-Kanade iteration
+    ref_img : numpy Array[imsize_y, imsize_x]
+        reference image on grey level
+    comp_img : numpy Array[n_images, imsize_y, imsize_x]
+        images to align on grey level
+    pre_alignment : numpy Array[n_images, n_tiles_y, n_tiles_x, 2]
+        optical flow for each tile of each image, outputed by bloc matching.
+        pre_alignment[0] must be the horizontal flow oriented towards the right if positive.
+        pre_alignment[1] must be the vertical flow oriented towards the bottom if positive.
+    options : dict
+        options
+    params : dict
+        ['tuning']['kanadeIter'] : int
+            Number of iterations.
+        params['tuning']['tileSize'] : int
+            Size of the tiles.
+        params["mode"] : {"bayer", "grey"}
+            Mode of the pipeline : whether the original burst is grey or raw
+        params['grey method'] : {"gauss", "decimating", "FFT", "demosaicing"}
+            Method that have been used to get grey images (in bayer mode)
+        ['tuning']['sigma blur'] : float
+            If non zero, applies a gaussian blur before computing gradients.
+            
+    debug : bool, optional
+        If True, this function returns a list containing the flow at each iteration.
+        The default is False.
 
     Returns
     -------
-    alignment : Array[n_images, n_tiles_y, n_tiles_x, 2]
-        alignment vector for each tile of each image
+    cuda_alignment : device_array[n_images, n_tiles_y, n_tiles_x, 2]
+        alignment vector for each tile of each image following the same convention
+        as "pre_alignment"
 
     """
     if debug : 
@@ -69,7 +84,7 @@ def ICA_optical_flow(ref_img, comp_img, pre_alignment, options, params, debug = 
         current_time = time()
         print("Estimating Lucas-Kanade's optical flow")
         
-    if grey_method in ['gauss', 'decimating'] and bayer_mode:
+    if  bayer_mode and grey_method in ['gauss', 'decimating']:
         pre_alignment = pre_alignment/2
         # dividing by 2 because grey image is twice smaller than bayer
         # and blockmatching in bayer mode returns alignment to bayer scale
@@ -78,9 +93,6 @@ def ICA_optical_flow(ref_img, comp_img, pre_alignment, options, params, debug = 
         # On the contrary, A/=2 is reassigning the values in memory, which would
         # Overwrite pre_alignment even outside of the function scope.
         
-    gradx = np.empty_like(ref_img)
-    grady = np.empty_like(ref_img)
-    
     # Estimating gradients with separated Prewitt kernels
     kernely = np.array([[-1],
                         [0],
@@ -110,7 +122,12 @@ def ICA_optical_flow(ref_img, comp_img, pre_alignment, options, params, debug = 
     if verbose_2:
         current_time = getTime(
             current_time, ' -- Gradients estimated')
-        
+    
+    # TODO this is a bit dirty. We should ensure that pre alignemnt is
+    # contiguous before calling, because this is using a lot of memory.
+    # pre_alignment should be outwritten by its contiguous version, whenever possible.
+    # It is probably contiguous when outputted by BM, but we are swapping x and y for convention
+    # coherence, breaking the contiguity.
     alignment = np.ascontiguousarray(pre_alignment).astype(DEFAULT_NUMPY_FLOAT_TYPE)
     
     cuda_alignment = cuda.to_device(alignment)
@@ -226,7 +243,6 @@ def ICA_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, hes
         ](ref_img, comp_img, gradsx, gradsy, alignment, hessian, tile_size,
             double_flow)   
 
-    
     if verbose_2:
         current_time = getTime(
             current_time, ' --- Systems calculated and solved')
@@ -286,7 +302,7 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
         buffer_val[0, 1] = comp_img[image_index, floor_y, ceil_x]
         buffer_val[1, 0] = comp_img[image_index, ceil_y, floor_x]
         buffer_val[1, 1] = comp_img[image_index, ceil_y, ceil_x]
-        comp_val = bicubic_interpolation(buffer_val, pos)
+        comp_val = bilinear_interpolation(buffer_val, pos)
         gradt = comp_val- ref_img[pixel_global_idy, pixel_global_idx]
                
         # exponentially decreasing window, of size tile_size_lk
@@ -303,30 +319,6 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
 
     alignment_step = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
     cuda.syncthreads()
-    
-    # prototype of LK for edge cases, supposed to increase stability.
-    # l = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-    
-    # if cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:
-    #     # fetching eighen values only
-    #     get_eighen_val_2x2(ATA, l)
-    #     A = 1 + sqrt((l[0] - l[1])/(l[0] + l[1]))
-        
-    #     if A > 1.9: # system is only "partialy solvable" : edge case
-    #         if cuda.threadIdx.x == 0:
-    #             u = (ATB[0]+ATB[1])*(ATA[0, 0] + ATA[0, 1])/((ATA[0, 0] + ATA[0, 1])**2 + (ATA[1, 1] + ATA[0, 1])**2)
-    #             v = (ATB[0]+ATB[1])*(ATA[1, 1] + ATA[0, 1])/((ATA[0, 0] + ATA[0, 1])**2 + (ATA[1, 1] + ATA[0, 1])**2) 
-                
-    #             alignment[image_index, patch_idy, patch_idx, 0] += u
-    #             alignment[image_index, patch_idy, patch_idx, 1] += v
-    #         # alignment[image_index, patch_idy, patch_idx, cuda.threadIdx.x] = 0/0
-    #     elif l[0] > 1e-3 : # non edge, non zero feature
-    #         solve_2x2(ATA, ATB, alignment_step)
-    #         alignment[image_index, patch_idy, patch_idx, cuda.threadIdx.x] += alignment_step[cuda.threadIdx.x]
-    #     else:
-    #         pass
-        
-        
         
     if cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:
         if abs(ATA[0, 0]*ATA[1, 1] - ATA[0, 1]*ATA[1, 0])> 1e-5: # system is solvable 
@@ -343,31 +335,49 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
 
 
 ####### Generic LK
+# TODO maybe removing it
 def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params, debug = False):
     """
     Computes the displacement based on a naive implementation of
     Lucas-Kanade optical flow (https://www.cs.cmu.edu/~16385/s15/lectures/Lecture21.pdf)
-    (The first method). This method is iterated multiple times, given by :
-    params['tuning']['kanadeIter']
+    (The first method).
+    The optical flow follows a translation per patch model, such that :
+    ref_img(X) ~= comp_img(X + flow(X))
+    
 
     Parameters
     ----------
-    ref_img : Array[imsize_y, imsize_x]
-        The reference image
-    comp_img : Array[n_images, imsize_y, imsize_x]
-        The images to rearrange and compare to the reference
-    pre_alignment : Array[n_images, n_tiles_y, n_tiles_x, 2]
-        The alignment vectors obtained by the coarse to fine pyramid search.
-    options : Dict
-        Options to pass
-    params : Dict
-        parameters
-    debug : When True, returns a list of the alignments of every Lucas-Kanade iteration
+    ref_img : numpy Array[imsize_y, imsize_x]
+        reference image on grey level
+    comp_img : numpy Array[n_images, imsize_y, imsize_x]
+        images to align on grey level
+    pre_alignment : numpy Array[n_images, n_tiles_y, n_tiles_x, 2]
+        optical flow for each tile of each image, outputed by bloc matching.
+        pre_alignment[0] must be the horizontal flow oriented towards the right if positive.
+        pre_alignment[1] must be the vertical flow oriented towards the bottom if positive.
+    options : dict
+        options
+    params : dict
+        ['tuning']['kanadeIter'] : int
+            Number of iterations.
+        params['tuning']['tileSize'] : int
+            Size of the tiles.
+        params["mode"] : {"bayer", "grey"}
+            Mode of the pipeline : whether the original burst is grey or raw
+        params['grey method'] : {"gauss", "decimating", "FFT", "demosaicing"}
+            Method that have been used to get grey images (in bayer mode)
+        ['tuning']['sigma blur'] : float
+            If non zero, applies a gaussian blur before computing gradients.
+            
+    debug : bool, optional
+        If True, this function returns a list containing the flow at each iteration.
+        The default is False.
 
     Returns
     -------
-    alignment : Array[n_images, n_tiles_y, n_tiles_x, 2]
-        alignment vector for each tile of each image
+    cuda_alignment : device_array[n_images, n_tiles_y, n_tiles_x, 2]
+        alignment vector for each tile of each image following the same convention
+        as "pre_alignment"
 
     """
     if debug : 
@@ -574,21 +584,21 @@ def get_new_flow(ref_img, comp_img, gradsx, gradsy, alignment, tile_size, upscal
         buffer_val[0, 1] = gradsx[image_index, floor_y, ceil_x]
         buffer_val[1, 0] = gradsx[image_index, ceil_y, floor_x]
         buffer_val[1, 1] = gradsx[image_index, ceil_y, ceil_x]
-        gradx = bicubic_interpolation(buffer_val, pos)
+        gradx = bilinear_interpolation(buffer_val, pos)
         # gradx = gradsx[image_index, new_idy, new_idx]
         
         buffer_val[0, 0] = gradsy[image_index, floor_y, floor_x]
         buffer_val[0, 1] = gradsy[image_index, floor_y, ceil_x]
         buffer_val[1, 0] = gradsy[image_index, ceil_y, floor_x]
         buffer_val[1, 1] = gradsy[image_index, ceil_y, ceil_x]
-        grady = bicubic_interpolation(buffer_val, pos)
+        grady = bilinear_interpolation(buffer_val, pos)
         # grady = gradsy[image_index, new_idy, new_idx]
         
         buffer_val[0, 0] = comp_img[image_index, floor_y, floor_x]
         buffer_val[0, 1] = comp_img[image_index, floor_y, ceil_x]
         buffer_val[1, 0] = comp_img[image_index, ceil_y, floor_x]
         buffer_val[1, 1] = comp_img[image_index, ceil_y, ceil_x]
-        comp_val = bicubic_interpolation(buffer_val, pos)
+        comp_val = bilinear_interpolation(buffer_val, pos)
         gradt = comp_val- ref_img[pixel_global_idy, pixel_global_idx]
         # gradt = comp_img[image_index, new_idy, new_idx] - ref_img[pixel_global_idy, pixel_global_idx]
         
@@ -611,30 +621,6 @@ def get_new_flow(ref_img, comp_img, gradsx, gradsy, alignment, tile_size, upscal
 
     alignment_step = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
     cuda.syncthreads()
-    
-    # prototype of LK for edge cases, supposed to increase stability.
-    # l = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-    
-    # if cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:
-    #     # fetching eighen values only
-    #     get_eighen_val_2x2(ATA, l)
-    #     A = 1 + sqrt((l[0] - l[1])/(l[0] + l[1]))
-        
-    #     if A > 1.9: # system is only "partialy solvable" : edge case
-    #         if cuda.threadIdx.x == 0:
-    #             u = (ATB[0]+ATB[1])*(ATA[0, 0] + ATA[0, 1])/((ATA[0, 0] + ATA[0, 1])**2 + (ATA[1, 1] + ATA[0, 1])**2)
-    #             v = (ATB[0]+ATB[1])*(ATA[1, 1] + ATA[0, 1])/((ATA[0, 0] + ATA[0, 1])**2 + (ATA[1, 1] + ATA[0, 1])**2) 
-                
-    #             alignment[image_index, patch_idy, patch_idx, 0] += u
-    #             alignment[image_index, patch_idy, patch_idx, 1] += v
-    #         # alignment[image_index, patch_idy, patch_idx, cuda.threadIdx.x] = 0/0
-    #     elif l[0] > 1e-3 : # non edge, non zero feature
-    #         solve_2x2(ATA, ATB, alignment_step)
-    #         alignment[image_index, patch_idy, patch_idx, cuda.threadIdx.x] += alignment_step[cuda.threadIdx.x]
-    #     else:
-    #         pass
-        
-        
         
     if cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:
         if abs(ATA[0, 0]*ATA[1, 1] - ATA[0, 1]*ATA[1, 0])> 1e-5: # system is solvable 
@@ -657,9 +643,7 @@ def get_new_flow(ref_img, comp_img, gradsx, gradsy, alignment, tile_size, upscal
 
 
 
-
-
-# TODo this can be rewritten but it is kept for compatibility with affinity method
+# TODO this can be rewritten but it is kept for compatibility with affinity method
 @cuda.jit(device=True)
 def warp_flow_x(pos, local_flow):
     return local_flow[0]

@@ -34,6 +34,8 @@ def main(ref_img, comp_imgs, options, params):
     verbose_2 = options['verbose'] > 2
     bayer_mode = params['mode']=='bayer'
     
+    
+    #___ Raw to grey
     grey_method_lk = params['kanade']['grey method']
     grey_method_bm = params['block matching']['grey method']
     
@@ -45,6 +47,8 @@ def main(ref_img, comp_imgs, options, params):
             currentTime = getTime(t1, "- BM grey images estimated by {}".format(grey_method_bm))
     else:
         ref_grey, comp_grey = ref_img, comp_imgs
+        
+    #___ Block Matching
     t1 = time()
     if verbose :
         print('Beginning block matching')
@@ -58,15 +62,17 @@ def main(ref_img, comp_imgs, options, params):
     
     if verbose : 
         current_time = getTime(t1, 'Block Matching (Total)')
-        
+    
+    # TODO Raw to grey (could be removed in the final pipeline)
     if bayer_mode:
         ref_grey, comp_grey = compute_grey_images(ref_img, comp_imgs, grey_method_lk)
         if verbose_2 :
-            currentTime = getTime(currentTime, "- LK grey images estimated by {}".format(grey_method_lk))
+            current_time = getTime(current_time, "- LK grey images estimated by {}".format(grey_method_lk))
     else:
         ref_grey, comp_grey = ref_img, comp_imgs
         
-    
+
+    #___ Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
     cuda_comp_imgs = cuda.to_device(comp_imgs)
     
@@ -74,30 +80,27 @@ def main(ref_img, comp_imgs, options, params):
         current_time = getTime(
             current_time, 'Arrays moved to GPU')
     
+    #___ Lucas-Kanade Optical flow (or ICA)
     cuda_final_alignment = lucas_kanade_optical_flow(
         ref_grey, comp_grey, pre_alignment, options, params['kanade'])
 
-    
+    #___ Robustness
     if verbose : 
         current_time = time()
-
-    
     cuda_Robustness, cuda_robustness = compute_robustness(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment,
                                              options, params['robustness'])
     if verbose : 
         current_time = getTime(
             current_time, 'Robustness estimated (Total)')
-        
-    if verbose : 
         print('Estimating kernels')
-
+        
+    #___ Kernel estimation
     cuda_kernels = estimate_kernels(ref_img, comp_imgs, options, params['merging'])
-    
     if verbose : 
         current_time = getTime(
             current_time, 'Kernels estimated (Total)')
         
-    
+    #___ Merging
     output = merge(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment, cuda_kernels, cuda_robustness, options, params['merging'])
     if verbose : 
         current_time = getTime(
