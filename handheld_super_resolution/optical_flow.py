@@ -97,12 +97,12 @@ def ICA_optical_flow(ref_img, comp_img, pre_alignment, options, params, debug = 
     kernely = np.array([[-1],
                         [0],
                         [1]])
-    kernely2 = np.array([[1, 1, 1]])
+    # kernely2 = np.array([[1, 1, 1]])
     
     kernelx = np.array([[-1,0,1]])
-    kernelx2 = np.array([[1],
-                         [1],
-                         [1]])
+    # kernelx2 = np.array([[1],
+    #                      [1],
+    #                      [1]])
 
     if sigma_blur != 0:
         # 2 times gaussian 1d is faster than gaussian 2d
@@ -110,14 +110,14 @@ def ICA_optical_flow(ref_img, comp_img, pre_alignment, options, params, debug = 
         temp = gaussian_filter1d(temp, sigma=sigma_blur, axis=-2)
         
         gradx = cv2.filter2D(temp, -1, kernelx)
-        gradx = cv2.filter2D(gradx, -1, kernelx2)
+        # gradx = cv2.filter2D(gradx, -1, kernelx2)
         grady = cv2.filter2D(temp, -1, kernely)
-        grady = cv2.filter2D(grady, -1, kernely2)
+        # grady = cv2.filter2D(grady, -1, kernely2)
     else:
         gradx = cv2.filter2D(ref_img, -1, kernelx)
-        gradx = cv2.filter2D(gradx, -1, kernelx2)
+        # gradx = cv2.filter2D(gradx, -1, kernelx2)
         grady = cv2.filter2D(ref_img, -1, kernely)
-        grady = cv2.filter2D(grady, -1, kernely2)
+        # grady = cv2.filter2D(grady, -1, kernely2)
         
     if verbose_2:
         current_time = getTime(
@@ -407,19 +407,19 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params,
         # On the contrary, A/=2 is reassigning the values in memory, which would
         # Overwrite pre_alignment even outside of the function scope.
         
-    gradsx = np.empty_like(comp_img)
-    gradsy = np.empty_like(comp_img)
+    gradsx = np.empty_like(comp_img, DEFAULT_NUMPY_FLOAT_TYPE)
+    gradsy = np.empty_like(comp_img, DEFAULT_NUMPY_FLOAT_TYPE)
     
     # Estimating gradients with separated Prewitt kernels
     kernely = np.array([[-1],
                         [0],
                         [1]])
-    kernely2 = np.array([[1, 1, 1]])
+    # kernely2 = np.array([[1, 1, 1]])
     
     kernelx = np.array([[-1,0,1]])
-    kernelx2 = np.array([[1],
-                         [1],
-                         [1]])
+    # kernelx2 = np.array([[1],
+    #                      [1],
+    #                      [1]])
 
     for i in range(n_images):
         if sigma_blur != 0:
@@ -427,15 +427,15 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params,
             temp = gaussian_filter1d(comp_img[i], sigma=sigma_blur, axis=-1)
             temp = gaussian_filter1d(temp, sigma=sigma_blur, axis=-2)
             
-            gradx = cv2.filter2D(temp, -1, kernelx)
-            gradsx[i] = cv2.filter2D(gradx, -1, kernelx2)
-            grady = cv2.filter2D(temp, -1, kernely)
-            gradsy[i] = cv2.filter2D(grady, -1, kernely2)
+            gradsx[i] = cv2.filter2D(temp, -1, kernelx)
+            # gradsx[i] = cv2.filter2D(gradx, -1, kernelx2)
+            gradsy[i] = cv2.filter2D(temp, -1, kernely)
+            # gradsy[i] = cv2.filter2D(grady, -1, kernely2)
         else:
-            gradx = cv2.filter2D(comp_img[i], -1, kernelx)
-            gradsx[i] = cv2.filter2D(gradx, -1, kernelx2)
-            grady = cv2.filter2D(comp_img[i], -1, kernely)
-            gradsy[i] = cv2.filter2D(grady, -1, kernely2)
+            gradsx[i] = cv2.filter2D(comp_img[i], -1, kernelx)
+            # gradsx[i] = cv2.filter2D(gradx, -1, kernelx2)
+            gradsy[i] = cv2.filter2D(comp_img[i], -1, kernely)
+            # gradsy[i] = cv2.filter2D(grady, -1, kernely2)
 
     if verbose_2:
         current_time = getTime(
@@ -606,8 +606,8 @@ def get_new_flow(ref_img, comp_img, gradsx, gradsy, alignment, tile_size, upscal
         r_square = ((pixel_local_idx - tile_size/2)**2 +
                     (pixel_local_idy - tile_size/2)**2)
         sigma_square = (tile_size/2)**2
-        w = exp(-r_square/(3*sigma_square)) # TODO this is not improving LK so much... 3 seems to be a good coef though.
-        
+        # w = exp(-r_square/(3*sigma_square)) # TODO this is not improving LK so much... 3 seems to be a good coef though.
+        w = 1
         cuda.atomic.add(ATB, 0, -gradx*gradt*w)
         cuda.atomic.add(ATB, 1, -grady*gradt*w)
 

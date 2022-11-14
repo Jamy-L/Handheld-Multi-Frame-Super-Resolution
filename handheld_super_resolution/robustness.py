@@ -68,8 +68,8 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
     rgb_imshape = (rgb_imshape_y, rgb_imshape_x)
           
     if r_on : 
-        r = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x))
-        R = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x))
+        r = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x), DEFAULT_NUMPY_FLOAT_TYPE)
+        R = cuda.device_array((n_images, rgb_imshape_y, rgb_imshape_x), DEFAULT_NUMPY_FLOAT_TYPE)
         
         if VERBOSE > 1:
             current_time = time()
@@ -80,8 +80,8 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
         # decimating images to RGB
         # TODO this takes too long.
         if params["mode"]=='bayer':
-            ref_rgb_img = np.zeros((rgb_imshape)+(3,))
-            comp_rgb_imgs = np.zeros((n_images,)+(rgb_imshape)+(3,))
+            ref_rgb_img = np.zeros((rgb_imshape)+(3,), DEFAULT_NUMPY_FLOAT_TYPE)
+            comp_rgb_imgs = np.zeros((n_images,)+(rgb_imshape)+(3,), DEFAULT_NUMPY_FLOAT_TYPE)
             for i in range(2):
                 for j in range(2):
                     channel = CFA_pattern[i,j]
@@ -165,7 +165,7 @@ def compute_robustness(ref_img, comp_imgs, flows, options, params):
             current_time = getTime(
                 current_time, ' - Robustness locally minimized')
     else: 
-        temp = np.ones((n_images, rgb_imshape_y, rgb_imshape_x))
+        temp = np.ones((n_images, rgb_imshape_y, rgb_imshape_x), DEFAULT_NUMPY_FLOAT_TYPE)
         r = cuda.to_device(temp)
         R = cuda.to_device(temp)
     return R, r
