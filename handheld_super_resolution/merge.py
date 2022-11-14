@@ -28,10 +28,12 @@ def merge(ref_img, comp_imgs, alignments, covs, r, options, params):
     ----------
     ref_img : Array[imsize_y, imsize_x]
         The reference image
-    comp_imgs : Array [n_images,imsize_y, imsize_x]
+    comp_imgs : Array [n_images, imsize_y, imsize_x]
         The compared images
-    alignments : Array[n_images, n_tiles_y, n_tiles_x, 2]
-        The final estimation of the tiles' alignment
+    alignments : device Array[n_images, n_tiles_y, n_tiles_x, 2]
+        The final estimation of the tiles' alignment (patchwise)
+    covs : device array[n_images+1, imsize_y/2, imsize_x/2, 2, 2]
+        covariance matrices sampled at the center of each bayer quad.
     r : Device_Array[n_images, imsize_y/2, imsize_x/2, 3]
             Robustness of the moving images
     options : Dict
@@ -137,8 +139,20 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
         The compared images
     alignements : Array[n_images, n_tiles_y, n_tiles_x, 2]
         The alignemtn vectors for each tile of each image
-    r : Array[n_images, imsize_y/2, imsize_x/2, 3]
-        Robustness of the moving images
+    covs : device array[n_images+1, imsize_y/2, imsize_x/2, 2, 2]
+        covariance matrices sampled at the center of each bayer quad.
+    r : Device_Array[n_images, imsize_y/2, imsize_x/2, 3]
+            Robustness of the moving images
+    bayer_mode : bool
+        Whether the burst is raw or grey
+    act : bool
+        Whether ACT kernels should be used, or handhled's kernels.
+    scale : float
+        scaling factor
+    tile_size : int
+        tile size used for alignment (on the raw scale !)
+    CFA_pattern : device Array[2, 2]
+        CFA pattern of the burst
     output_img : Array[SCALE*imsize_y, SCALE_imsize_x]
         The empty output image
 

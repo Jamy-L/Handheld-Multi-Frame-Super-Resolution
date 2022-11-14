@@ -306,7 +306,7 @@ def interpolate_cov(covs, center_pos, interpolated_cov):
             # interpolated_cov[i, j]=covs[0,0,i,j]
 
 @cuda.jit(device=True)
-def bicubic_interpolation(values, pos):
+def bilinear_interpolation(values, pos):
     """
     
 

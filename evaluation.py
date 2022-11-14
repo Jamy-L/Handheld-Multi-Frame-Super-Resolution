@@ -246,7 +246,7 @@ def align_bm(dec_burst, params):
 def align_lk(dec_burst, params, pre_alignment, mode="LK"):
     # warning this does not support grey mode, only bayer
     grey_method_lk = params['kanade']['grey method']
-    options = {'verbose' : 2}
+    options = {'verbose' : 3}
     ref_grey, comp_grey = compute_grey_images(dec_burst[0], dec_burst[1:], grey_method_lk)
 
     tile_size = params["kanade"]['tuning']['tileSize']
@@ -463,7 +463,7 @@ if params["kanade"]["grey method"] in ["FFT", "demosaicing"]:
 
 params['robustness']['std_curve'] = np.load('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/data/noise_model_std_ISO_50.npy')
 params['robustness']['diff_curve'] = np.load('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/data/noise_model_diff_ISO_50.npy')
-options = {'verbose' : 2}
+options = {'verbose' : 3}
 
 small_tileSizes = params["block matching"]['tuning']["tileSizes"].copy()
 small_Ts = small_tileSizes[0]
