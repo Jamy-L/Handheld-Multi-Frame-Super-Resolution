@@ -133,17 +133,17 @@ def estimate_kernels(ref_img, comp_imgs, options, params):
         
     covs = cuda.device_array((n_images+1,
                                 ref_img_grey.shape[0],
-                                ref_img_grey.shape[1], 2,2))
+                                ref_img_grey.shape[1], 2,2), DEFAULT_NUMPY_FLOAT_TYPE)
     
     grey_imshape_y, grey_imshape_x = ref_img_grey.shape
     
     # TODO The method is good but the implementation seems dirty. Maybe a 
     # clean convolution with cv2 would be faster?
-    gradsx = np.empty((n_images+1, grey_imshape_y, grey_imshape_x-1))
+    gradsx = np.empty((n_images+1, grey_imshape_y, grey_imshape_x-1), DEFAULT_NUMPY_FLOAT_TYPE)
     gradsx[0] = ref_img_grey[:,1:] - ref_img_grey[:,:-1]
     gradsx[1:] = comp_img_grey[:, :,1:] - comp_img_grey[:, :,:-1]
     
-    gradsy = np.empty((n_images+1, grey_imshape_y-1, grey_imshape_x))
+    gradsy = np.empty((n_images+1, grey_imshape_y-1, grey_imshape_x), DEFAULT_NUMPY_FLOAT_TYPE)
     gradsy[0] = ref_img_grey[1:,:] - ref_img_grey[:-1,:]
     gradsy[1:] = comp_img_grey[:, 1:,:] - comp_img_grey[:, :-1, :]
     

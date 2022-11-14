@@ -16,9 +16,13 @@ import torch
 import cv2
 import matplotlib.pyplot as plt
 from PIL import Image
+from skimage import filters
 from skimage.transform import warp 
 import colour_demosaicing
 
+from plot_flow import flow2img
+
+from evaluation import upscale_alignement
 from handheld_super_resolution.super_resolution import main
 from handheld_super_resolution.block_matching import alignBurst
 from handheld_super_resolution.optical_flow import get_closest_flow, lucas_kanade_optical_flow
@@ -26,15 +30,16 @@ from handheld_super_resolution.optical_flow import get_closest_flow, lucas_kanad
 
 # burst_path = 'P:/aether-4K/aether-4K_defense'
 # burst_path = 'P:/aether-4K/aether-4K_beach'
-burst_path = 'P:/results_surecavi_20220325/results_anger/20220325/data/exp2-stack'
+burst_path = 'P:/results_surecavi_20220325/results_anger/20220325/data/exp5-stack'
 
 
 # raw_path_list = glob.glob(os.path.join(burst_path, '*.tiff'))
 raw_path_list = glob.glob(os.path.join(burst_path, '*.png'))
 
 
-
-first_image_path = raw_path_list[0]
+index_start = 0
+burst_size = 17 
+first_image_path = raw_path_list[index_start]
 
 # raw_ref_img =  np.array(Image.open(first_image_path))[::2, ::2]
 raw_ref_img = cv2.imread(first_image_path, -1)
@@ -42,26 +47,30 @@ raw_ref_img = cv2.imread(first_image_path, -1)
 
 
 # comp_images = np.array(Image.open(raw_path_list[1]))[::2,::2][None]
-comp_images = cv2.imread(raw_path_list[1], -1)[None]/2
-for i in range(2,len(raw_path_list)):
+comp_images = cv2.imread(raw_path_list[index_start+1], -1)[None]
+for i in range(index_start+2,index_start+burst_size+1):
     # comp_images = np.append(comp_images, np.array(Image.open(raw_path_list[i]
     #                                                   ))[::2, ::2][None], axis=0)
     comp_images = np.append(comp_images, cv2.imread(raw_path_list[i], -1)[None], axis=0)
-    if i > 8:
-        break
+
 
 maxi = max(np.max(raw_ref_img), np.max(comp_images))
 mini = min(np.min(raw_ref_img), np.max(comp_images))
 
-raw_ref_img = (raw_ref_img - mini)/(maxi - mini)
-comp_images = (comp_images - mini)/(maxi - mini)
+raw_ref_img = raw_ref_img/(2**16 - 1)
+comp_images = comp_images/(2**16 - 1)
+
+# raw_ref_img = (raw_ref_img - mini)/(maxi - mini)
+# comp_images = (comp_images - mini)/(maxi - mini)
 # comp_images = comp_images[:20]
 
 
 #%% params
 CFA = np.array([[2, 1], [1, 0]]) # dummy cfa
 
-params = {'block matching': {
+params = {'mode':'grey',
+          'block matching': {
+                'grey method':'f',
                 'mode':'gray',
                 'tuning': {
                     # WARNING: these parameters are defined fine-to-coarse!
@@ -73,6 +82,7 @@ params = {'block matching': {
                     'subpixels': [False, True, True, True]
                     }},
             'kanade' : {
+                'grey method':'f',
                 'mode':'gray',
                 'epsilon div' : 1e-6,
                 'grey method':'FFT',
@@ -119,9 +129,30 @@ output, R, r, alignment, covs = main(np.ascontiguousarray(raw_ref_img).astype(np
                                      options, params)
 #%% show output
 
-plt.figure("output 2")
-plt.imshow(output[:,:,0], cmap="gray")
+plt.figure("output kernel {}".format(params['merging']['kernel']))
+plt.imshow(filters.unsharp_mask(output[:,:,0], radius=3, amount=1.5,
+                           channel_axis=None, preserve_range=True), cmap="gray")
 
+#%% plot flow
+
+
+upscaled_al = upscale_alignement(alignment, raw_ref_img.shape, 16) 
+maxrad = 2
+
+for image_index in range(comp_images.shape[0]):
+    flow_image = flow2img(upscaled_al[image_index], maxrad)
+    plt.figure("flow {}".format(image_index))
+    plt.imshow(flow_image)
+
+# Making color wheel
+X = np.linspace(-maxrad, maxrad, 1000)
+Y = np.linspace(-maxrad, maxrad, 1000)
+Xm, Ym = np.meshgrid(X, Y)
+Z = np.stack((Xm, Ym)).transpose(1,2,0)
+# Z = np.stack((-Z[:,:,1], -Z[:,:,0]), axis=-1)
+flow_image = flow2img(Z, maxrad)
+plt.figure("wheel")
+plt.imshow(flow_image)
 
 #%% plot burst
 plt.figure("ref image")
@@ -135,4 +166,11 @@ for image_index in range(comp_images.shape[0]):
     if image_index > 2:
         break
 
+#%% result
+
+result_path = 'P:/results_surecavi_20220325/results_anger/20220325/results/exp2/40-N17-spline.tif.d.tiff'
+result = cv2.imread(result_path, -1)
+
+plt.figure("result spline")
+plt.imshow(result/(2**16 - 1), cmap="gray")
 

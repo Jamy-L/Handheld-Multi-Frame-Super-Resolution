@@ -24,7 +24,7 @@ from .utils_image import downsample, compute_grey_images
 from .merge import merge
 from .kernels import estimate_kernels
 from .block_matching import alignBurst
-from .optical_flow import lucas_kanade_optical_flow
+from .optical_flow import lucas_kanade_optical_flow, ICA_optical_flow
 from .robustness import compute_robustness
 
 NOISE_MODEL_PATH = Path(os.getcwd()) / 'data' 
@@ -81,7 +81,7 @@ def main(ref_img, comp_imgs, options, params):
             current_time, 'Arrays moved to GPU')
     
     #___ Lucas-Kanade Optical flow (or ICA)
-    cuda_final_alignment = lucas_kanade_optical_flow(
+    cuda_final_alignment = ICA_optical_flow(
         ref_grey, comp_grey, pre_alignment, options, params['kanade'])
 
     #___ Robustness

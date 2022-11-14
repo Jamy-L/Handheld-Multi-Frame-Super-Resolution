@@ -424,7 +424,7 @@ params = get_params(PSNR=35)
 params['block matching']['tuning']['factors'] = [1, 2, 2, 2] # a bit smaller because div 2k is not 4k
 params['block matching']['grey method'] = "gauss"
 params['kanade']['grey method'] = "gauss"
-params['kanade']['tuning']['kanadeIter'] = 6
+params['kanade']['tuning']['kanadeIter'] = 15
 params['kanade']['tuning']['sigma blur'] = 1
 params['robustness']['on'] = False
 

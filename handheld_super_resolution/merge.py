@@ -69,7 +69,8 @@ def merge(ref_img, comp_imgs, alignments, covs, r, options, params):
     native_im_size = ref_img.shape
     # casting to integer to account for floating scale
     output_size = (round(SCALE*native_im_size[0]), round(SCALE*native_im_size[1]))
-    output_img = cuda.device_array(output_size+(19 + 10*N_IMAGES,), dtype = DEFAULT_NUMPY_FLOAT_TYPE) #third dim for rgb channel
+    # output_img = cuda.device_array(output_size+(19 + 10*N_IMAGES,), dtype = DEFAULT_NUMPY_FLOAT_TYPE) #third dim for rgb channel
+    output_img = cuda.device_array(output_size+(3,), dtype = DEFAULT_NUMPY_FLOAT_TYPE)
     # TODO 3 channels are enough, the rest is for debugging
 
 
@@ -325,11 +326,11 @@ def accumulate(ref_img, comp_imgs, alignments, covs, r,
 
 
     
-        # TODO Debugging
-        if tx==0 and ty == 0 :
-            output_img[output_pixel_idy, output_pixel_idx, 3 + image_index*3 + 0] = dist[0]
-            output_img[output_pixel_idy, output_pixel_idx, 3 + image_index*3 + 1] = dist[1]
-            output_img[output_pixel_idy, output_pixel_idx, 3 + image_index*3 + 2] = 2*thread_pixel_idy%2 + thread_pixel_idx
+        # # TODO Debugging
+        # if tx==0 and ty == 0 :
+        #     output_img[output_pixel_idy, output_pixel_idx, 3 + image_index*3 + 0] = dist[0]
+        #     output_img[output_pixel_idy, output_pixel_idx, 3 + image_index*3 + 1] = dist[1]
+        #     output_img[output_pixel_idy, output_pixel_idx, 3 + image_index*3 + 2] = 2*thread_pixel_idy%2 + thread_pixel_idx
     
         if act : 
             y = max(0, 2*(dist[0]*dist[0] + dist[1]*dist[1]))

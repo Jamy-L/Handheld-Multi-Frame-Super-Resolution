@@ -49,22 +49,22 @@ def cfa_to_grayscale(raw_img):
 # crop_str = "[1638:2600, 1912:2938]" # for friant
 # crop_str = "[1002:1686, 2406:3130]" # for rue4 (arrondissement)
 # crop_str = "[1002:1686, 2000:2700]" # for rue4 (truck plate)
-crop_str = "[500:2500, 1000:2500]" # for samsung 0
-# crop_str=None
+# crop_str = "[500:2500, 1000:2500]" # for samsung 0
+crop_str=None
 # crop_str = "[1500:2500, 2000:3000]" # for samsung 1
 
 #%%
 
 params = get_params(PSNR = 35)
-params["scale"] = 3
+params["scale"] = 1.5
 options = {'verbose' : 3}
 
-params['merging']['kernel'] = 'handheld'
+params['merging']['kernel'] = 'act'
 params['robustness']['on'] = False
-params['kanade']['tuning']['kanadeIter'] = 6
-# burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
+params['kanade']['tuning']['kanadeIter'] = 3
+burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
 # burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
-burst_path = 'P:/0000/Samsung'
+# burst_path = 'P:/0001/Samsung'
 
 output, R, r, alignment, covs = process(burst_path, options, params, crop_str)
 
