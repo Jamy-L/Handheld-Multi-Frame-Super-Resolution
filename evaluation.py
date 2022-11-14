@@ -23,7 +23,7 @@ from skimage import filters
 from handheld_super_resolution.utils_image import compute_grey_images
 from handheld_super_resolution.super_resolution import main
 from handheld_super_resolution.block_matching import alignBurst
-from handheld_super_resolution.optical_flow import get_closest_flow, lucas_kanade_optical_flow
+from handheld_super_resolution.optical_flow import get_closest_flow, lucas_kanade_optical_flow, ICA_optical_flow
 from handheld_super_resolution.robustness import compute_robustness
 from handheld_super_resolution.kernels import estimate_kernels
 from handheld_super_resolution.params import get_params
@@ -229,9 +229,6 @@ def align_bm(dec_burst, params):
     """returns tile wise BM alignment to the coarse scale"""
     grey_method_bm = params['block matching']['grey method']
     bayer_mode = params['mode']=='bayer'
-    print("global mode :", params['mode'])
-    print("BM grey mode :", params['block matching']['grey method'])
-    print("BM color mode :", params['block matching']['mode'])
     
     if bayer_mode :
         ref_grey, comp_grey = compute_grey_images(dec_burst[0], dec_burst[1:], grey_method_bm)
@@ -246,20 +243,21 @@ def align_bm(dec_burst, params):
         # we choose by convention, to always return flow on the coarse scale, so x2 if grey is 2x smaller
     return pre_alignment
     
-def align_lk(dec_burst, params, pre_alignment):
+def align_lk(dec_burst, params, pre_alignment, mode="LK"):
     # warning this does not support grey mode, only bayer
     grey_method_lk = params['kanade']['grey method']
     options = {'verbose' : 2}
     ref_grey, comp_grey = compute_grey_images(dec_burst[0], dec_burst[1:], grey_method_lk)
-    
-    print("global mode :", params['mode'])
-    print("LK grey mode :", params['kanade']['grey method'])
-    print("LK color mode :", params['kanade']['mode'])
 
     tile_size = params["kanade"]['tuning']['tileSize']
-
-    lk_alignment = lucas_kanade_optical_flow(
-        ref_grey, comp_grey, pre_alignment, options, params['kanade'], debug=True)
+    if mode=='LK':
+        lk_alignment = lucas_kanade_optical_flow(
+            ref_grey, comp_grey, pre_alignment, options, params['kanade'], debug=True)
+    elif mode =="ICA":
+        lk_alignment = ICA_optical_flow(
+            ref_grey, comp_grey, pre_alignment, options, params['kanade'], debug=True)
+    else: 
+        raise ValueError("invalid mode : {}".format(mode))
     if params["kanade"]['grey method'] in ['gauss', 'decimating']:
         for i in range(len(lk_alignment) - 1):
             lk_alignment[i] *=2 # last term has already been multiplied
@@ -285,7 +283,6 @@ def align_fb(dec_burst, params):
         
     # Optical flow is now calculated
     farnback_flow = np.empty(comp_grey.shape+(2,))
-    print(ref_grey.shape, comp_grey.shape)
     for i in range(farnback_flow.shape[0]):
         farnback_flow[i] = cv2.calcOpticalFlowFarneback(ref_grey, comp_grey[i], None, 0.5, 3, 16, 3, 5, 1.2, 0)
     upscaled_fb = np.empty( (dec_burst.shape[0] - 1, ) + dec_burst.shape[1:] + (2, ))
@@ -397,7 +394,6 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, gt_flow, label="", im
         plt.ylabel('mean norm of optical flow')
         plt.legend()
         
-        print(mean_flow_qe)
         plt.figure("quadratic error on flow")
         plt.plot([params['kanade']['tuning']['kanadeIter']], [mean_flow_qe[0]], marker = 'x', label = "Farneback")
         plt.xlabel('lk iteration')
@@ -428,7 +424,8 @@ params = get_params(PSNR=35)
 params['block matching']['tuning']['factors'] = [1, 2, 2, 2] # a bit smaller because div 2k is not 4k
 params['block matching']['grey method'] = "gauss"
 params['kanade']['grey method'] = "gauss"
-params['kanade']['tuning']['kanadeIter'] = 15
+params['kanade']['tuning']['kanadeIter'] = 6
+params['kanade']['tuning']['sigma blur'] = 1
 params['robustness']['on'] = False
 
 ################################
@@ -466,7 +463,7 @@ if params["kanade"]["grey method"] in ["FFT", "demosaicing"]:
 
 params['robustness']['std_curve'] = np.load('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/data/noise_model_std_ISO_50.npy')
 params['robustness']['diff_curve'] = np.load('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/data/noise_model_diff_ISO_50.npy')
-options = {'verbose' : 3}
+options = {'verbose' : 2}
 
 small_tileSizes = params["block matching"]['tuning']["tileSizes"].copy()
 small_Ts = small_tileSizes[0]
@@ -510,13 +507,34 @@ if __name__=="__main__":
 #%% aligning LK on bayer
     ground_truth_flow = flow[1:,:,0,0]
     
+    t1 = time()
+    fb_alignment = align_fb(dec_burst*255, params)
+    print('farneback evaluated : ', time()-t1)
+    fb_warped_images, fb_im_EQ = evaluate_alignment(fb_alignment[None], burst[1:]/255, burst[0]/255, ground_truth_flow, label = "FarneBack", imshow=True, params=params)
+
+    
     ## FFT BM
     params["block matching"]["grey method"] = "FFT"
     params["block matching"]['tuning']["tileSizes"] = big_tileSizes
-    
-    
     pre_alignment = align_bm(dec_burst, params)
     
+    mode = "LK"
+    params["kanade"]["grey method"] = "FFT"
+    params["kanade"]['tuning']['tileSize'] = big_Ts
+    label = "BM {}, {} {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment, mode)
+    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+
+    mode = "ICA"
+    params["kanade"]["grey method"] = "FFT"
+    params["kanade"]['tuning']['tileSize'] = big_Ts
+    label = "BM {}, {} {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment, mode)
+    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+
+    
+    
+#%%
     params["kanade"]["grey method"] = "decimating"
     params["kanade"]['tuning']['tileSize'] = small_Ts
     label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
@@ -586,12 +604,6 @@ if __name__=="__main__":
     label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
     raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
     lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
-
-
-    t1 = time()
-    fb_alignment = align_fb(dec_burst*255, params)
-    print('farneback evaluated : ', time()-t1)
-    fb_warped_images, fb_im_EQ = evaluate_alignment(fb_alignment[None], burst[1:]/255, burst[0]/255, ground_truth_flow, label = "FarneBack", imshow=True, params=params)
 
 #%% plot flow
     maxrad = 10

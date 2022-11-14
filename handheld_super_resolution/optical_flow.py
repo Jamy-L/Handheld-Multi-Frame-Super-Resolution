@@ -23,6 +23,326 @@ from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, h
 from .linalg import solve_2x2, solve_6x6_krylov, get_eighen_val_2x2
     
 
+def ICA_optical_flow(ref_img, comp_img, pre_alignment, options, params, debug = False):
+    """
+    Computes the displacement based on a naive implementation of
+    Lucas-Kanade optical flow (https://www.cs.cmu.edu/~16385/s15/lectures/Lecture21.pdf)
+    (The first method). This method is iterated multiple times, given by :
+    params['tuning']['kanadeIter']
+
+    Parameters
+    ----------
+    ref_img : Array[imsize_y, imsize_x]
+        The reference image
+    comp_img : Array[n_images, imsize_y, imsize_x]
+        The images to rearrange and compare to the reference
+    pre_alignment : Array[n_images, n_tiles_y, n_tiles_x, 2]
+        The alignment vectors obtained by the coarse to fine pyramid search.
+    options : Dict
+        Options to pass
+    params : Dict
+        parameters
+    debug : When True, returns a list of the alignments of every Lucas-Kanade iteration
+
+    Returns
+    -------
+    alignment : Array[n_images, n_tiles_y, n_tiles_x, 2]
+        alignment vector for each tile of each image
+
+    """
+    if debug : 
+        debug_list = []
+        
+    current_time, verbose, verbose_2 = time(), options['verbose'] > 1, options['verbose'] > 2
+    n_iter = params['tuning']['kanadeIter']
+    grey_method = params['grey method']
+    sigma_blur = params['tuning']['sigma blur']
+    bayer_mode = params["mode"]=='bayer'
+    tile_size = params['tuning']['tileSize']
+    
+    n_images, imsize_y, imsize_x = comp_img.shape
+    _, n_patch_y, n_patch_x, _ = pre_alignment.shape
+
+        
+    if verbose:
+        t1 = time()
+        current_time = time()
+        print("Estimating Lucas-Kanade's optical flow")
+        
+    if grey_method in ['gauss', 'decimating'] and bayer_mode:
+        pre_alignment = pre_alignment/2
+        # dividing by 2 because grey image is twice smaller than bayer
+        # and blockmatching in bayer mode returns alignment to bayer scale
+        # Note : A=A/2 is a pointer reassignment, so pre_alignment is not outwritten
+        # outside the function, the local variable is simply different.
+        # On the contrary, A/=2 is reassigning the values in memory, which would
+        # Overwrite pre_alignment even outside of the function scope.
+        
+    gradx = np.empty_like(ref_img)
+    grady = np.empty_like(ref_img)
+    
+    # Estimating gradients with separated Prewitt kernels
+    kernely = np.array([[-1],
+                        [0],
+                        [1]])
+    kernely2 = np.array([[1, 1, 1]])
+    
+    kernelx = np.array([[-1,0,1]])
+    kernelx2 = np.array([[1],
+                         [1],
+                         [1]])
+
+    if sigma_blur != 0:
+        # 2 times gaussian 1d is faster than gaussian 2d
+        temp = gaussian_filter1d(ref_img, sigma=sigma_blur, axis=-1)
+        temp = gaussian_filter1d(temp, sigma=sigma_blur, axis=-2)
+        
+        gradx = cv2.filter2D(temp, -1, kernelx)
+        gradx = cv2.filter2D(gradx, -1, kernelx2)
+        grady = cv2.filter2D(temp, -1, kernely)
+        grady = cv2.filter2D(grady, -1, kernely2)
+    else:
+        gradx = cv2.filter2D(ref_img, -1, kernelx)
+        gradx = cv2.filter2D(gradx, -1, kernelx2)
+        grady = cv2.filter2D(ref_img, -1, kernely)
+        grady = cv2.filter2D(grady, -1, kernely2)
+        
+    if verbose_2:
+        current_time = getTime(
+            current_time, ' -- Gradients estimated')
+        
+    alignment = np.ascontiguousarray(pre_alignment).astype(DEFAULT_NUMPY_FLOAT_TYPE)
+    
+    cuda_alignment = cuda.to_device(alignment)
+    cuda_ref_img_grey = cuda.to_device(np.ascontiguousarray(ref_img))
+    cuda_comp_img_grey = cuda.to_device(np.ascontiguousarray(comp_img))
+    cuda_gradx = cuda.to_device(gradx)
+    cuda_grady = cuda.to_device(grady)
+    if verbose_2 : 
+        current_time = getTime(
+            current_time, ' -- Arrays moved to GPU')
+        
+    hessian = cuda.device_array((n_patch_y, n_patch_x, 2, 2), DEFAULT_NUMPY_FLOAT_TYPE)
+    compute_hessian[(n_patch_x, n_patch_y), (tile_size, tile_size)](
+        cuda_gradx, cuda_grady, tile_size, hessian)
+    
+    if verbose_2:
+        current_time = getTime(
+            current_time, ' -- Hessian estimated')
+
+    
+
+    for iter_index in range(n_iter):
+        ICA_optical_flow_iteration(
+            cuda_ref_img_grey, cuda_gradx, cuda_grady, cuda_comp_img_grey, cuda_alignment, hessian,
+            options, params, iter_index)
+        if debug :
+            debug_list.append(cuda_alignment.copy_to_host())
+    
+    if verbose:
+        getTime(t1, 'Flows estimated')
+        print('\n')
+    if debug:
+        return debug_list
+    return cuda_alignment
+
+@cuda.jit
+def compute_hessian(gradx, grady, tile_size, hessian):
+    imshape = gradx.shape
+    patch_idx, patch_idy = cuda.blockIdx.x, cuda.blockIdx.y
+    pixel_local_idx = cuda.threadIdx.x # Position relative to the patch
+    pixel_local_idy = cuda.threadIdx.y
+    
+    pixel_global_idx = tile_size//2 * (patch_idx - 1) + pixel_local_idx # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
+    pixel_global_idy = tile_size//2 * (patch_idy - 1) + pixel_local_idy
+    
+    inbound = (0 <= pixel_global_idy <imshape[0] and 0 <= pixel_global_idx < imshape[1])
+    
+    
+    if pixel_local_idx < 2 and pixel_local_idy < 2:
+        hessian[patch_idy, patch_idx, pixel_local_idy, pixel_local_idx] = 0 # zero init
+    cuda.syncthreads()
+    
+    # TODO gaussian windowing ?
+    if inbound : 
+        local_gradx = gradx[pixel_global_idy, pixel_global_idx]
+        local_grady = grady[pixel_global_idy, pixel_global_idx]
+        
+        cuda.atomic.add(hessian, (patch_idy, patch_idx, 0, 0), local_gradx*local_gradx)
+        cuda.atomic.add(hessian, (patch_idy, patch_idx, 0, 1), local_gradx*local_grady)
+        cuda.atomic.add(hessian, (patch_idy, patch_idx, 1, 0), local_gradx*local_grady)
+        cuda.atomic.add(hessian, (patch_idy, patch_idx, 1, 1), local_grady*local_grady)
+    
+def ICA_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, hessian, options, params,
+                                        iter_index):
+    """
+    Computes one iteration of the Lucas-Kanade optical flow
+
+    Parameters
+    ----------
+    ref_img : Array [imsize_y, imsize_x]
+        Ref image (grey)
+    gradx : Array [imsize_y, imsize_x]
+        Horizontal gradient of the ref image
+    grady : Array [imsize_y, imsize_x]
+        Vertical gradient of the ref image
+    comp_img : Array[n_images, imsize_y, imsize_x]
+        The images to rearrange and compare to the reference (grey images)
+    alignment : Array[n_images, n_tiles_y, n_tiles_x, 2]
+        The inial alignment of the tiles
+    options : Dict
+        Options to pass
+    params : Dict
+        parameters
+    iter_index : int
+        The iteration index (for printing evolution when verbose >2,
+                             and for clearing memory)
+
+    Returns
+    -------
+    new_alignment
+        Array[n_images, n_tiles_y, n_tiles_x, 2]
+            The adjusted tile alignment
+
+    """
+    verbose_2 = options['verbose'] > 2
+    n_iter = params['tuning']['kanadeIter']
+    grey_method = params['grey method']
+    tile_size = params['tuning']['tileSize']
+
+    n_images, imsize_y, imsize_x = comp_img.shape
+    _, n_patch_y, n_patch_x, _ = alignment.shape
+    
+    if verbose_2 : 
+        print(" -- Lucas-Kanade iteration {}".format(iter_index))
+    
+    current_time = time()
+    double_flow = (((n_iter - 1) == iter_index) and
+                   (params['mode'] == 'bayer') and
+                    grey_method in ["gauss", "decimating"])
+    # In bayer mode, if grey image is twice smaller than bayer (decimating mode),
+    # the flow must be doubled at the last iteration to represent flow at bayer scale
+    ICA_get_new_flow[[(n_images, n_patch_y, n_patch_x), (tile_size, tile_size)]
+        ](ref_img, comp_img, gradsx, gradsy, alignment, hessian, tile_size,
+            double_flow)   
+
+    
+    if verbose_2:
+        current_time = getTime(
+            current_time, ' --- Systems calculated and solved')
+
+
+
+@cuda.jit
+def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_size, upscaled_flow):
+    n_images, imsize_y, imsize_x = comp_img.shape
+    
+    image_index, patch_idy, patch_idx = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
+    pixel_local_idx = cuda.threadIdx.x # Position relative to the patch
+    pixel_local_idy = cuda.threadIdx.y
+    
+    pixel_global_idx = tile_size//2 * (patch_idx - 1) + pixel_local_idx # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
+    pixel_global_idy = tile_size//2 * (patch_idy - 1) + pixel_local_idy
+    
+    ATA = cuda.shared.array((2,2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    ATB = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    
+    # parallel init
+    if cuda.threadIdx.x <= 1 and cuda.threadIdx.y <=1 : # copy hessian to threads
+        ATA[cuda.threadIdx.y, cuda.threadIdx.x] = hessian[patch_idy, patch_idx,
+                                                          cuda.threadIdx.y, cuda.threadIdx.x]
+    if cuda.threadIdx.y == 2 and cuda.threadIdx.x <= 1 :
+            ATB[cuda.threadIdx.x] = 0
+  
+    
+    
+    inbound = (0 <= pixel_global_idx < imsize_x) and (0 <= pixel_global_idy < imsize_y)
+
+    if inbound :
+        # Warp I with W(x; p) to compute I(W(x; p))
+        new_idx = alignment[image_index, patch_idy, patch_idx, 0] + pixel_global_idx 
+
+        
+        new_idy = alignment[image_index, patch_idy, patch_idx, 1] + pixel_global_idy 
+ 
+    
+    inbound = inbound and (0 <= new_idx < imsize_x -1) and (0 <= new_idy < imsize_y - 1) # -1 for bicubic interpolation
+    
+    if inbound:
+        # bicubic interpolation
+        buffer_val = cuda.local.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
+        pos = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE) # y, x
+        normalised_pos_x, floor_x = modf(new_idx) # https://www.rollpie.com/post/252
+        normalised_pos_y, floor_y = modf(new_idy) # separating floor and floating part
+        floor_x = int(floor_x)
+        floor_y = int(floor_y)
+        
+        ceil_x = floor_x + 1
+        ceil_y = floor_y + 1
+        pos[0] = normalised_pos_y
+        pos[1] = normalised_pos_x
+        
+        buffer_val[0, 0] = comp_img[image_index, floor_y, floor_x]
+        buffer_val[0, 1] = comp_img[image_index, floor_y, ceil_x]
+        buffer_val[1, 0] = comp_img[image_index, ceil_y, floor_x]
+        buffer_val[1, 1] = comp_img[image_index, ceil_y, ceil_x]
+        comp_val = bicubic_interpolation(buffer_val, pos)
+        gradt = comp_val- ref_img[pixel_global_idy, pixel_global_idx]
+               
+        # exponentially decreasing window, of size tile_size_lk
+        r_square = ((pixel_local_idx - tile_size/2)**2 +
+                    (pixel_local_idy - tile_size/2)**2)
+        sigma_square = (tile_size/2)**2
+        w = exp(-r_square/(3*sigma_square)) # TODO this is not improving LK so much... 3 seems to be a good coef though.
+        
+        local_gradx = gradx[pixel_global_idy, pixel_global_idx]
+        local_grady = grady[pixel_global_idy, pixel_global_idx]
+        
+        cuda.atomic.add(ATB, 0, -local_gradx*gradt*w)
+        cuda.atomic.add(ATB, 1, -local_grady*gradt*w)
+
+    alignment_step = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+    cuda.syncthreads()
+    
+    # prototype of LK for edge cases, supposed to increase stability.
+    # l = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+    
+    # if cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:
+    #     # fetching eighen values only
+    #     get_eighen_val_2x2(ATA, l)
+    #     A = 1 + sqrt((l[0] - l[1])/(l[0] + l[1]))
+        
+    #     if A > 1.9: # system is only "partialy solvable" : edge case
+    #         if cuda.threadIdx.x == 0:
+    #             u = (ATB[0]+ATB[1])*(ATA[0, 0] + ATA[0, 1])/((ATA[0, 0] + ATA[0, 1])**2 + (ATA[1, 1] + ATA[0, 1])**2)
+    #             v = (ATB[0]+ATB[1])*(ATA[1, 1] + ATA[0, 1])/((ATA[0, 0] + ATA[0, 1])**2 + (ATA[1, 1] + ATA[0, 1])**2) 
+                
+    #             alignment[image_index, patch_idy, patch_idx, 0] += u
+    #             alignment[image_index, patch_idy, patch_idx, 1] += v
+    #         # alignment[image_index, patch_idy, patch_idx, cuda.threadIdx.x] = 0/0
+    #     elif l[0] > 1e-3 : # non edge, non zero feature
+    #         solve_2x2(ATA, ATB, alignment_step)
+    #         alignment[image_index, patch_idy, patch_idx, cuda.threadIdx.x] += alignment_step[cuda.threadIdx.x]
+    #     else:
+    #         pass
+        
+        
+        
+    if cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:
+        if abs(ATA[0, 0]*ATA[1, 1] - ATA[0, 1]*ATA[1, 0])> 1e-5: # system is solvable 
+            # No racing condition, one thread for one id
+            solve_2x2(ATA, ATB, alignment_step)
+            alignment[image_index, patch_idy, patch_idx, cuda.threadIdx.x] += alignment_step[cuda.threadIdx.x]
+
+            
+    cuda.syncthreads()
+    if pixel_local_idx == 0 and pixel_local_idy == 0: # single threaded section
+        if upscaled_flow : #uspcaling because grey img is 2x smaller
+            alignment[image_index, patch_idy, patch_idx, 0] *= 2
+            alignment[image_index, patch_idy, patch_idx, 1] *= 2
+
+
+####### Generic LK
 def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params, debug = False):
     """
     Computes the displacement based on a naive implementation of
@@ -80,18 +400,32 @@ def lucas_kanade_optical_flow(ref_img, comp_img, pre_alignment, options, params,
     gradsx = np.empty_like(comp_img)
     gradsy = np.empty_like(comp_img)
     
-    # Estimating gradients with cv2 sobel filters
-    # Data format is very important. default 8uint is bad, because we use floats
+    # Estimating gradients with separated Prewitt kernels
+    kernely = np.array([[-1],
+                        [0],
+                        [1]])
+    kernely2 = np.array([[1, 1, 1]])
+    
+    kernelx = np.array([[-1,0,1]])
+    kernelx2 = np.array([[1],
+                         [1],
+                         [1]])
+
     for i in range(n_images):
         if sigma_blur != 0:
             # 2 times gaussian 1d is faster than gaussian 2d
             temp = gaussian_filter1d(comp_img[i], sigma=sigma_blur, axis=-1)
             temp = gaussian_filter1d(temp, sigma=sigma_blur, axis=-2)
-            gradsx[i] = cv2.Sobel(temp, cv2.CV_64F, dx=1, dy=0)
-            gradsy[i] = cv2.Sobel(temp, cv2.CV_64F, dx=0, dy=1)
+            
+            gradx = cv2.filter2D(temp, -1, kernelx)
+            gradsx[i] = cv2.filter2D(gradx, -1, kernelx2)
+            grady = cv2.filter2D(temp, -1, kernely)
+            gradsy[i] = cv2.filter2D(grady, -1, kernely2)
         else:
-            gradsx[i] = cv2.Sobel(comp_img[i], cv2.CV_64F, dx=1, dy=0)
-            gradsy[i] = cv2.Sobel(comp_img[i], cv2.CV_64F, dx=0, dy=1)
+            gradx = cv2.filter2D(comp_img[i], -1, kernelx)
+            gradsx[i] = cv2.filter2D(gradx, -1, kernelx2)
+            grady = cv2.filter2D(comp_img[i], -1, kernely)
+            gradsy[i] = cv2.filter2D(grady, -1, kernely2)
 
     if verbose_2:
         current_time = getTime(
