@@ -79,7 +79,7 @@ def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
 
 
 
-def estimate_kernels(ref_img, comp_imgs, options, params):
+def estimate_kernels(img, options, params):
     """ Returns the kernels covariance matrix for each frame, sampled at the
     center of every bayer quad (or at the center of every grey pixel in grey
     mode).
@@ -106,7 +106,7 @@ def estimate_kernels(ref_img, comp_imgs, options, params):
 
     """
     t1 = time()
-    n_images, imshape_y, imshape_x = comp_imgs.shape
+    imshape_y, imshape_x = img.shape
     
     bayer_mode = params['mode']=='bayer'
     VERBOSE = options['verbose']
@@ -122,30 +122,27 @@ def estimate_kernels(ref_img, comp_imgs, options, params):
     
     if bayer_mode : 
         # grey level
-        ref_img_grey = (ref_img[::2, ::2] + ref_img[1::2, 1::2] + ref_img[::2, 1::2] + ref_img[1::2, ::2])/4
-        comp_img_grey = (comp_imgs[:,::2, ::2] + comp_imgs[:,1::2, 1::2] + comp_imgs[:,::2, 1::2] + comp_imgs[:,1::2, ::2])/4
+        img_grey = (img[::2, ::2] + img[1::2, 1::2] + img[::2, 1::2] + img[1::2, ::2])/4
     
         if VERBOSE>2:
-            t1 = getTime(t1, "- Decimated Images")
+            t1 = getTime(t1, "- Decimated Image")
     else :
-        ref_img_grey = ref_img # no need to copy now, they will be copied to gpu later.
-        comp_img_grey = comp_imgs
-        
-    covs = cuda.device_array((n_images+1,
-                                ref_img_grey.shape[0],
-                                ref_img_grey.shape[1], 2,2), DEFAULT_NUMPY_FLOAT_TYPE)
+        img_grey = img # no need to copy now, they will be copied to gpu later.
+
+    covs = cuda.device_array((img_grey.shape[0],
+                              img_grey.shape[1], 2,2), DEFAULT_NUMPY_FLOAT_TYPE)
     
-    grey_imshape_y, grey_imshape_x = ref_img_grey.shape
+    grey_imshape_y, grey_imshape_x = img_grey.shape
     
     # TODO The method is good but the implementation seems dirty. Maybe a 
     # clean convolution with cv2 would be faster?
-    gradsx = np.empty((n_images+1, grey_imshape_y, grey_imshape_x-1), DEFAULT_NUMPY_FLOAT_TYPE)
-    gradsx[0] = ref_img_grey[:,1:] - ref_img_grey[:,:-1]
-    gradsx[1:] = comp_img_grey[:, :,1:] - comp_img_grey[:, :,:-1]
+    gradsx = np.empty((grey_imshape_y, grey_imshape_x-1), DEFAULT_NUMPY_FLOAT_TYPE)
+    gradsx = img_grey[:,1:] - img_grey[:,:-1]
+
     
-    gradsy = np.empty((n_images+1, grey_imshape_y-1, grey_imshape_x), DEFAULT_NUMPY_FLOAT_TYPE)
-    gradsy[0] = ref_img_grey[1:,:] - ref_img_grey[:-1,:]
-    gradsy[1:] = comp_img_grey[:, 1:,:] - comp_img_grey[:, :-1, :]
+    gradsy = np.empty((grey_imshape_y-1, grey_imshape_x), DEFAULT_NUMPY_FLOAT_TYPE)
+    gradsy = img_grey[1:,:] - img_grey[:-1,:]
+
     
     cuda_gradsx = cuda.to_device(gradsx/2)
     cuda_gradsy = cuda.to_device(gradsy/2)
@@ -153,7 +150,7 @@ def estimate_kernels(ref_img, comp_imgs, options, params):
     if VERBOSE>2:
         t1 = getTime(t1, "- Gradients computed")
 
-    cuda_estimate_kernel[(n_images+1, grey_imshape_x, grey_imshape_y),
+    cuda_estimate_kernel[(grey_imshape_x, grey_imshape_y),
                          (2, 2, 4)](cuda_gradsx, cuda_gradsy,
                                     k_detail, k_denoise, D_th, D_tr, k_stretch, k_shrink,
                                     covs)  
@@ -164,12 +161,12 @@ def estimate_kernels(ref_img, comp_imgs, options, params):
 def cuda_estimate_kernel(gradsx, gradsy,
                          k_detail, k_denoise, D_th, D_tr, k_stretch, k_shrink,
                          covs):
-    image_index, pixel_idx, pixel_idy = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z 
+    pixel_idx, pixel_idy = cuda.blockIdx.x, cuda.blockIdx.y 
     tx = cuda.threadIdx.x # tx, ty for the 4 gradient point
     ty = cuda.threadIdx.y
     tz = cuda.threadIdx.z #tz for the cov 4 coefs
     
-    _, imshape_y, imshape_x, _, _ = covs.shape
+    imshape_y, imshape_x, _, _ = covs.shape
     
     
     structure_tensor = cuda.shared.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
@@ -188,8 +185,8 @@ def cuda_estimate_kernel(gradsx, gradsy,
         
     cuda.syncthreads()
     if inbound :
-        grad[0] = (gradsx[image_index, thread_pixel_idy+1, thread_pixel_idx] + gradsx[image_index, thread_pixel_idy, thread_pixel_idx])/2
-        grad[1] = (gradsy[image_index, thread_pixel_idy, thread_pixel_idx+1] + gradsy[image_index, thread_pixel_idy, thread_pixel_idx])/2
+        grad[0] = (gradsx[thread_pixel_idy+1, thread_pixel_idx] + gradsx[thread_pixel_idy, thread_pixel_idx])/2
+        grad[1] = (gradsy[thread_pixel_idy, thread_pixel_idx+1] + gradsy[thread_pixel_idy, thread_pixel_idx])/2
     
     
     
@@ -224,21 +221,21 @@ def cuda_estimate_kernel(gradsx, gradsy,
         k2 = k[0]
         if tz == 0:
             # covs[image_index, pixel_idy, pixel_idx, 0, 0] = structure_tensor[0, 0]
-            # covs[image_index, pixel_idy, pixel_idx, 0, 0] = e1[0] # eighen vectors
-            # covs[image_index, pixel_idy, pixel_idx, 0, 0] = clamp(1 - sqrt(l[0])/D_tr + D_th, 0, 1)
-            covs[image_index, pixel_idy, pixel_idx, 0, 0] = k1*e1[0]*e1[0] + k2*e2[0]*e2[0]
+            # covs[pixel_idy, pixel_idx, 0, 0] = e1[0] # eighen vectors
+            # covs[pixel_idy, pixel_idx, 0, 0] = clamp(1 - sqrt(l[0])/D_tr + D_th, 0, 1)
+            covs[pixel_idy, pixel_idx, 0, 0] = k1*e1[0]*e1[0] + k2*e2[0]*e2[0]
         elif tz == 1:
-            # covs[image_index, pixel_idy, pixel_idx, 0, 1] = structure_tensor[0, 1]
-            # covs[image_index, pixel_idy, pixel_idx, 0, 1] = e2[0]
-            # covs[image_index, pixel_idy, pixel_idx, 0, 1] = 1+sqrt((l[0] - l[1])/(l[0] + l[1]))
-            covs[image_index, pixel_idy, pixel_idx, 0, 1] = k1*e1[0]*e1[1] + k2*e2[0]*e2[1]
+            # covs[pixel_idy, pixel_idx, 0, 1] = structure_tensor[0, 1]
+            # covs[pixel_idy, pixel_idx, 0, 1] = e2[0]
+            # covs[pixel_idy, pixel_idx, 0, 1] = 1+sqrt((l[0] - l[1])/(l[0] + l[1]))
+            covs[pixel_idy, pixel_idx, 0, 1] = k1*e1[0]*e1[1] + k2*e2[0]*e2[1]
             
         elif tz == 2:
-            # covs[image_index, pixel_idy, pixel_idx, 1, 0] = structure_tensor[1, 0]
-            # covs[image_index, pixel_idy, pixel_idx, 1, 0] = e1[1]
-            # covs[image_index, pixel_idy, pixel_idx, 1, 0] = l[0]
-            covs[image_index, pixel_idy, pixel_idx, 1, 0] = k1*e1[0]*e1[1] + k2*e2[0]*e2[1]
+            # covs[pixel_idy, pixel_idx, 1, 0] = structure_tensor[1, 0]
+            # covs[pixel_idy, pixel_idx, 1, 0] = e1[1]
+            # covs[pixel_idy, pixel_idx, 1, 0] = l[0]
+            covs[pixel_idy, pixel_idx, 1, 0] = k1*e1[0]*e1[1] + k2*e2[0]*e2[1]
         else:
-            # covs[image_index, pixel_idy, pixel_idx, 1, 1] = structure_tensor[1, 1]
-            # covs[image_index, pixel_idy, pixel_idx, 1, 1] = e2[1]
-            covs[image_index, pixel_idy, pixel_idx, 1, 1] = k1*e1[1]*e1[1] + k2*e2[1]*e2[1]
+            # covs[pixel_idy, pixel_idx, 1, 1] = structure_tensor[1, 1]
+            # covs[pixel_idy, pixel_idx, 1, 1] = e2[1]
+            covs[pixel_idy, pixel_idx, 1, 1] = k1*e1[1]*e1[1] + k2*e2[1]*e2[1]
