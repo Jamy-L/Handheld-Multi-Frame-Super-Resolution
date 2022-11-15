@@ -12,6 +12,133 @@ from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, 
 from .utils import getTime, isTypeInt
 from .utils_image import getTiles, getAlignedTiles, downsample, computeTilesDistanceL1_, computeDistance, subPixelMinimum
 
+
+def init_block_matching(ref_img, options, params):
+    '''Estimate motion between the reference and other images of the burst, and return a set of aligned tiles.'''
+    # Initialization.
+    h, w = ref_img.shape  # height and width should be identical for all images
+    
+    if params['mode'] == 'bayer':
+        tileSize = 2 * params['tuning']['tileSizes'][0]
+    else:
+        tileSize = params['tuning']['tileSizes'][0]
+    # if needed, pad images with zeros so that getTiles contains all image pixels
+    paddingPatchesHeight = (tileSize - h % (tileSize)) * (h % (tileSize) != 0)
+    paddingPatchesWidth = (tileSize - w % (tileSize)) * (w % (tileSize) != 0)
+    # additional zero padding to prevent artifacts on image edges due to overlapped patches in each spatial dimension
+    paddingOverlapHeight = paddingOverlapWidth = tileSize // 2
+    # combine the two to get the total padding
+    paddingTop = paddingOverlapHeight
+    paddingBottom = paddingOverlapHeight + paddingPatchesHeight
+    paddingLeft = paddingOverlapWidth
+    paddingRight = paddingOverlapWidth + paddingPatchesWidth
+    
+	# pad all images (by mirroring image edges)
+	# separate reference and alternate images
+    ref_img_padded = np.pad(ref_img, ((paddingTop, paddingBottom), (paddingLeft, paddingRight)), 'symmetric')
+
+
+
+
+    # For convenience
+    currentTime, verbose = time(), options['verbose'] > 2
+    # factors, tileSizes, distances, searchRadia and subpixels are described fine-to-coarse
+    factors = params['tuning']['factors']
+    tileSizes = params['tuning']['tileSizes']
+    distances = params['tuning']['distances']
+    searchRadia = params['tuning']['searchRadia']
+    subpixels = params['tuning']['subpixels']
+
+    upsamplingFactors = factors[1:] + [1]
+    previousTileSizes = tileSizes[1:] + [None]
+
+    imRef = ref_img_padded
+    tileSize = tileSizes[0]
+
+    # tiles overlap by half in each spatial dimension
+    refTiles = getTiles(ref_img_padded, tileSize, tileSize // 2)
+
+    # construct 4-level coarse-to fine pyramid of the reference
+    referencePyramid = hdrplusPyramid(imRef, factors)
+    
+    return referencePyramid
+
+
+def align_image_block_matching(img, referencePyramid, options, params):
+    '''Estimate motion between the reference and other images of the burst, and return a set of aligned tiles.'''
+    # Initialization.
+    h, w = img.shape  # height and width should be identical for all images
+    
+    if params['mode'] == 'bayer':
+        tileSize = 2 * params['tuning']['tileSizes'][0]
+    else:
+        tileSize = params['tuning']['tileSizes'][0]
+    # if needed, pad images with zeros so that getTiles contains all image pixels
+    paddingPatchesHeight = (tileSize - h % (tileSize)) * (h % (tileSize) != 0)
+    paddingPatchesWidth = (tileSize - w % (tileSize)) * (w % (tileSize) != 0)
+    # additional zero padding to prevent artifacts on image edges due to overlapped patches in each spatial dimension
+    paddingOverlapHeight = paddingOverlapWidth = tileSize // 2
+    # combine the two to get the total padding
+    paddingTop = paddingOverlapHeight
+    paddingBottom = paddingOverlapHeight + paddingPatchesHeight
+    paddingLeft = paddingOverlapWidth
+    paddingRight = paddingOverlapWidth + paddingPatchesWidth
+    
+	# pad all images (by mirroring image edges)
+	# separate reference and alternate images
+    img_padded = np.pad(img, ((paddingTop, paddingBottom), (paddingLeft, paddingRight)), 'symmetric')
+    
+    
+    
+
+    # For convenience
+    currentTime, verbose = time(), options['verbose'] > 2
+    # factors, tileSizes, distances, searchRadia and subpixels are described fine-to-coarse
+    factors = params['tuning']['factors']
+    tileSizes = params['tuning']['tileSizes']
+    distances = params['tuning']['distances']
+    searchRadia = params['tuning']['searchRadia']
+    subpixels = params['tuning']['subpixels']
+
+    upsamplingFactors = factors[1:] + [1]
+    previousTileSizes = tileSizes[1:] + [None]
+
+
+    tileSize = tileSizes[0]
+
+    # tiles overlap by half in each spatial dimension
+    n_tiles_y = 2*int(np.ceil(h//(tileSize//2)))+1
+    n_tiles_x = 2*int(np.ceil(w//(tileSize//2)))+1
+
+    # Align alternate image to the reference image
+
+    # 4-level coarse-to fine pyramid of alternate image
+    alternatePyramid = hdrplusPyramid(img, factors)
+    if verbose:
+        currentTime = getTime(currentTime, ' --- Create alt pyramid')
+
+    # succesively align from coarsest to finest level of the pyramid
+    alignments = None
+    for lv in range(len(referencePyramid)):
+        alignments = alignOnALevel(
+            referencePyramid[lv],
+            alternatePyramid[lv],
+            options,
+            upsamplingFactors[-lv - 1],
+            tileSizes[-lv - 1],
+            previousTileSizes[-lv - 1],
+            searchRadia[-lv - 1],
+            distances[-lv - 1],
+            subpixels[-lv - 1],
+            alignments
+        )
+            
+        if verbose:
+            currentTime = getTime(currentTime, ' --- Align pyramid')
+
+    return alignments
+
+
 def alignBurst(ref_img, comp_imgs, params, options):
 	'''Estimate motion between the reference and other images of the burst, and return a set of aligned tiles.'''
 	# Initialization.

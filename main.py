@@ -47,7 +47,7 @@ def cfa_to_grayscale(raw_img):
 # logger.setLevel(logging.WARNING)
 
 # crop_str = "[1638:2600, 1912:2938]" # for friant
-crop_str = "[1002:1686, 2406:3130]" # for rue4 (arrondissement)
+# crop_str = "[1002:1686, 2406:3130]" # for rue4 (arrondissement)
 # crop_str = "[1002:1686, 2000:2700]" # for rue4 (truck plate)
 # crop_str = "[500:2500, 1000:2500]" # for samsung 0
 crop_str = None
