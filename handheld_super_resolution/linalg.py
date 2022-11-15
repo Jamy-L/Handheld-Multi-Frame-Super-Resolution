@@ -185,8 +185,8 @@ def invert_2x2(M, M_i):
         M_i [1, 1] = M[0, 0]*det_i
     
 @cuda.jit(device=True)
-def quad_mat_prod(A, X):
-    y = A[0, 0]*X[0]*X[0] + X[0]*X[1]*(A[0, 1] + A[1, 0]) + A[1, 1]*X[1]*X[1]
+def quad_mat_prod(A, X1, X2):
+    y = A[0, 0]*X1*X1 + X1*X2*(A[0, 1] + A[1, 0]) + A[1, 1]*X2*X2
     return y
 
 @cuda.jit(device=True)

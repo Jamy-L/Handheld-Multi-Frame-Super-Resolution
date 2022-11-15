@@ -416,38 +416,3 @@ def getTiles(a, window, steps=None, axis=None):
     strides = tuple(astr * stp) + tuple(astr)
 
     return np.squeeze(np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides))
-
-
-
-if __name__ == '__main__':
-    from skimage import data, img_as_float32
-    import time
-    img = img_as_float32(data.astronaut())
-    img = img.mean(-1)
-    image1 = img[100:130, 100:145]
-    image2 = np.roll(img, (2,3))[100:130, 100:145]
-    win = 16
-    radius = 4
-
-    tiles1 = getTiles(image1, win +2*radius)
-    tiles1 = tiles1[...,radius:-radius, radius:-radius]
-    tiles2 = getTiles(image2, win +2*radius)
-    print(tiles1.shape, tiles2.shape)
-
-    # for convinience
-    h, w, sP, sP2 = tiles1.shape
-    hs, ws, sW, sW2 = tiles2.shape
-
-    # Reshape the input
-    win = tiles2.reshape(h * w, sW, sW)
-    ref = tiles1.reshape(h * w, sP, sP)
-    # Dummy input just to pass the output dimension to numba
-    dum = np.empty((h * w, sW - sP + 1, sW - sP + 1), dtype=ref.dtype)
-
-    # Compute the distance between the reference patch and all patches in the searching area
-    n = 1
-    # n = h*w
-    dst_fft = computeL2Distance_(win[:n], ref[:n], dum[:n])  # new implementation: based on FFT
-    # dst_direct = computeL2Distance_(win[:n], ref[:n], dum[:n])  # old implementation: nested for loops
-
-    print(np.linalg.norm(dst_direct - dst_fft) / np.prod(dst_fft.shape))

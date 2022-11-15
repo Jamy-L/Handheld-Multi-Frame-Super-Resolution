@@ -202,9 +202,8 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern
         
         # checking if pixel is r, g or b
         if bayer_mode : 
-            channel = get_channel(thread_pixel_idx,
-                                  thread_pixel_idy,
-                                  CFA_pattern)
+            channel = uint8(CFA_pattern[thread_pixel_idy%2, thread_pixel_idx%2])
+
         else:
             channel = 0
             
@@ -213,17 +212,16 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern
             c = ref_img[thread_pixel_idy, thread_pixel_idx]
 
 
-        dist = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         # applying invert transformation and upscaling
         fine_sub_pos_x = scale * thread_pixel_idx
         fine_sub_pos_y = scale * thread_pixel_idy
-        dist[0] = (fine_sub_pos_x - output_pixel_idx)
-        dist[1] = (fine_sub_pos_y - output_pixel_idy)
+        dist_x = (fine_sub_pos_x - output_pixel_idx)
+        dist_y = (fine_sub_pos_y - output_pixel_idy)
 
         if act : 
-            y = max(0, 2*(dist[0]*dist[0] + dist[1]*dist[1]))
+            y = max(0, 2*(dist_x*dist_x + dist_y*dist_y))
         else:
-            y = max(0, quad_mat_prod(cov_i, dist))
+            y = max(0, quad_mat_prod(cov_i, dist_x, dist_y))
             # y can be slightly negative because of numerical precision.
             # I clamp it to not explode the error with exp
         if bayer_mode : 
@@ -237,12 +235,12 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern
             
 
     cuda.syncthreads()
-    if tx == 0 and ty == 0:
-        for chan in range(n_channels):
-            # this assignment is the initialisation of the accumulators.
-            # There is no racing condition.
-            num[output_pixel_idy, output_pixel_idx, chan] = val[chan]
-            den[output_pixel_idy, output_pixel_idx, chan] = acc[chan]
+    if tx == 0 and ty+1 < n_channels:
+        chan = ty+1
+        # this assignment is the initialisation of the accumulators.
+        # There is no racing condition.
+        num[output_pixel_idy, output_pixel_idx, chan] = val[chan]
+        den[output_pixel_idy, output_pixel_idx, chan] = acc[chan]
     
 def merge(comp_img, alignments, covs, r, num, den,
           options, params):
@@ -316,25 +314,6 @@ def merge(comp_img, alignments, covs, r, num, den,
         current_time = getTime(
             current_time, ' - Image merged on GPU side')
 
-@cuda.jit(device=True)
-def get_channel(patch_pixel_idx, patch_pixel_idy, CFA_pattern):
-    """
-    Return 0, 1 or 2 depending if the coordinates point a red, green or
-    blue pixel on the Bayer frame
-
-    Parameters
-    ----------
-    patch_pixel_idx : unsigned int
-        horizontal coordinates
-    patch_pixel_idy : unigned int
-        vertical coordinates
-
-    Returns
-    -------
-    int
-
-    """
-    return uint8(CFA_pattern[patch_pixel_idy%2, patch_pixel_idx%2])
 
 @cuda.jit
 def accumulate(comp_img, alignments, covs, r,
@@ -502,9 +481,7 @@ def accumulate(comp_img, alignments, covs, r,
     
     # checking if pixel is r, g or b
     if bayer_mode : 
-        channel = get_channel(thread_pixel_idx,
-                              thread_pixel_idy,
-                              CFA_pattern)
+        channel = uint8(CFA_pattern[thread_pixel_idy%2, thread_pixel_idx%2])
     else:
         channel = 0
         
@@ -513,18 +490,17 @@ def accumulate(comp_img, alignments, covs, r,
         c = comp_img[thread_pixel_idy, thread_pixel_idx]
 
 
-    dist = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
     # applying invert transformation and upscaling
     fine_sub_pos_x = scale * (thread_pixel_idx - local_optical_flow[0])
     fine_sub_pos_y = scale * (thread_pixel_idy - local_optical_flow[1])
-    dist[0] = (fine_sub_pos_x - output_pixel_idx)
-    dist[1] = (fine_sub_pos_y - output_pixel_idy)
+    dist_x = (fine_sub_pos_x - output_pixel_idx)
+    dist_y = (fine_sub_pos_y - output_pixel_idy)
 
 
     if act : 
-        y = max(0, 2*(dist[0]*dist[0] + dist[1]*dist[1]))
+        y = max(0, 2*(dist_x*dist_x + dist_y*dist_y))
     else:
-        y = max(0, quad_mat_prod(cov_i, dist))
+        y = max(0, quad_mat_prod(cov_i, dist_x, dist_y))
         # y can be slightly negative because of numerical precision.
         # I clamp it to not explode the error with exp
     if bayer_mode : 
@@ -537,9 +513,9 @@ def accumulate(comp_img, alignments, covs, r,
         cuda.atomic.add(acc, channel, w*local_r)
         
     cuda.syncthreads()
-    if tx == 0 and ty == 0:
-        for chan in range(n_channels):
-            # This is the update of the accumulators, but it is single_threade :
-            # no racing condition.
-            num[output_pixel_idy, output_pixel_idx, chan] += val[chan] 
-            den[output_pixel_idy, output_pixel_idx, chan] += acc[chan]
+    if tx == 0 and ty+1 < n_channels:
+        chan = ty+1
+        # This is the update of the accumulators, but it is single_threade :
+        # no racing condition.
+        num[output_pixel_idy, output_pixel_idx, chan] += val[chan] 
+        den[output_pixel_idy, output_pixel_idx, chan] += acc[chan]
