@@ -8,8 +8,9 @@ import time
 from math import cos, pi
 
 import numpy as np
-
 from numba import uint8, uint16, float32, float64, complex64, cuda
+import torch as th
+import torch.fft
 
 
 DEFAULT_CUDA_FLOAT_TYPE = float32

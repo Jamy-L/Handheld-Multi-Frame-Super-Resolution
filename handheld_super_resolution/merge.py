@@ -60,7 +60,7 @@ def init_merge(ref_img, kernels, options, params):
     return num, den
     
     
-@cuda.jit
+@cuda.jit('void(float32[:,:], float32[:,:,:,:], boolean, boolean, int32, int32, int32[:,:], float32[:,:,:], float32[:,:,:])')
 def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern,
                    num, den):
     """
@@ -315,7 +315,7 @@ def merge(comp_img, alignments, covs, r, num, den,
             current_time, ' - Image merged on GPU side')
 
 
-@cuda.jit
+@cuda.jit('void(float32[:,:], float32[:,:,:], float32[:,:,:,:], float32[:,:], boolean, boolean, uint8, int16, uint8[:, :], float32[:,:,:], float32[:,:,:])')
 def accumulate(comp_img, alignments, covs, r,
                bayer_mode, act, scale, tile_size, CFA_pattern,
                num, den):
@@ -519,3 +519,13 @@ def accumulate(comp_img, alignments, covs, r,
         # no racing condition.
         num[output_pixel_idy, output_pixel_idx, chan] += val[chan] 
         den[output_pixel_idy, output_pixel_idx, chan] += acc[chan]
+        
+@cuda.jit
+def division(num, den):
+    x, y, c = cuda.grid(3)
+    if 0 <= x < num.shape[1] and 0 <= y < num.shape[0] and 0 <= c < num.shape[2]:
+        num[y, x, c] = num[y, x, c]/den[y, x, c]
+    
+    
+    
+    

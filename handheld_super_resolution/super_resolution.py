@@ -21,7 +21,7 @@ from scipy.fft import fft2, ifft2, fftshift, ifftshift
 import colour_demosaicing
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, crop
 from .utils_image import downsample, compute_grey_images
-from .merge import merge, init_merge
+from .merge import merge, init_merge, division
 from .kernels import estimate_kernels
 from .block_matching import alignBurst, init_block_matching, align_image_block_matching
 from .optical_flow import lucas_kanade_optical_flow, ICA_optical_flow, init_ICA
@@ -118,6 +118,7 @@ def main(ref_img, comp_imgs, options, params):
             cuda_im_grey, cuda_ref_grey, ref_gradx, ref_grady, hessian, pre_alignment, options, params['kanade'])
     
         #___ Robustness
+        cuda.synchronize()
         if verbose : 
             current_time = time()
         cuda_Robustness, cuda_robustness = compute_robustness(cuda_img, ref_local_stats, cuda_final_alignment,
@@ -137,7 +138,19 @@ def main(ref_img, comp_imgs, options, params):
         merge(cuda_img, cuda_final_alignment, cuda_kernels, cuda_robustness, num, den,
               options, params['merging'])
     
-    output = num.copy_to_host()/den.copy_to_host()
+    # num is outwritten into num/den
+    channels = num.shape[-1]
+    threadsperblock = (16, 16, channels) # may be modified (3 h)
+    blockspergrid_x = int(np.ceil(num.shape[1]/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(num.shape[0]/threadsperblock[0]))
+    blockspergrid_z = 1
+
+    blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
+
+    division[blockspergrid, threadsperblock](num, den)
+    
+    output = num.copy_to_host()
+
     if verbose : 
         current_time = getTime(
             current_time, 'Merge finished (Total)')
