@@ -32,10 +32,11 @@ import numpy as np
 from scipy import signal
 from scipy.ndimage import gaussian_filter
 from numba import vectorize, guvectorize, uint8, uint16, float32, float64
+import torch as th
+import torch.fft
 
 import colour_demosaicing
-from .utils import getSigned, isTypeInt, DEFAULT_NUMPY_FLOAT_TYPE
-from scipy.fft import fft2, ifft2, fftshift, ifftshift
+from .utils import getSigned, isTypeInt, DEFAULT_NUMPY_FLOAT_TYPE, fft2, ifft2
 
 def compute_grey_images(img, method):
     imsize = imsize_y, imsize_x = img.shape
@@ -43,14 +44,10 @@ def compute_grey_images(img, method):
         img_grey = (img[::2, ::2] + img[1::2, 1::2] + img[::2, 1::2] + img[1::2, ::2])/4
         
     elif method == "FFT":
-            img_grey = fftshift(fft2(img))
+            img_grey = fft2(img)
             # lowpass filtering
-            img_grey[:imsize_y//4, :] = 0
-            img_grey[:, :imsize_x//4] = 0
-            img_grey[-imsize_y//4:, :] = 0
-            img_grey[:, -imsize_x//4:] = 0
-            
-            img_grey = np.real(ifft2(ifftshift(img_grey)))
+            lowpass(img_grey)
+            img_grey = ifft2(img_grey)
             
     elif method == "demosaicing":
             img_dem = colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(img)
@@ -64,6 +61,21 @@ def compute_grey_images(img, method):
     
     return img_grey.astype(DEFAULT_NUMPY_FLOAT_TYPE)
 
+def lowpass(img_grey):
+    img_grey = th.from_numpy(img_grey)
+    img_grey = torch.fft.fft2(img_grey)
+    img_grey = torch.fft.fftshift(img_grey)
+    
+    imsize = imsize_y, imsize_x = img_grey.shimg_greype
+    img_grey[:imsize_y//4, :] = 0
+    img_grey[:, :imsize_x//4] = 0
+    img_grey[-imsize_y//4:, :] = 0
+    img_grey[:, -imsize_x//4:] = 0
+    
+    img_grey = torch.fft.ifftshift(img_grey)
+    img_grey = torch.fft.ifft2(img_grey)
+    return img_grey.numpy().real
+    
 
 @vectorize([uint8(float32), uint8(float64)], target='parallel')
 def convert8bit_(x):
@@ -210,7 +222,8 @@ def computeL2Distance__(win, ref, dum, res):
                 sum = 0
                 for p in range(sP):
                     for q in range(sP):
-                        sum += (win[n, i + p, j + q] - ref[n, p, q])**2
+                        temp = (win[n, i + p, j + q] - ref[n, p, q])
+                        sum += temp*temp
                 # Store the distance
                 res[n, i, j] = sum
 

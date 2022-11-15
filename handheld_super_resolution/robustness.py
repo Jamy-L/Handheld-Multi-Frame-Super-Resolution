@@ -292,7 +292,8 @@ def cuda_compute_patch_dist(ref_local_stats, comp_local_stats, flow, tile_size, 
     
     inbound = (0 <= new_idx < imsize[1]) and (0<= new_idy < imsize[0])
     if inbound : 
-        cuda.atomic.add(d, (idy, idx), (ref_local_stats[idy, idx, 0, channel] - comp_local_stats[new_idy, new_idx, 0, channel])**2)
+        diff = ref_local_stats[idy, idx, 0, channel] - comp_local_stats[new_idy, new_idx, 0, channel]
+        cuda.atomic.add(d, (idy, idx), diff*diff)
         # d[channel] = ref_local_stats[idy, idx, channel] - comp_local_stats[im_id, new_idy, new_idx, channel]
     else:
         d[idy, idx] = 0/0 # Nan

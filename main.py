@@ -60,10 +60,10 @@ params["scale"] = 2
 options = {'verbose' : 3}
 
 params['merging']['kernel'] = 'handheld'
-params['robustness']['on'] = False
+params['robustness']['on'] = True
 params['kanade']['tuning']['kanadeIter'] = 3
-# burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
-burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
+burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
+# burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
 # burst_path = 'P:/0001/Samsung'
 
 output_img = process(burst_path, options, params, crop_str)
@@ -135,7 +135,7 @@ imsize = output_img.shape
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 
-plt.figure("output, kernel {}, {} LK".format(params['merging']['kernel'], params['kanade']['grey method']))
+plt.figure("output avg flow, kernel {}, {} LK".format(params['merging']['kernel'], params['kanade']['grey method']))
 postprocessed_output = raw2rgb.postprocess(raw_ref_img, output_img, xyz2cam=xyz2cam) 
 plt.imshow(postprocessed_output)
 
