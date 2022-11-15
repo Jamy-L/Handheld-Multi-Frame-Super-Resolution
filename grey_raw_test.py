@@ -168,7 +168,8 @@ for image_index in range(comp_images.shape[0]):
 
 #%% result
 
-result_path = 'P:/results_surecavi_20220325/results_anger/20220325/results/exp2/40-N17-spline.tif.d.tiff'
+# result_path = 'P:/results_surecavi_20220325/results_anger/20220325/results/exp2/40-N17-spline.tif.d.tiff'
+result_path = 'P:/results_surecavi_20220325/results_anger/20220325/results/exp5/15-N11-spline.tif.d.tiff'
 result = cv2.imread(result_path, -1)
 
 plt.figure("result spline")

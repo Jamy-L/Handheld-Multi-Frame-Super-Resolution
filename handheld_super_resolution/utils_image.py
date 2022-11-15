@@ -37,49 +37,32 @@ import colour_demosaicing
 from .utils import getSigned, isTypeInt, DEFAULT_NUMPY_FLOAT_TYPE
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
 
-def compute_grey_images(ref_img, comp_img, method):
-    _, *imsize = n_images, imsize_y, imsize_x = comp_img.shape
+def compute_grey_images(img, method):
+    imsize = imsize_y, imsize_x = img.shape
     if method == "decimating":
-        ref_img_grey = (ref_img[::2, ::2] + ref_img[1::2, 1::2] + ref_img[::2, 1::2] + ref_img[1::2, ::2])/4
-        comp_img_grey = (comp_img[:,::2, ::2] + comp_img[:,1::2, 1::2] + comp_img[:,::2, 1::2] + comp_img[:,1::2, ::2])/4
+        img_grey = (img[::2, ::2] + img[1::2, 1::2] + img[::2, 1::2] + img[1::2, ::2])/4
+        
     elif method == "FFT":
-            ref_img_grey = fftshift(fft2(ref_img))
+            img_grey = fftshift(fft2(img))
             # lowpass filtering
-            ref_img_grey[:imsize_y//4, :] = 0
-            ref_img_grey[:, :imsize_x//4] = 0
-            ref_img_grey[-imsize_y//4:, :] = 0
-            ref_img_grey[:, -imsize_x//4:] = 0
+            img_grey[:imsize_y//4, :] = 0
+            img_grey[:, :imsize_x//4] = 0
+            img_grey[-imsize_y//4:, :] = 0
+            img_grey[:, -imsize_x//4:] = 0
             
-            ref_img_grey = np.real(ifft2(ifftshift(ref_img_grey)))
+            img_grey = np.real(ifft2(ifftshift(img_grey)))
             
-            comp_img_grey = np.empty_like(comp_img)
-            for im_id in range(n_images):
-                grey = fftshift(fft2(comp_img[im_id]))
-                # lowpass filtering
-                grey[:imsize_y//4, :] = 0
-                grey[:, :imsize_x//4] = 0
-                grey[-imsize_y//4:, :] = 0
-                grey[:, -imsize_x//4:] = 0
-                
-                comp_img_grey[im_id] = np.real(ifft2(ifftshift(grey)))
     elif method == "demosaicing":
-            ref_img_dem = colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(ref_img)
-            comp_imgs_dem = []
-            for i in range(comp_img.shape[0]):
-                comp_imgs_dem.append(colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(comp_img[i]))
-            comp_imgs_dem=np.array(comp_imgs_dem)
+            img_dem = colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(img)
             
-            ref_img_grey = np.mean(ref_img_dem, axis=2)
-            comp_img_grey = np.mean(comp_imgs_dem, axis=3)
+            img_grey = np.mean(img_dem, axis=2)
+
     elif method == "gauss":
-        ref_img_grey = downsample(ref_img, kernel='bayer')
-        comp_img_grey = np.empty((comp_img.shape[0],)+ref_img_grey.shape)
-        for i in range(comp_img_grey.shape[0]):
-            comp_img_grey[i] = downsample(comp_img[i], kernel='bayer')
+        img_grey = downsample(img, kernel='bayer')
     else:
         raise ValueError('unknown method : {}'.format(method))
     
-    return ref_img_grey.astype(DEFAULT_NUMPY_FLOAT_TYPE), comp_img_grey.astype(DEFAULT_NUMPY_FLOAT_TYPE)
+    return img_grey.astype(DEFAULT_NUMPY_FLOAT_TYPE)
 
 
 @vectorize([uint8(float32), uint8(float64)], target='parallel')

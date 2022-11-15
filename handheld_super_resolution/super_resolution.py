@@ -21,11 +21,11 @@ from scipy.fft import fft2, ifft2, fftshift, ifftshift
 import colour_demosaicing
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, crop
 from .utils_image import downsample, compute_grey_images
-from .merge import merge
+from .merge import merge, init_merge
 from .kernels import estimate_kernels
 from .block_matching import alignBurst
-from .optical_flow import lucas_kanade_optical_flow, ICA_optical_flow
-from .robustness import compute_robustness
+from .optical_flow import lucas_kanade_optical_flow, ICA_optical_flow, init_ICA
+from .robustness import init_robustness, compute_robustness
 
 NOISE_MODEL_PATH = Path(os.getcwd()) / 'data' 
         
@@ -41,7 +41,12 @@ def main(ref_img, comp_imgs, options, params):
     
     if bayer_mode :
         t1 = time()
-        ref_grey, comp_grey = compute_grey_images(ref_img, comp_imgs, grey_method_bm)
+        ref_grey = compute_grey_images(ref_img, grey_method_bm)
+        comp_grey=[]
+        for im_id in range(comp_imgs.shape[0]):
+            comp_grey.append(compute_grey_images(comp_imgs[im_id], grey_method_bm))
+        comp_grey = np.array(comp_grey)
+        
         
         if verbose_2 :
             currentTime = getTime(t1, "- BM grey images estimated by {}".format(grey_method_bm))
@@ -63,51 +68,100 @@ def main(ref_img, comp_imgs, options, params):
     if verbose : 
         current_time = getTime(t1, 'Block Matching (Total)')
     
+    
+    
+    
+    #____ Ref Image
+    
+    
     # TODO Raw to grey (could be removed in the final pipeline)
     if bayer_mode:
-        ref_grey, comp_grey = compute_grey_images(ref_img, comp_imgs, grey_method_lk)
+        ref_grey = compute_grey_images(ref_img, grey_method_lk)
         if verbose_2 :
             current_time = getTime(current_time, "- LK grey images estimated by {}".format(grey_method_lk))
     else:
-        ref_grey, comp_grey = ref_img, comp_imgs
-        
-
+        ref_grey = ref_img
+    
+    
     #___ Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
-    cuda_comp_imgs = cuda.to_device(comp_imgs)
+    cuda_ref_grey = cuda.to_device(ref_grey)
     
-    if verbose_2 : 
-        current_time = getTime(
-            current_time, 'Arrays moved to GPU')
     
-    #___ Lucas-Kanade Optical flow (or ICA)
-    cuda_final_alignment = ICA_optical_flow(
-        ref_grey, comp_grey, pre_alignment, options, params['kanade'])
-
-    #___ Robustness
+    #___ ICA : compute grad and hessian
+    ref_gradx, ref_grady, hessian = init_ICA(ref_grey, options, params['kanade'])
+    
     if verbose : 
         current_time = time()
-    cuda_Robustness, cuda_robustness = compute_robustness(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment,
-                                             options, params['robustness'])
-    if verbose : 
-        current_time = getTime(
-            current_time, 'Robustness estimated (Total)')
         print('Estimating kernels')
+    
+    #___ Local stats estimation
+    ref_local_stats = init_robustness(cuda_ref_img,options, params['robustness'])
         
     #___ Kernel estimation
-    cuda_kernels = estimate_kernels(ref_img, comp_imgs, options, params['merging'])
+    cuda_kernels = estimate_kernels(ref_img, options, params['merging'])
     if verbose : 
         current_time = getTime(
             current_time, 'Kernels estimated (Total)')
+    
+    
+    #___ init merge
+    num, den = init_merge(cuda_ref_img, cuda_kernels, options, params["merging"])
+    
+    
+    n_images = comp_imgs.shape[0]
+    for im_id in range(n_images): 
+        if verbose :
+            print("\nProcessing image {} ---------\n".format(im_id+1))
         
-    #___ Merging
-    output = merge(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment, cuda_kernels, cuda_robustness, options, params['merging'])
+        # TODO Raw to grey (could be removed in the final pipeline)
+        if bayer_mode:
+            im_grey = compute_grey_images(comp_imgs[im_id], grey_method_lk)
+            if verbose_2 :
+                current_time = getTime(current_time, "- LK grey images estimated by {}".format(grey_method_lk))
+        else:
+            im_grey = comp_imgs[im_id]
+            
+    
+        #___ Moving to GPU
+        cuda_img = cuda.to_device(comp_imgs[im_id])
+        cuda_im_grey = cuda.to_device(im_grey)
+        
+        if verbose_2 : 
+            current_time = getTime(
+                current_time, 'Arrays moved to GPU')
+        
+        #___ Lucas-Kanade Optical flow (or ICA)
+        cuda_final_alignment = ICA_optical_flow(
+            cuda_im_grey, cuda_ref_grey, ref_gradx, ref_grady, hessian, pre_alignment[im_id], options, params['kanade'])
+    
+        #___ Robustness
+        if verbose : 
+            current_time = time()
+        cuda_Robustness, cuda_robustness = compute_robustness(cuda_img, ref_local_stats, cuda_final_alignment,
+                                                 options, params['robustness'])
+        if verbose : 
+            current_time = getTime(
+                current_time, 'Robustness estimated (Total)')
+            print('\nEstimating kernels')
+            
+        #___ Kernel estimation
+        cuda_kernels = estimate_kernels(comp_imgs[im_id], options, params['merging'])
+        cuda.synchronize()
+        if verbose : 
+            current_time = getTime(
+                current_time, 'Kernels estimated (Total)')
+        #___ Merging
+        merge(cuda_img, cuda_final_alignment, cuda_kernels, cuda_robustness, num, den,
+              options, params['merging'])
+    
+    output = num.copy_to_host()/den.copy_to_host()
     if verbose : 
         current_time = getTime(
             current_time, 'Merge finished (Total)')
-    if verbose:
         print('\nTotal ellapsed time : ', time() - t1)
-    return output, cuda_Robustness.copy_to_host(), cuda_robustness.copy_to_host(), cuda_final_alignment.copy_to_host(), cuda_kernels.copy_to_host()
+        
+    return output
 
 #%%
 
