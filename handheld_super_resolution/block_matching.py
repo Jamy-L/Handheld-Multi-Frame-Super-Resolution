@@ -18,10 +18,8 @@ def init_block_matching(ref_img, options, params):
     # Initialization.
     h, w = ref_img.shape  # height and width should be identical for all images
     
-    if params['mode'] == 'bayer':
-        tileSize = 2 * params['tuning']['tileSizes'][0]
-    else:
-        tileSize = params['tuning']['tileSizes'][0]
+    tileSize = params['tuning']['tileSizes'][0]
+    
     # if needed, pad images with zeros so that getTiles contains all image pixels
     paddingPatchesHeight = (tileSize - h % (tileSize)) * (h % (tileSize) != 0)
     paddingPatchesWidth = (tileSize - w % (tileSize)) * (w % (tileSize) != 0)
@@ -44,22 +42,12 @@ def init_block_matching(ref_img, options, params):
     currentTime, verbose = time(), options['verbose'] > 2
     # factors, tileSizes, distances, searchRadia and subpixels are described fine-to-coarse
     factors = params['tuning']['factors']
-    tileSizes = params['tuning']['tileSizes']
-    distances = params['tuning']['distances']
-    searchRadia = params['tuning']['searchRadia']
-    subpixels = params['tuning']['subpixels']
 
-    upsamplingFactors = factors[1:] + [1]
-    previousTileSizes = tileSizes[1:] + [None]
-
-    imRef = ref_img_padded
-    tileSize = tileSizes[0]
-
-    # tiles overlap by half in each spatial dimension
-    refTiles = getTiles(ref_img_padded, tileSize, tileSize // 2)
 
     # construct 4-level coarse-to fine pyramid of the reference
-    referencePyramid = hdrplusPyramid(imRef, factors)
+    referencePyramid = hdrplusPyramid(ref_img_padded, factors)
+    if verbose:
+        currentTime = getTime(currentTime, ' --- Create ref pyramid')
     
     return referencePyramid
 
@@ -113,7 +101,7 @@ def align_image_block_matching(img, referencePyramid, options, params):
     # Align alternate image to the reference image
 
     # 4-level coarse-to fine pyramid of alternate image
-    alternatePyramid = hdrplusPyramid(img, factors)
+    alternatePyramid = hdrplusPyramid(img_padded, factors)
     if verbose:
         currentTime = getTime(currentTime, ' --- Create alt pyramid')
 

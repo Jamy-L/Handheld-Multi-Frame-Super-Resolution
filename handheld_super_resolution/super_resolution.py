@@ -23,7 +23,7 @@ from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, crop
 from .utils_image import downsample, compute_grey_images
 from .merge import merge, init_merge
 from .kernels import estimate_kernels
-from .block_matching import alignBurst
+from .block_matching import alignBurst, init_block_matching, align_image_block_matching
 from .optical_flow import lucas_kanade_optical_flow, ICA_optical_flow, init_ICA
 from .robustness import init_robustness, compute_robustness
 
@@ -36,52 +36,20 @@ def main(ref_img, comp_imgs, options, params):
     
     
     #___ Raw to grey
-    grey_method_lk = params['kanade']['grey method']
-    grey_method_bm = params['block matching']['grey method']
+    grey_method = params['kanade']['grey method']
     
     if bayer_mode :
         t1 = time()
-        ref_grey = compute_grey_images(ref_img, grey_method_bm)
-        comp_grey=[]
-        for im_id in range(comp_imgs.shape[0]):
-            comp_grey.append(compute_grey_images(comp_imgs[im_id], grey_method_bm))
-        comp_grey = np.array(comp_grey)
-        
-        
+        ref_grey = compute_grey_images(ref_img, grey_method)
         if verbose_2 :
-            currentTime = getTime(t1, "- BM grey images estimated by {}".format(grey_method_bm))
-    else:
-        ref_grey, comp_grey = ref_img, comp_imgs
-        
-    #___ Block Matching
-    t1 = time()
-    if verbose :
-        print('Beginning block matching')
-
-    pre_alignment, _ = alignBurst(ref_grey, comp_grey,params['block matching'], options)
-    pre_alignment = pre_alignment[:, :, :, ::-1] # swapping x and y direction (x must be first)
-    if grey_method_bm in ["gauss", "decimating"] and bayer_mode:
-        pre_alignment*=2
-        # BM is always in grey mode, so input scale is output scale.
-        # we choose by convention, to always return flow on the coarse scale, so x2 if grey is 2x smaller
-    
-    if verbose : 
-        current_time = getTime(t1, 'Block Matching (Total)')
-    
-    
-    
-    
-    #____ Ref Image
-    
-    
-    # TODO Raw to grey (could be removed in the final pipeline)
-    if bayer_mode:
-        ref_grey = compute_grey_images(ref_img, grey_method_lk)
-        if verbose_2 :
-            current_time = getTime(current_time, "- LK grey images estimated by {}".format(grey_method_lk))
+            currentTime = getTime(t1, "- Ref grey image estimated by {}".format(grey_method))
     else:
         ref_grey = ref_img
+        
+    #___ Block Matching
     
+    referencePyramid = init_block_matching(ref_grey, options, params['block matching'])
+
     
     #___ Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
@@ -91,14 +59,15 @@ def main(ref_img, comp_imgs, options, params):
     #___ ICA : compute grad and hessian
     ref_gradx, ref_grady, hessian = init_ICA(ref_grey, options, params['kanade'])
     
-    if verbose : 
-        current_time = time()
-        print('Estimating kernels')
     
     #___ Local stats estimation
     ref_local_stats = init_robustness(cuda_ref_img,options, params['robustness'])
+
         
     #___ Kernel estimation
+    if verbose : 
+        current_time = time()
+        print('Estimating kernels')
     cuda_kernels = estimate_kernels(ref_img, options, params['merging'])
     if verbose : 
         current_time = getTime(
@@ -110,19 +79,32 @@ def main(ref_img, comp_imgs, options, params):
     
     
     n_images = comp_imgs.shape[0]
-    for im_id in range(n_images): 
+    for im_id in range(n_images):
         if verbose :
             print("\nProcessing image {} ---------\n".format(im_id+1))
         
-        # TODO Raw to grey (could be removed in the final pipeline)
+        current_time = time()
         if bayer_mode:
-            im_grey = compute_grey_images(comp_imgs[im_id], grey_method_lk)
+            im_grey = compute_grey_images(comp_imgs[im_id], grey_method)
             if verbose_2 :
-                current_time = getTime(current_time, "- LK grey images estimated by {}".format(grey_method_lk))
+                current_time = getTime(current_time, "- LK grey images estimated by {}".format(grey_method))
         else:
             im_grey = comp_imgs[im_id]
-            
-    
+        
+        #___ Block Matching
+        current_time = time()
+        if verbose :
+            print('Beginning block matching')
+        
+        pre_alignment = align_image_block_matching(im_grey, referencePyramid, options, params['block matching'])[:,:,::-1]
+
+        if grey_method in ["gauss", "decimating"] and bayer_mode:
+            pre_alignment*=2
+            # BM is always in grey mode, so input scale is output scale.
+            # we choose by convention, to always return flow on the coarse scale, so x2 if grey is 2x smaller
+        
+        if verbose : 
+            current_time = getTime(current_time, 'Block Matching (Total)')
         #___ Moving to GPU
         cuda_img = cuda.to_device(comp_imgs[im_id])
         cuda_im_grey = cuda.to_device(im_grey)
@@ -133,7 +115,7 @@ def main(ref_img, comp_imgs, options, params):
         
         #___ Lucas-Kanade Optical flow (or ICA)
         cuda_final_alignment = ICA_optical_flow(
-            cuda_im_grey, cuda_ref_grey, ref_gradx, ref_grady, hessian, pre_alignment[im_id], options, params['kanade'])
+            cuda_im_grey, cuda_ref_grey, ref_gradx, ref_grady, hessian, pre_alignment, options, params['kanade'])
     
         #___ Robustness
         if verbose : 
