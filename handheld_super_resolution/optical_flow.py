@@ -11,7 +11,6 @@ from math import floor, ceil, modf, exp, sqrt
 import numpy as np
 import cv2
 from numba import cuda, float32, float64, int16
-from numba.cuda.random import create_xoroshiro128p_states, init_xoroshiro128p_states, xoroshiro128p_uniform_float32
 from scipy.ndimage import gaussian_filter1d
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
 
