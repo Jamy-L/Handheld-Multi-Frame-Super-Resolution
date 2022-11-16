@@ -56,7 +56,7 @@ crop_str = None
 #%%
 
 params = get_params(PSNR = 35)
-params["scale"] = 2
+params["scale"] = 1
 options = {'verbose' : 3}
 
 params['merging']['kernel'] = 'handheld'
@@ -135,7 +135,7 @@ imsize = output_img.shape
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 
-plt.figure("output avg flow, kernel {}, {} LK".format(params['merging']['kernel'], params['kanade']['grey method']))
+plt.figure("output, kernel {}, {} LK".format(params['merging']['kernel'], params['kanade']['grey method']))
 postprocessed_output = raw2rgb.postprocess(raw_ref_img, output_img, xyz2cam=xyz2cam) 
 plt.imshow(postprocessed_output)
 

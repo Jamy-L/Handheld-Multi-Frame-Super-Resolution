@@ -36,7 +36,7 @@ import torch as th
 import torch.fft
 
 import colour_demosaicing
-from .utils import getSigned, isTypeInt, DEFAULT_NUMPY_FLOAT_TYPE, fft2, ifft2
+from .utils import getSigned, isTypeInt, DEFAULT_NUMPY_FLOAT_TYPE
 
 def compute_grey_images(img, method):
     imsize = imsize_y, imsize_x = img.shape
@@ -44,10 +44,10 @@ def compute_grey_images(img, method):
         img_grey = (img[::2, ::2] + img[1::2, 1::2] + img[::2, 1::2] + img[1::2, ::2])/4
         
     elif method == "FFT":
-            img_grey = fft2(img)
+
             # lowpass filtering
-            lowpass(img_grey)
-            img_grey = ifft2(img_grey)
+            img_grey = fft_lowpass(img)
+
             
     elif method == "demosaicing":
             img_dem = colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(img)
@@ -61,12 +61,12 @@ def compute_grey_images(img, method):
     
     return img_grey.astype(DEFAULT_NUMPY_FLOAT_TYPE)
 
-def lowpass(img_grey):
+def fft_lowpass(img_grey):
     img_grey = th.from_numpy(img_grey)
     img_grey = torch.fft.fft2(img_grey)
     img_grey = torch.fft.fftshift(img_grey)
     
-    imsize = imsize_y, imsize_x = img_grey.shimg_greype
+    imsize = imsize_y, imsize_x = img_grey.shape
     img_grey[:imsize_y//4, :] = 0
     img_grey[:, :imsize_x//4] = 0
     img_grey[-imsize_y//4:, :] = 0
@@ -207,7 +207,7 @@ def computeL1Distance_(win, ref, dum, res):
     	        res[n, i, j] = sum
 
 
-# ## NOTE: old implementation.
+
 @guvectorize(['void(float32[:, :, :], float32[:, :, :], float32[:, :, :], float32[:, :, :])'], '(n, w, w), (n, p, p), (n, t, t) -> (n, t, t)')
 def computeL2Distance__(win, ref, dum, res):
     # Dummy array dum only here to know the output size. Won't be used.

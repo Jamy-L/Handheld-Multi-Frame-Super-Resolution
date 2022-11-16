@@ -661,16 +661,6 @@ def get_new_flow(ref_img, comp_img, gradsx, gradsy, alignment, tile_size, upscal
 
 
 
-# TODO this can be rewritten but it is kept for compatibility with affinity method
-# @cuda.jit(device=True, inline=True)
-# def warp_flow_x(pos, local_flow):
-#     return local_flow[0]
-
-# @cuda.jit(device=True, inline=True)
-# def warp_flow_y(pos, local_flow):
-#     return local_flow[1]
-
-
 @cuda.jit(device=True)
 def get_closest_flow(idx_sub, idy_sub, optical_flows, tile_size, imsize, local_flow):
     # TODO windowing is only applied to pixels which are on 4 overlapped tile.
@@ -710,12 +700,13 @@ def get_closest_flow(idx_sub, idy_sub, optical_flows, tile_size, imsize, local_f
 
 
 
-
+    # clamping patches id to avoid non defined valued on side conditions. 
     patch_idx_right = clamp(patch_idx_right, 0, imshape[1]-1)
     patch_idx_left = clamp(patch_idx_left, 0, imshape[1]-1)
     
-    patch_idy_top = clamp(patch_idx_right, 0, imshape[0]-1)
-    patch_idx_bottom = clamp(patch_idx_right, 0, imshape[0]-1)
+    patch_idy_top = clamp(patch_idy_top, 0, imshape[0]-1)
+    patch_idy_bottom = clamp(patch_idy_bottom, 0, imshape[0]-1)
+    
 
     # Index out of bound. With zero flow, they will be discarded later
     if (idx_sub < 0 or idx_sub >= imsize[1] or
@@ -724,109 +715,31 @@ def get_closest_flow(idx_sub, idy_sub, optical_flows, tile_size, imsize, local_f
         flow_y = 0
     
     
+
     
-    tr = optical_flows[patch_idy_top, patch_idx_right]
-    tl = optical_flows[patch_idy_top, patch_idx_left]
-    br = optical_flows[patch_idy_bottom, patch_idx_right]
-    bl = optical_flows[patch_idy_bottom, patch_idx_left]
-    # tl = bl= br = tr
+    # flow_x = 0.25*(tr[0] + bl[0] + br[0] + tl[0])
+    # flow_y= 0.25*(tr[1] + bl[1] + br[1] + tl[1])
     
-    flow_x = 0.25*(tr[0] + bl[0] + br[0] + tl[0])
-    flow_y= 0.25*(tr[1] + bl[1] + br[1] + tl[1])
-    
-    local_flow[0] = flow_x
-    local_flow[1] = flow_y
-    
-    # Side condition when the required patch is not existing (because it would be 
-    # too small for block matching)
-    # elif patch_idy_top >= imshape[0] and patch_idx_left >= imshape[1]:
-    #     flow_x = warp_flow_x(pos, optical_flows[-1, -1])
-    #     flow_y = warp_flow_y(pos, optical_flows[-1, -1])
+    # general case
+    else:
+        # Averaging patches with a window function
+        tl = hamming(idy_sub%(tile_size/2), idx_sub%(tile_size/2), tile_size)
+        tr = hamming(idy_sub%(tile_size/2), (tile_size/2) - idx_sub%(tile_size/2), tile_size)
+        bl = hamming((tile_size/2) - idy_sub%(tile_size/2), idx_sub%(tile_size/2), tile_size)
+        br = hamming((tile_size/2) - idy_sub%(tile_size/2), (tile_size/2) - idx_sub%(tile_size/2), tile_size)
         
-    # elif patch_idy_top >= imshape[0]:
-    #     if patch_idx_left >= 0 and patch_idx_right <imshape[1]:
-    #         flow_x = (warp_flow_x(pos, optical_flows[-1, patch_idx_left]) + warp_flow_x(pos, optical_flows[-1, patch_idx_right]))/2
-    #         flow_y = (warp_flow_y(pos, optical_flows[-1, patch_idx_left]) + warp_flow_y(pos, optical_flows[-1, patch_idx_right]))/2
-    #     elif patch_idx_left >= 0 :
-    #         flow_x = warp_flow_x(pos, optical_flows[-1, patch_idx_left])
-    #         flow_y = warp_flow_y(pos, optical_flows[-1, patch_idx_left])
-    #     elif patch_idx_right < imshape[1] :
-    #         flow_x = warp_flow_x(pos, optical_flows[-1, patch_idx_right])
-    #         flow_y = warp_flow_y(pos, optical_flows[-1, patch_idx_right])
-
-    # elif patch_idx_left >= imshape[1]:
-    #     if patch_idy_top >= 0 and patch_idy_bottom < imshape[0]:
-    #         flow_x = (warp_flow_x(pos, optical_flows[patch_idy_top, -1]) + warp_flow_x(pos, optical_flows[patch_idy_bottom, -1]))/2
-    #         flow_y = (warp_flow_y(pos, optical_flows[patch_idy_top, -1]) + warp_flow_y(pos, optical_flows[patch_idy_bottom, -1]))/2
-    #     elif patch_idy_top >= 0 :
-    #         flow_x = warp_flow_x(pos, optical_flows[patch_idy_top, -1])
-    #         flow_y = warp_flow_y(pos, optical_flows[patch_idy_top, -1])
-    #     elif patch_idy_bottom < imshape[1] :
-    #         flow_x = warp_flow_x(pos, optical_flows[patch_idy_bottom, -1])
-    #         flow_y = warp_flow_y(pos, optical_flows[patch_idy_bottom, -1])
-            
-            
-    # # corner conditions
-    # elif patch_idy_bottom >= imshape[0] and patch_idx_left < 0:
-    #     flow_x = warp_flow_x(pos, optical_flows[patch_idy_top, patch_idx_right])
-    #     flow_y = warp_flow_y(pos, optical_flows[patch_idy_top, patch_idx_right])
-
-    # elif patch_idy_bottom >= imshape[0] and patch_idx_right >= imshape[1]:
-    #     flow_x = warp_flow_x(pos, optical_flows[patch_idy_top, patch_idx_left])
-    #     flow_y = warp_flow_y(pos, optical_flows[patch_idy_top, patch_idx_left])
-
-    # elif patch_idy_top < 0 and patch_idx_left < 0:
-    #     flow_x = warp_flow_x(pos, optical_flows[patch_idy_bottom, patch_idx_right])
-    #     flow_y = warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_right])
-
-    # elif patch_idy_top < 0 and patch_idx_right >= imshape[1]:
-    #     flow_x = warp_flow_x(pos, optical_flows[patch_idy_bottom, patch_idx_left])
-    #     flow_y = warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_left])
-
-    # # side conditions
-    # elif patch_idy_bottom >= imshape[0]:
-    #     flow_x = (warp_flow_x(pos, optical_flows[patch_idy_top, patch_idx_left]) +
-    #               warp_flow_x(pos, optical_flows[patch_idy_top, patch_idx_right]))/2
-    #     flow_y = (warp_flow_y(pos, optical_flows[patch_idy_top, patch_idx_left]) +
-    #               warp_flow_y(pos, optical_flows[patch_idy_top, patch_idx_right]))/2
-
-    # elif patch_idy_top < 0:
-    #     flow_x = (warp_flow_x(pos, optical_flows[patch_idy_bottom, patch_idx_left]) +
-    #             warp_flow_x(pos, optical_flows[patch_idy_bottom, patch_idx_right]))/2
-    #     flow_y = (warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_left]) +
-    #             warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_right]))/2
-
-    # elif patch_idx_left < 0:
-    #     flow_x = (warp_flow_x(pos, optical_flows[patch_idy_bottom, patch_idx_right]) +
-    #             warp_flow_x(pos, optical_flows[patch_idy_top, patch_idx_right]))/2
-    #     flow_y = (warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_right]) +
-    #             warp_flow_y(pos, optical_flows[patch_idy_top, patch_idx_right]))/2
-
-    # elif patch_idx_right >= imshape[1]:
-    #     flow_x = (warp_flow_x(pos, optical_flows[patch_idy_bottom, patch_idx_left]) +
-    #             warp_flow_x(pos, optical_flows[patch_idy_top, patch_idx_left]))/2
-    #     flow_y = (warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_left]) +
-    #             warp_flow_y(pos, optical_flows[patch_idy_top, patch_idx_left]))/2
-
-    # # general case
-    # else:
-    #     # Averaging patches with a window function
-    #     tl = hamming(idy_sub%(tile_size/2), idx_sub%(tile_size/2), tile_size)
-    #     tr = hamming(idy_sub%(tile_size/2), (tile_size/2) - idx_sub%(tile_size/2), tile_size)
-    #     bl = hamming((tile_size/2) - idy_sub%(tile_size/2), idx_sub%(tile_size/2), tile_size)
-    #     br = hamming((tile_size/2) - idy_sub%(tile_size/2), (tile_size/2) - idx_sub%(tile_size/2), tile_size)
-        
-    #     k = tl + tr + br + bl
+        k = tl + tr + br + bl
         
         
-    #     flow_x = (warp_flow_x(pos, optical_flows[patch_idy_top, patch_idx_left])*tl +
-    #               warp_flow_x(pos, optical_flows[patch_idy_top, patch_idx_right])*tr +
-    #               warp_flow_x(pos, optical_flows[patch_idy_bottom, patch_idx_left])*bl +
-    #               warp_flow_x(pos, optical_flows[patch_idy_bottom, patch_idx_right])*br)/k
-    #     flow_y = (warp_flow_y(pos, optical_flows[patch_idy_top, patch_idx_left])*tl +
-    #               warp_flow_y(pos, optical_flows[patch_idy_top, patch_idx_right])*tr +
-    #               warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_left])*bl +
-    #               warp_flow_y(pos, optical_flows[patch_idy_bottom, patch_idx_right])*br)/k
+        flow_x = (optical_flows[patch_idy_top, patch_idx_left, 0]*tl +
+                  optical_flows[patch_idy_top, patch_idx_right, 0]*tr +
+                  optical_flows[patch_idy_bottom, patch_idx_left, 0]*bl +
+                  optical_flows[patch_idy_bottom, patch_idx_right, 0]*br)/k
+        
+        flow_y = (optical_flows[patch_idy_top, patch_idx_left, 1]*tl +
+                  optical_flows[patch_idy_top, patch_idx_right, 1]*tr +
+                  optical_flows[patch_idy_bottom, patch_idx_left, 1]*bl +
+                  optical_flows[patch_idy_bottom, patch_idx_right, 1]*br)/k
     
 
     local_flow[0] = flow_x
