@@ -357,7 +357,98 @@ def upsampleAlignments(referencePyramidLevel, alternatePyramidLevel, previousAli
 
     return newAlignments
 
+def align_pyramid(referencePyramid, alternatePyramid, options, upsamplingFactors, tileSizes, 
+                  previousTileSizes, searchRadia, distances, subpixels):
+    
+        alignments = None
+        for lv in range(len(referencePyramid)):
+            cuda_ref_level = cuda.copy_to_device(referencePyramid[lv].astype(np.float32))
+            cuda_alternate_level = cuda.copy_to_device(alternatePyramid[lv].astype(np.float32))
+            
+            alignments = alignOnALevel2(
+                                        cuda_ref_level,
+                                        cuda_alternate_level,
+                                        options,
+                                        upsamplingFactors[-lv - 1],
+                                        tileSizes[-lv - 1],
+                                        previousTileSizes[-lv - 1],
+                                        searchRadia[-lv - 1],
+                                        distances[-lv - 1],
+                                        subpixels[-lv - 1],
+                                        alignments
+                                        )
 
+def alignOnALevel2(referencePyramidLevel, alternatePyramidLevel, options, upsamplingFactor, tileSize, 
+                  previousTileSize, searchRadius, distance, subpixel, previousAlignments, lv):
+    # For convenience
+    verbose, currentTime = options['verbose'] > 3, time()
+    
+    
+    imshape = referencePyramidLevel.shape
+    h = 2*int(np.ceil(imshape[0]//(tileSize//2)))+1
+    w = 2*int(np.ceil(imshape[1]//(tileSize//2)))+1
+    sR = 2 * searchRadius + 1
+    
+    # Upsample the previous alignements for initialization
+    if previousAlignments is None:
+        previousAlignments = cuda.to_device(np.zeros((h, w, 2), dtype=np.float32))
+    else:
+        # use the upsampled previous alignments as initial guesses
+        upsampledAlignments = upsampleAlignments( # TODO parallelize tilewise
+            referencePyramidLevel,
+            alternatePyramidLevel,
+            previousAlignments,
+            upsamplingFactor,
+            tileSize,
+            previousTileSize
+        )
+    # TODO the new upsamleAlignments should round and cast final type to int.
+    if verbose:
+        currentTime = getTime(currentTime, ' ---- Upsample alignments')
+
+    # # For convenience
+    # h, w, sR = upsampledAlignments.shape[0], upsampledAlignments.shape[1], 2 * \
+    #     searchRadius + 1
+
+    distances = cuda.device_array((h, w, sR, sR))
+    
+    cuda_compute_search_distance(referencePyramidLevel, alternatePyramidLevel,
+                                 tileSize, searchRadius,
+                                 previousAlignments, lv, distances)
+    
+    # threads of a same block are computing a single distance.
+    # Therefore, the minimisation cannot be computed at the same time,
+    # Since it would require to compare values of separated blocsk.
+    cuda_minimize_distance(distances, offset)
+    
+    # TODO
+    if subpixel:
+        # Initialization
+        subpixOffsets = np.zeros_like(levelOffsets)
+        # only work on distance minimums that actually feature a 3*3 = 9 pixel neighborhood
+        validMinIdx = np.logical_and(
+            minIdx < distances.shape[1] - 4, minIdx >= 4)
+        # Find the optimal offset only for valid positions
+        subpixOffsets[validMinIdx] = subPixelMinimum(
+            distances[validMinIdx], minIdx[validMinIdx])
+        # Update the offsets
+        levelOffsets += subpixOffsets
+
+    levelOffsets = levelOffsets.reshape((h, w, 2))
+    
+    cuda_update_flow(upsampledAlignment, offset)
+    
+    
+    
+
+def cuda_compute_search_distance():
+    pass
+
+def cuda_minimize_distance(distances, offset):
+    # TODO
+    # searcRadius must be substracted to min id to get the "best" offset.
+    pass
+ 
 def alignOnALevel(referencePyramidLevel, alternatePyramidLevel, options, upsamplingFactor=1, tileSize=16, 
                   previousTileSize=None, searchRadius=4, distance='L2', subpixel=True, previousAlignments=None):
     '''motion estimation performed at a single Gaussian pyramid level.
