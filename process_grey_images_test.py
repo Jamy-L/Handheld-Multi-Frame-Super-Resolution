@@ -45,7 +45,7 @@ params = {'mode':'grey',
                     'subpixels': [False, True, True, True]
                     }},
             'kanade' : {
-                'grey method':'f',
+                'grey method':'None',
                 'mode':'gray',
                 'epsilon div' : 1e-6,
                 'grey method':'FFT',
@@ -69,14 +69,14 @@ params = {'mode':'grey',
             'merging': {
                 'exif':{'CFA Pattern':CFA},
                 'mode':'gray',
-                'scale': 2,
+                'scale': 1.5,
                 'kernel' : 'handheld',
                 'tuning': {
                     'tileSize': 32,
                     'k_detail' : 0.33, # [0.25, ..., 0.33]
                     'k_denoise': 5,    # [3.0, ...,5.0]
                     'D_th': 0.01,      # [0.001, ..., 0.010]
-                    'D_tr': 0.02*16,     # [0.006, ..., 0.020]
+                    'D_tr': 0.02*12,     # [0.006, ..., 0.020]
                     'k_stretch' : 4,   # 4
                     'k_shrink' : 2,    # 2
                     }
@@ -138,12 +138,12 @@ plt.colorbar()
 
 
 #%%
-burst_path = 'P:/exp_noise/exp6/ref'
-output_path = 'P:/exp_noise/handheld_output/exp6/Low SNR'
+burst_path = 'P:/synthetic_aether/synthetic_aether/gain_030'
+output_path = 'P:/synthetic_aether/synthetic_handheld_output/gain_030'
 
-def process_burst(ref_id, burst_size):
-    raw_path_list = glob.glob(os.path.join(burst_path, '*.tif'))
-
+def process_burst(ref_id, burst_size, folder):
+    burst_path1 = '{}/{}'.format(burst_path, folder)
+    raw_path_list = glob.glob(os.path.join(burst_path1, '*.tiff'))
 
     index_start = ref_id
     first_image_path = raw_path_list[index_start]
@@ -160,13 +160,21 @@ def process_burst(ref_id, burst_size):
     output, R, r, alignment, covs = main(np.ascontiguousarray(raw_ref_img).astype(np.float32),
                                          np.ascontiguousarray(comp_images).astype(np.float32),
                                          options, params)
-    filtered = filters.unsharp_mask(output[:,:,0], radius=3, amount=1.5,
-                               channel_axis=None, preserve_range=True)
+    # filtered = filters.unsharp_mask(output[:,:,0], radius=3, amount=1.5,
+    #                            channel_axis=None, preserve_range=True)
+    filtered = output[:,:,0]
     filtered*=2**16-1
     filtered=np.clip(filtered, 0, 2**16-1)
     filtered = filtered.astype(np.uint16)
-    name = "{}/{}-N{}.tiff".format(output_path, ref_id, burst_size)
+    name = "{}/{}.tiff".format(output_path, folder)
     
-    cv2.imwrite(name, filtered)
-for i in tqdm(range(0, 84)):
-    process_burst(i, 15)
+    if not os.path.exists(name):
+        os.mkdir(name)
+    
+    file_name = "{}/{}.tiff".format(name, 'x1.5')
+    
+    cv2.imwrite(file_name, filtered)
+
+
+for folder in tqdm(os.listdir(burst_path)):
+    process_burst(0, 10, folder)
