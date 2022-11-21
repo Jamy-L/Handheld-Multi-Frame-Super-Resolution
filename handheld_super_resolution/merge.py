@@ -302,7 +302,6 @@ def merge(comp_img, alignments, covs, r, num, den,
     blockspergrid = (output_size[1], output_size[0])
                     
     current_time = time()
-
     accumulate[blockspergrid, threadsperblock](
         comp_img, alignments, covs, r,
         bayer_mode, act, SCALE, TILE_SIZE, CFA_pattern,
@@ -386,19 +385,21 @@ def accumulate(comp_img, alignments, covs, r,
         for chan in range(n_channels):
             acc[chan] = 0
             val[chan] = 0
-
+    
+    cuda.syncthreads()
     patch_center_pos = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE) # y, x
     local_optical_flow = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
-
-    inbound = (0 <= coarse_ref_sub_pos[1] + tx < input_size_x and
-               0 <= coarse_ref_sub_pos[0] + ty < input_size_y)
+    # inbound conditions are the same for each threads of a block.
+    # it remove the problem of conditional syncthreads()
+    inbound = (1 <= coarse_ref_sub_pos[1] < input_size_x - 1 and
+               1 <= coarse_ref_sub_pos[0] < input_size_y - 1)
     
     # fetching robustness
     if inbound: 
         if bayer_mode : 
-            local_r = r[round((coarse_ref_sub_pos[0] + ty-0.5)/2),
-                        round((coarse_ref_sub_pos[1] + tx-0.5)/2)]
+            local_r = r[round((coarse_ref_sub_pos[0] + ty - 0.5)/2),
+                        round((coarse_ref_sub_pos[1] + tx - 0.5)/2)]
 
         else:
             local_r = r[int(coarse_ref_sub_pos[0] + ty),
@@ -407,17 +408,22 @@ def accumulate(comp_img, alignments, covs, r,
     
     
     # Single threaded fetch of the flow
-    if tx == 0 and ty == 0: 
+    if tx == 0 and ty == 0 and inbound: 
         get_closest_flow(coarse_ref_sub_pos[1], # flow is x, y and pos is y, x
-                          coarse_ref_sub_pos[0],
-                          alignments,
-                          tile_size,
-                          input_imsize,
-                          local_optical_flow)
+                         coarse_ref_sub_pos[0],
+                         alignments,
+                         tile_size,
+                         input_imsize,
+                         local_optical_flow)
             
             
         patch_center_pos[1] = coarse_ref_sub_pos[1] + local_optical_flow[0]
         patch_center_pos[0] = coarse_ref_sub_pos[0] + local_optical_flow[1]
+        
+        
+    # updating inbound condition
+    inbound &= (1 <= patch_center_pos[1] < input_size_x - 1 and
+                1 <= patch_center_pos[0] < input_size_y - 1)
     
     # we need the position of the patch before computing the kernel
     cuda.syncthreads()
@@ -431,12 +437,8 @@ def accumulate(comp_img, alignments, covs, r,
     thread_pixel_idx = round(patch_center_pos[1]) + tx
     thread_pixel_idy = round(patch_center_pos[0]) + ty
     
-    # updating inbound condition
-    inbound &= (0 <= thread_pixel_idx < input_size_x and
-                0 <= thread_pixel_idy < input_size_y)
-    
     # computing kernel
-    if not act:
+    if not act and inbound:
         # fetching the 4 closest covs
         close_covs = cuda.shared.array((2, 2, 2 ,2), DEFAULT_CUDA_FLOAT_TYPE)
         grey_pos = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
@@ -490,30 +492,30 @@ def accumulate(comp_img, alignments, covs, r,
         c = comp_img[thread_pixel_idy, thread_pixel_idx]
 
 
-    # applying invert transformation and upscaling
-    fine_sub_pos_x = scale * (thread_pixel_idx - local_optical_flow[0])
-    fine_sub_pos_y = scale * (thread_pixel_idy - local_optical_flow[1])
-    dist_x = (fine_sub_pos_x - output_pixel_idx)
-    dist_y = (fine_sub_pos_y - output_pixel_idy)
+        # applying invert transformation and upscaling
+        fine_sub_pos_x = scale * (thread_pixel_idx - local_optical_flow[0])
+        fine_sub_pos_y = scale * (thread_pixel_idy - local_optical_flow[1])
+        dist_x = (fine_sub_pos_x - output_pixel_idx)
+        dist_y = (fine_sub_pos_y - output_pixel_idy)
 
 
-    if act : 
-        y = max(0, 2*(dist_x*dist_x + dist_y*dist_y))
-    else:
-        y = max(0, quad_mat_prod(cov_i, dist_x, dist_y))
-        # y can be slightly negative because of numerical precision.
-        # I clamp it to not explode the error with exp
-    if bayer_mode : 
-        w = math.exp(-0.5*y/scale**2)
-    else:
-        w = math.exp(-0.5*4*y/scale**2) # original kernel constants are designed for bayer distances, not greys.
-    
-    if inbound :
-        cuda.atomic.add(val, channel, c*w*local_r)
-        cuda.atomic.add(acc, channel, w*local_r)
+        if act : 
+            y = max(0, 2*(dist_x*dist_x + dist_y*dist_y))
+        else:
+            y = max(0, quad_mat_prod(cov_i, dist_x, dist_y))
+            # y can be slightly negative because of numerical precision.
+            # I clamp it to not explode the error with exp
+        if bayer_mode : 
+            w = math.exp(-0.5*y/scale**2)
+        else:
+            w = math.exp(-0.5*4*y/scale**2) # original kernel constants are designed for bayer distances, not greys.
+
+
+            cuda.atomic.add(val, channel, c*w*local_r)
+            cuda.atomic.add(acc, channel, w*local_r)
         
     cuda.syncthreads()
-    if tx == 0 and ty+1 < n_channels:
+    if tx == 0 and ty+1 < n_channels and inbound:
         chan = ty+1
         # This is the update of the accumulators, but it is single_threade :
         # no racing condition.

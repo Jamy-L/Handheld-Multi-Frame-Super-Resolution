@@ -26,7 +26,7 @@ def get_params(PSNR):
                     'grey method':"FFT",
                     'tuning': {
                         # WARNING: these parameters are defined fine-to-coarse!
-                        'factors': [1, 2, 2, 4],
+                        'factors': [1, 2, 4, 4],
                         'tileSizes': [Ts, Ts, Ts, int(Ts/2)],
                         'searchRadia': [1, 4, 4, 4],
                         'distances': ['L1', 'L2', 'L2', 'L2'],
@@ -62,3 +62,9 @@ def get_params(PSNR):
                         }
                     }}
     return params
+
+def check_params_validity(params):
+    # TODO
+    pass
+
+    

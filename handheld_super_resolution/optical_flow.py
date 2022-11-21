@@ -109,7 +109,7 @@ def compute_hessian(gradx, grady, tile_size, hessian):
         cuda.atomic.add(hessian, (patch_idy, patch_idx, 1, 1), local_grady*local_grady)
 
 
-def ICA_optical_flow(cuda_im_grey, cuda_ref_grey, cuda_gradx, cuda_grady, hessian, pre_alignment, options, params, debug = False):
+def ICA_optical_flow(cuda_im_grey, cuda_ref_grey, cuda_gradx, cuda_grady, hessian, cuda_pre_alignment, options, params, debug = False):
     """ Computes optical flow between the ref_img and all images of comp_imgs 
     based on the ICA method (http://www.ipol.im/pub/art/2016/153/).
     The optical flow follows a translation per patch model, such that :
@@ -160,7 +160,7 @@ def ICA_optical_flow(cuda_im_grey, cuda_ref_grey, cuda_gradx, cuda_grady, hessia
     bayer_mode = params["mode"]=='bayer'
     
     imsize_y, imsize_x = cuda_im_grey.shape
-    n_patch_y, n_patch_x, _ = pre_alignment.shape
+    n_patch_y, n_patch_x, _ = cuda_pre_alignment.shape
 
         
     if verbose:
@@ -168,23 +168,8 @@ def ICA_optical_flow(cuda_im_grey, cuda_ref_grey, cuda_gradx, cuda_grady, hessia
         current_time = time()
         print("Estimating Lucas-Kanade's optical flow")
         
-    if  bayer_mode and grey_method in ['gauss', 'decimating']:
-        pre_alignment = pre_alignment/2
-        # dividing by 2 because grey image is twice smaller than bayer
-        # and blockmatching in bayer mode returns alignment to bayer scale
-        # Note : A=A/2 is a pointer reassignment, so pre_alignment is not outwritten
-        # outside the function, the local variable is simply different.
-        # On the contrary, A/=2 is reassigning the values in memory, which would
-        # Overwrite pre_alignment even outside of the function scope.
-        
-    
-    # TODO this is a bit dirty. We should ensure that pre alignemnt is
-    # contiguous before calling, because this is using a lot of memory.
-    # pre_alignment should be outwritten by its contiguous version, whenever possible.
-    # It is probably contiguous when outputted by BM, but we are swapping x and y for convention
-    # coherence, breaking the contiguity.
-    alignment = np.ascontiguousarray(pre_alignment).astype(DEFAULT_NUMPY_FLOAT_TYPE)
-    cuda_alignment = cuda.to_device(np.ascontiguousarray(alignment))
+
+    cuda_alignment = cuda_pre_alignment
 
     if verbose_2 : 
         current_time = getTime(

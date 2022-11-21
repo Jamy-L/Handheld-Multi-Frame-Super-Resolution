@@ -62,7 +62,7 @@ def compute_grey_images(img, method):
     return img_grey.astype(DEFAULT_NUMPY_FLOAT_TYPE)
 
 def fft_lowpass(img_grey):
-    img_grey = th.from_numpy(img_grey)
+    img_grey = th.from_numpy(img_grey).to("cuda")
     img_grey = torch.fft.fft2(img_grey)
     img_grey = torch.fft.fftshift(img_grey)
     
@@ -74,7 +74,7 @@ def fft_lowpass(img_grey):
     
     img_grey = torch.fft.ifftshift(img_grey)
     img_grey = torch.fft.ifft2(img_grey)
-    return img_grey.numpy().real
+    return img_grey.cpu().numpy().real
     
 
 @vectorize([uint8(float32), uint8(float64)], target='parallel')
