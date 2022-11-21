@@ -61,13 +61,13 @@ params["scale"] = 1
 options = {'verbose' : 4}
 
 params['merging']['kernel'] = 'handheld'
-params['robustness']['on'] = True
+params['robustness']['on'] = False
 params['kanade']['tuning']['kanadeIter'] = 3
 burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
 # burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
 # burst_path = 'P:/0001/Samsung'
 
-output_img = process(burst_path, options, params, crop_str)
+output_img, cudal = process(burst_path, options, params, crop_str)
 
 
 #%% extracting images locally for comparison 
