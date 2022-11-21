@@ -37,7 +37,7 @@ def main(ref_img, comp_imgs, options, params):
     
     
     #___ Raw to grey
-    grey_method = params['kanade']['grey method']
+    grey_method = params['grey method']
     
     if bayer_mode :
         t1 = time()
@@ -156,7 +156,7 @@ def main(ref_img, comp_imgs, options, params):
             current_time, 'Merge finished (Total)')
         print('\nTotal ellapsed time : ', time() - t1)
         
-    return output
+    return output, cuda_final_alignment
 
 #%%
 
@@ -236,21 +236,26 @@ def process(burst_path, options, params, crop_str=None):
     if 'tileSize' not in params["merging"]["tuning"].keys():
         params["merging"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
 
-    # if 'mode' not in params["block matching"].keys():
-    #     params["block matching"]["mode"] = params['mode']
+
     if 'mode' not in params["kanade"].keys():
         params["kanade"]["mode"] = params['mode']
     if 'mode' not in params["robustness"].keys():
         params["robustness"]["mode"] = params['mode']
     if 'mode' not in params["merging"].keys():
         params["merging"]["mode"] = params['mode']
+        
+    params['kanade']['grey method'] = params['grey method']
     
     # systematically grey, so we can control internally how grey is obtained
     params["block matching"]["mode"] = 'grey'
-    if params["block matching"]["grey method"] in ["FFT", "demosaicing"]:
+    if params["grey method"] in ["FFT", "demosaicing"]:
         params["block matching"]['tuning']["tileSizes"] = [ts*2 for ts in params["block matching"]['tuning']["tileSizes"]]
-    if params["kanade"]["grey method"] in ["FFT", "demosaicing"]:
         params["kanade"]['tuning']["tileSize"] *= 2
+        
+    if params['mode'] == 'bayer':
+        params["merging"]["tuning"]['tileSize'] *= 2
+
+    
         
 
     

@@ -52,7 +52,7 @@ def init_block_matching(ref_img, options, params):
     return referencePyramid
 
 
-def align_image_block_matching(img, referencePyramid, options, params):
+def align_image_block_matching(img, referencePyramid, options, params, debug=False, cuda_al = True):
     '''Estimate motion between the reference and other images of the burst, and return a set of aligned tiles.'''
     # Initialization.
     h, w = img.shape  # height and width should be identical for all images
@@ -101,6 +101,10 @@ def align_image_block_matching(img, referencePyramid, options, params):
 
     # succesively align from coarsest to finest level of the pyramid
     alignments = None
+    or_alignments = None
+    if debug:
+        debug_list = []
+    
     for lv in range(len(referencePyramid)):
         alignments = alignOnALevel2(
             referencePyramid[lv],
@@ -114,10 +118,34 @@ def align_image_block_matching(img, referencePyramid, options, params):
             subpixels[-lv - 1],
             alignments
         )
-            
+        # TOOO for debugging only
+        
+        print("mean al cuda", np.mean(np.linalg.norm(alignments.copy_to_host(), axis = 2)))
+        or_alignments = alignOnALevel(
+            referencePyramid[lv],
+            alternatePyramid[lv],
+            options,
+            upsamplingFactors[-lv - 1],
+            tileSizes[-lv - 1],
+            previousTileSizes[-lv - 1],
+            searchRadia[-lv - 1],
+            distances[-lv - 1],
+            subpixels[-lv - 1],
+            or_alignments
+        )
+        print("mean al numpy", np.mean(np.linalg.norm(or_alignments, axis=2)))
+        
+        if debug:
+            if cuda_al:
+                debug_list.append(alignments.copy_to_host())
+            else:
+                debug_list.append(or_alignments.copy_to_host())
+        ########################
+        
         if verbose:
             currentTime = getTime(currentTime, ' --- Align pyramid')
-
+    if debug:
+        return debug_list
     return alignments
 
 
@@ -377,12 +405,14 @@ def alignOnALevel2(referencePyramidLevel, alternatePyramidLevel, options, upsamp
     # For convenience
     verbose, currentTime = options['verbose'] > 3, time()
     
-    referencePyramidLevel = cuda.to_device(np.ascontiguousarray(referencePyramidLevel))
-    alternatePyramidLevel = cuda.to_device(np.ascontiguousarray(alternatePyramidLevel))
+    cu_referencePyramidLevel = cuda.to_device(np.ascontiguousarray(referencePyramidLevel))
+    cu_alternatePyramidLevel = cuda.to_device(np.ascontiguousarray(alternatePyramidLevel))
     
     
-    imshape = referencePyramidLevel.shape
+    imshape = cu_referencePyramidLevel.shape
     
+    # This formula is checked : it is correct
+    # Number of patches that can fit on this level
     h = imshape[0] // (tileSize // 2) - 1
     w = imshape[1] // (tileSize // 2) - 1
     
@@ -390,17 +420,32 @@ def alignOnALevel2(referencePyramidLevel, alternatePyramidLevel, options, upsamp
     
     # Upsample the previous alignements for initialization
     if previousAlignments is None:
-        upsampledAlignments = cuda.to_device(np.zeros((h, w, 2), dtype=np.uint16))
+        upsampledAlignments = cuda.to_device(np.zeros((h, w, 2), dtype=np.int16))
     else:
         # use the upsampled previous alignments as initial guesses
         upsampledAlignments = upsampleAlignments2(
-            referencePyramidLevel,
-            alternatePyramidLevel,
+            cu_referencePyramidLevel,
+            cu_alternatePyramidLevel,
             previousAlignments,
             upsamplingFactor,
             tileSize,
             previousTileSize
         )
+        # TODO debugging only
+        #######
+        or_previousAlignments = previousAlignments.copy_to_host()
+        or_upsampledAlignments =  upsampleAlignments(
+                                    referencePyramidLevel.astype(np.float32),
+                                    alternatePyramidLevel.astype(np.float32),
+                                    or_previousAlignments.astype(np.float32),
+                                    upsamplingFactor,
+                                    tileSize,
+                                    previousTileSize
+                                )
+        
+        # print("mean upscaled al numpy", np.mean(np.linalg.norm(or_upsampledAlignments, axis=2)))
+        # print("mean upscaled al cuda", np.mean(np.linalg.norm(upsampledAlignments.copy_to_host(), axis=2)))
+        #######
         
 
     
@@ -410,9 +455,11 @@ def alignOnALevel2(referencePyramidLevel, alternatePyramidLevel, options, upsamp
         currentTime = getTime(currentTime, ' ---- Upsample alignments')
 
     
-    dist = get_patch_distance(referencePyramidLevel, alternatePyramidLevel,
+    dist = get_patch_distance(cu_referencePyramidLevel, cu_alternatePyramidLevel,
                               tileSize, searchRadius,
                               upsampledAlignments, distance)
+    
+
     cuda.synchronize()
     if verbose:
         currentTime = getTime(currentTime, ' ---- Distance computed')
@@ -451,25 +498,31 @@ def upsampleAlignments2(referencePyramidLevel, alternatePyramidLevel, previousAl
     # eg when previous alignments could not be computed over the whole image
     n_tiles_y_new = referencePyramidLevel.shape[0] // (tileSize // 2) - 1
     n_tiles_x_new = referencePyramidLevel.shape[1] // (tileSize // 2) - 1
-    
-    candidate_flows = cuda.device_array((n_tiles_y_prev*repeatFactor, n_tiles_x_prev*repeatFactor, 3, 2)) # 3 candidates
-    distances = cuda.device_array((n_tiles_y_prev*repeatFactor, n_tiles_x_prev*repeatFactor, 3)) # 3 candidates
-
-    # TODO this function can crash
-    cuda_get_candidate_flows[(n_tiles_x_prev*repeatFactor,
-                              n_tiles_y_prev*repeatFactor,
-                              3), (tileSize, tileSize)](
-                                  referencePyramidLevel, alternatePyramidLevel, 
-                                  previousAlignments, candidate_flows, distances,
-                                  upsamplingFactor, repeatFactor, tileSize)
+    print("prev : ",n_tiles_y_prev, n_tiles_x_prev)
+    print("new : ",n_tiles_y_new, n_tiles_x_new) 
+    if repeatFactor > 1 :   
+        candidate_flows = cuda.device_array((n_tiles_y_prev*repeatFactor, n_tiles_x_prev*repeatFactor, 3, 2), np.int32) # 3 candidates
+        distances = cuda.device_array((n_tiles_y_prev*repeatFactor, n_tiles_x_prev*repeatFactor, 3), DEFAULT_NUMPY_FLOAT_TYPE) # 3 candidates
     
     
-    cuda.synchronize()
-    upsampledAlignments = cuda.device_array((n_tiles_y_new, n_tiles_x_new, 2))
-    cuda_apply_best_flow[(n_tiles_x_new, n_tiles_y_new), (3)](candidate_flows, distances, repeatFactor, upsampledAlignments)
-
-    return upsampledAlignments
-
+        cuda_get_candidate_flows[(n_tiles_x_prev*repeatFactor,
+                                  n_tiles_y_prev*repeatFactor,
+                                  3), (tileSize, tileSize)](
+                                      referencePyramidLevel, alternatePyramidLevel, 
+                                      previousAlignments, candidate_flows, distances,
+                                      upsamplingFactor, repeatFactor, tileSize)
+        
+        print("mean candidate al cuda", np.mean(np.linalg.norm(candidate_flows.copy_to_host(), axis=3)))
+        print("mean candidate dist cuda", np.mean(np.linalg.norm(distances.copy_to_host(), axis=2)))
+        
+        cuda.synchronize()
+        upsampledAlignments = cuda.device_array((n_tiles_y_new, n_tiles_x_new, 2))
+        cuda_apply_best_flow[(n_tiles_x_new, n_tiles_y_new), (3)](candidate_flows, distances, repeatFactor, upsampledAlignments)
+    
+        return upsampledAlignments
+    else:
+        print("repeatFactor = 1 : patch density is conserved : no upsample")
+        return previousAlignments
 
 @cuda.jit
 def cuda_get_candidate_flows(ref_level, alt_level,
@@ -485,12 +538,12 @@ def cuda_get_candidate_flows(ref_level, alt_level,
     ups_subtile_y = ups_tile_y%repeatFactor
     
     # computing id for the 3 closest patchs
-    if ups_subtile_x + 0.5 > repeatFactor/2:
+    if 2 * ups_subtile_x + 1 > repeatFactor:
         x_shift = +1
     else:
         x_shift = -1
         
-    if ups_subtile_y + 0.5 > repeatFactor/2:
+    if 2 * ups_subtile_y + 1 > repeatFactor:
         y_shift = +1
     else:
         y_shift = -1
@@ -513,7 +566,7 @@ def cuda_get_candidate_flows(ref_level, alt_level,
     # The 3 candidate flow are stored in Global memory
     local_flow = cuda.shared.array(2, int32)
     if tx == 0 and ty <= 1:
-        local_flow[ty] = prev_al[prev_tile_y, prev_tile_x, ty]*upsamplingFactor
+        local_flow[ty] = prev_al[prev_tile_y, prev_tile_x, ty] * upsamplingFactor
         candidate_al[ups_tile_y, ups_tile_x, candidate_id, ty] = local_flow[ty]
     cuda.syncthreads()
     
@@ -552,26 +605,30 @@ def cuda_L1_dist(ref_level, alt_level, local_flow, new_tileSize):
 
 @cuda.jit
 def cuda_apply_best_flow(candidate_flows, distances, repeatFactor, upsampledAlignments):
-    
     ups_tile_x, ups_tile_y = cuda.blockIdx.x, cuda.blockIdx.y
     candidate_id = cuda.threadIdx.x
     
-    # if this condtion is met, the flow on this patch cannot be obtained by
+    # TODO we may use 9 threads instead, and call candidate_flows at the same
+    # time to group the global mem request. 
+    local_dist = distances[ups_tile_y, ups_tile_x, candidate_id]
+    
+    # if this condition is met, the flow on this patch cannot be obtained by
     # upsampling because it was not computed previously 
     if ups_tile_x >= distances.shape[1] or ups_tile_y >= distances.shape[0]:
-        if cuda.threadIdx.x == 0:
-            upsampledAlignments[ups_tile_y, ups_tile_x, 0] = 0
-            upsampledAlignments[ups_tile_y, ups_tile_x, 1] = 0
+        # the flow is set as 0 by 2 threads
+        if cuda.threadIdx.x <= 1:
+            upsampledAlignments[ups_tile_y, ups_tile_x, cuda.threadIdx.x] = 0
     else:
         # finding the best of the 3 candidates
-        mini = cuda.shared.array(1, DEFAULT_CUDA_FLOAT_TYPE)
-        if candidate_id == 0:
-            mini[0] = 1/0 # + infinity
-        cuda.syncthreads()
-        cuda.atomic.min(mini, 0, distances[ups_tile_y, ups_tile_x, candidate_id])
+        min_dist = cuda.shared.array(1, DEFAULT_CUDA_FLOAT_TYPE)
+        if cuda.threadIdx.x == 0:
+            min_dist[0] = 1/0 # + infinity
         cuda.syncthreads()
         
-        if mini[0] == distances[ups_tile_y, ups_tile_x, candidate_id]:
+        cuda.atomic.min(min_dist, 0, local_dist)
+        cuda.syncthreads()
+        
+        if min_dist[0] == local_dist:
             upsampledAlignments[ups_tile_y, ups_tile_x, 0] = candidate_flows[ups_tile_y, ups_tile_x, candidate_id, 0]
             upsampledAlignments[ups_tile_y, ups_tile_x, 1] = candidate_flows[ups_tile_y, ups_tile_x, candidate_id, 1]
     
@@ -642,8 +699,8 @@ def cuda_computeL2Distance_(referencePyramidLevel, alternatePyramidLevel,
     tile_x, tile_y, z = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
     tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
     sR = 2*searchRadius+1
-    sRx = int(z//sR)
-    sRy = int(z%sR)
+    sRy = int(z//sR)
+    sRx = int(z%sR)
     
     idx = int(tile_x * tileSize//2 + tx)
     idy = int(tile_y * tileSize//2 + ty)
@@ -677,16 +734,21 @@ def cuda_minimize_distance(distances, alignment, searchRadius):
     tile_x, tile_y = cuda.blockIdx.x, cuda.blockIdx.y
     tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
     
-    mini = cuda.shared.array(1, DEFAULT_CUDA_FLOAT_TYPE)
+    # grouping glob memory call into a single big request
+    local_dist = distances[tile_y, tile_x, ty, tx]
+    
+    min_dist = cuda.shared.array(1, DEFAULT_CUDA_FLOAT_TYPE)
     if tx == 0 and ty ==0:
-        mini[0] = 1/0 # infinity
+        min_dist[0] = 1/0 # infinity
     cuda.syncthreads()
     
-    cuda.atomic.min(mini, 0, distances[tile_y, tile_x, ty, tx])
+    cuda.atomic.min(min_dist, 0, local_dist)
     
     cuda.syncthreads()
     
-    if distances[tile_y, tile_x, ty, tx] == mini[0]:
+    # there is technically a racing condition in the very rare case
+    # where 2 patches have exactly the same distance.
+    if local_dist == min_dist[0]:
         alignment[tile_y, tile_x, 0] += ty - searchRadius
         alignment[tile_y, tile_x, 1] += tx - searchRadius
  
@@ -764,6 +826,9 @@ def alignOnALevel(referencePyramidLevel, alternatePyramidLevel, options, upsampl
     # Compute the distances between the reference tiles and each tile within the corresponding search areas
     assert(h <= refTiles.shape[0] and w <= refTiles.shape[1])
     distances = computeDistance(refTiles[:h, :w], searchAreas, distance)
+    # TODO debug
+    print("np mean dist : ", np.median(distances))
+    ###############
     if verbose:
         currentTime = getTime(currentTime, ' ---- Compute distances')
 
