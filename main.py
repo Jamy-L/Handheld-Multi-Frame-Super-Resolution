@@ -56,8 +56,9 @@ crop_str = None
 #%%
 
 params = get_params(PSNR = 35)
+
 params["scale"] = 1
-options = {'verbose' : 3}
+options = {'verbose' : 4}
 
 params['merging']['kernel'] = 'handheld'
 params['robustness']['on'] = True

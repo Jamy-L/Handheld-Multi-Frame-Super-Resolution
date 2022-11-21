@@ -26,6 +26,7 @@ from .kernels import estimate_kernels
 from .block_matching import alignBurst, init_block_matching, align_image_block_matching
 from .optical_flow import lucas_kanade_optical_flow, ICA_optical_flow, init_ICA
 from .robustness import init_robustness, compute_robustness
+from .params import check_params_validity
 
 NOISE_MODEL_PATH = Path(os.getcwd()) / 'data' 
         
@@ -82,6 +83,7 @@ def main(ref_img, comp_imgs, options, params):
     for im_id in range(n_images):
         if verbose :
             print("\nProcessing image {} ---------\n".format(im_id+1))
+        im_time = time()
         
         current_time = time()
         if bayer_mode:
@@ -96,12 +98,7 @@ def main(ref_img, comp_imgs, options, params):
         if verbose :
             print('Beginning block matching')
         
-        pre_alignment = align_image_block_matching(im_grey, referencePyramid, options, params['block matching'])[:,:,::-1]
-
-        if grey_method in ["gauss", "decimating"] and bayer_mode:
-            pre_alignment*=2
-            # BM is always in grey mode, so input scale is output scale.
-            # we choose by convention, to always return flow on the coarse scale, so x2 if grey is 2x smaller
+        pre_alignment = align_image_block_matching(im_grey, referencePyramid, options, params['block matching'])
         
         if verbose : 
             current_time = getTime(current_time, 'Block Matching (Total)')
@@ -137,6 +134,9 @@ def main(ref_img, comp_imgs, options, params):
         #___ Merging
         merge(cuda_img, cuda_final_alignment, cuda_kernels, cuda_robustness, num, den,
               options, params['merging'])
+        if verbose :
+            getTime(
+                im_time, 'Image processed (Total)')
     
     # num is outwritten into num/den
     channels = num.shape[-1]
@@ -181,6 +181,7 @@ def process(burst_path, options, params, crop_str=None):
     # Reference image selection and metadata     
     raw = rawpy.imread(raw_path_list[ref_id])
     ref_raw = raw.raw_image.copy()
+    check_params_validity(params)
     
     if crop_str is not None:
         ref_raw = crop(ref_raw, crop_str, axis=(0, 1))
