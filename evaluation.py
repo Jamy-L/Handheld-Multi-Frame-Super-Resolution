@@ -521,14 +521,14 @@ if __name__=="__main__":
     mode = "LK"
     params["kanade"]["grey method"] = "FFT"
     params["kanade"]['tuning']['tileSize'] = big_Ts
-    label = "BM {}, {} {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"])
+    label = "BM {}, {} {}, subpixels {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"], params['block matching']['tuning']['subpixels'])
     raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment, mode)
     lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
 
     mode = "ICA"
     params["kanade"]["grey method"] = "FFT"
     params["kanade"]['tuning']['tileSize'] = big_Ts
-    label = "BM {}, {} {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"])
+    label = "BM {}, {} {}, subpixels {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"], params['block matching']['tuning']['subpixels'])
     raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment, mode)
     lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
 
