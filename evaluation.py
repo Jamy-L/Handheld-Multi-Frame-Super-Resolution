@@ -273,8 +273,6 @@ def evaluate_bm(pre_alignment, ground_truth_flow, params, label=''):
         flow_mse[len(pre_alignment) - lv -1] = np.mean(np.linalg.norm(alignment*factor - ground_truth_flow[None][None].transpose((2,0,1,3)),
                                                         axis=3))
         flow_norm[len(pre_alignment) - lv -1] = np.mean(np.linalg.norm(alignment*factor, axis=3))
-        if lv == 0 : 
-            print(flow_norm[-1])
     plt.figure("quadratic error on flow")
     plt.plot([i for i in range(-len(pre_alignment)+1, 1)], flow_mse, label=label)
     plt.xlabel('bm iteration')
@@ -548,17 +546,17 @@ if __name__=="__main__":
     grey_burst = np.mean(burst, axis = 3)/255
 
 #%% testing pipleine on one bayer image
-    params["block matching"]["mode"] = 'bayer'
-    params["kanade"]["mode"] = 'bayer'
-    params["merging"]["mode"] = 'bayer'
-    params["robustness"]["mode"] = 'bayer'
+    # params["block matching"]["mode"] = 'bayer'
+    # params["kanade"]["mode"] = 'bayer'
+    # params["merging"]["mode"] = 'bayer'
+    # params["robustness"]["mode"] = 'bayer'
     
     
-    output, R, r, alignment, covs = main(dec_burst[0], dec_burst[1:], options, params)
-    plt.figure("merge on bayer images new")
-    plt.imshow(output[:,:,:3])
-    plt.figure("ref")
-    plt.imshow(cv2.resize(colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(dec_burst[0], pattern='BGGR'), None, fx = params["merging"]['scale'], fy = params["merging"]['scale'], interpolation=cv2.INTER_CUBIC))
+    # output, R, r, alignment, covs = main(dec_burst[0], dec_burst[1:], options, params)
+    # plt.figure("merge on bayer images new")
+    # plt.imshow(output[:,:,:3])
+    # plt.figure("ref")
+    # plt.imshow(cv2.resize(colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(dec_burst[0], pattern='BGGR'), None, fx = params["merging"]['scale'], fy = params["merging"]['scale'], interpolation=cv2.INTER_CUBIC))
 
 #%% aligning LK on bayer
     ground_truth_flow = flow[1:,:,0,0]
@@ -570,16 +568,16 @@ if __name__=="__main__":
 
     
     ## FFT 
-    pre_alignment = align_bm(dec_burst/255, params, debug=True, cuda_al=False)
-    evaluate_bm(pre_alignment, ground_truth_flow, params, label='numpy')
+    # pre_alignment = align_bm(dec_burst/255, params, debug=True, cuda_al=False)
+    # evaluate_bm(pre_alignment, ground_truth_flow, params, label='numpy')
     pre_alignment = align_bm(dec_burst/255, params, debug=True, cuda_al=True)
     evaluate_bm(pre_alignment, ground_truth_flow, params, label='cuda')
 
 
     
-    # label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
-    # raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment[-1])
-    # lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment[-1])
+    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
 
 
 #%% plot flow
