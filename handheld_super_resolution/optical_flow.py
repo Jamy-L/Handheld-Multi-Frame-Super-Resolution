@@ -30,9 +30,10 @@ def init_ICA(ref_img, options, params):
     tile_size = params['tuning']['tileSize']
     
     imsize_y, imsize_x = ref_img.shape
-    # TODO check if this formulas are true : it shoudl match with pre alignment shape
-    n_patch_y = 2*int(ceil(imsize_y/(tile_size//2)))+1
-    n_patch_x = 2*int(ceil(imsize_x/(tile_size//2)))+1
+
+    n_patch_y = int(ceil(imsize_y/(tile_size//2))) + 1
+    n_patch_x = int(ceil(imsize_x/(tile_size//2))) + 1
+
     
     # Estimating gradients with separated Prewitt kernels
     kernely = np.array([[-1],
@@ -91,7 +92,7 @@ def compute_hessian(gradx, grady, tile_size, hessian):
     pixel_global_idx = tile_size//2 * (patch_idx - 1) + pixel_local_idx # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
     pixel_global_idy = tile_size//2 * (patch_idy - 1) + pixel_local_idy
     
-    inbound = (0 <= pixel_global_idy <imshape[0] and 0 <= pixel_global_idx < imshape[1])
+    inbound = (0 <= pixel_global_idy < imshape[0] and 0 <= pixel_global_idx < imshape[1])
     
     
     if pixel_local_idx < 2 and pixel_local_idy < 2:
@@ -156,8 +157,6 @@ def ICA_optical_flow(cuda_im_grey, cuda_ref_grey, cuda_gradx, cuda_grady, hessia
         
     current_time, verbose, verbose_2 = time(), options['verbose'] > 1, options['verbose'] > 2
     n_iter = params['tuning']['kanadeIter']
-    grey_method = params['grey method']
-    bayer_mode = params["mode"]=='bayer'
     
     imsize_y, imsize_x = cuda_im_grey.shape
     n_patch_y, n_patch_x, _ = cuda_pre_alignment.shape

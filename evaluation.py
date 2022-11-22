@@ -269,7 +269,6 @@ def evaluate_bm(pre_alignment, ground_truth_flow, params, label=''):
     # starting from fine
     for lv, (alignment, f) in enumerate(zip(pre_alignment[::-1], params['block matching']['tuning']['factors'])):
         factor *= f
-        print(factor)
         flow_mse[len(pre_alignment) - lv -1] = np.mean(np.linalg.norm(alignment*factor - ground_truth_flow[None][None].transpose((2,0,1,3)),
                                                         axis=3))
         flow_norm[len(pre_alignment) - lv -1] = np.mean(np.linalg.norm(alignment*factor, axis=3))
@@ -298,17 +297,18 @@ def align_lk(dec_burst, params, pre_alignment):
     for im_id in range(1, dec_burst.shape[0]):
         comp_grey = cuda.to_device(compute_grey_images(dec_burst[im_id], grey_method_lk))
         
+        lk_alignment = [pre_alignment[im_id - 1]]
         bm_al = cuda.to_device(pre_alignment[im_id - 1])
         
-        lk_alignment = ICA_optical_flow(
+        lk_alignment += ICA_optical_flow(
             comp_grey, ref_grey, ref_gradx, ref_grady, hessian, bm_al, options, params['kanade'], debug = True)
         
 
         if params["kanade"]['grey method'] in ['gauss', 'decimating']:
-            for i in range(len(lk_alignment) - 1):
+            for i in range(1, len(lk_alignment) - 1):
                 lk_alignment[i] *=2 # last term has already been multiplied
                 # during the last iteration
-        lk_alignment.insert(0, bm_al)
+
         
         
         flows.append(np.array(lk_alignment))
@@ -325,7 +325,7 @@ def align_lk(dec_burst, params, pre_alignment):
     
     # iter, image
     upscaled = np.empty((flow.shape[0], flow.shape[1], dec_burst.shape[1], dec_burst.shape[2], 2))
-    for i in range(flow.shape[0]): # x2 because coordinates are on bayer scale
+    for i in range(flow.shape[0]):
         if grey_method_lk in ['FFT', 'demosaicing']:
             upscaled[i] = upscale_alignement(flow[i], imsize, tile_size)
         else:
@@ -482,7 +482,7 @@ params = get_params(PSNR=35)
 params['block matching']['tuning']['factors'] = [1, 2, 2, 2] # a bit smaller because div 2k is not 4k
 params['block matching']['grey method'] = "FFT"
 params['kanade']['grey method'] = "FFT"
-params['kanade']['tuning']['kanadeIter'] = 3
+params['kanade']['tuning']['kanadeIter'] = 15
 params['kanade']['tuning']['sigma blur'] = 1
 params['robustness']['on'] = False
 
@@ -502,8 +502,6 @@ if 'tileSize' not in params["robustness"]["tuning"].keys():
 if 'tileSize' not in params["merging"]["tuning"].keys():
     params["merging"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
 
-# if 'mode' not in params["block matching"].keys():
-#     params["block matching"]["mode"] = params['mode']
 if 'mode' not in params["kanade"].keys():
     params["kanade"]["mode"] = params['mode']
 if 'mode' not in params["robustness"].keys():
