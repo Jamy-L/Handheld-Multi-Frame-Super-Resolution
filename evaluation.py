@@ -240,7 +240,7 @@ def align_bm(dec_burst, params, debug=False, cuda_al=True):
         
         for im_id in range(1, dec_burst.shape[0]):
             comp_grey = cuda.to_device(compute_grey_images(dec_burst[im_id], grey_method_bm))
-            pre_alignment = align_image_block_matching(comp_grey, referencePyramid, options, params['block matching'], debug=debug, cuda_al=cuda)
+            pre_alignment = align_image_block_matching(comp_grey, referencePyramid, options, params['block matching'], debug=debug, cuda_al=cuda_al)
             if debug :
                 cat_pre_al.append(pre_alignment)
             else:
@@ -529,7 +529,7 @@ params['robustness']['std_curve'] = np.load('C:/Users/jamyl/Documents/GitHub/Han
 params['robustness']['diff_curve'] = np.load('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/data/noise_model_diff_ISO_50.npy')
 options = {'verbose' : 3}
 
-# TODO for debuggin !
+# TODO for debugging !
 params['block matching']['tuning']['subpixels'] = [False, False, False, False]
 #%% generating burst
 if __name__=="__main__":
@@ -574,9 +574,9 @@ if __name__=="__main__":
 
     
     ## FFT 
-    pre_alignment = align_bm(dec_burst, params, debug=True, cuda_al=True)
+    pre_alignment = align_bm(dec_burst/255, params, debug=True, cuda_al=True)
     evaluate_bm(pre_alignment, ground_truth_flow, params, label='cuda')
-    pre_alignment = align_bm(dec_burst, params, debug=True, cuda_al=False)
+    pre_alignment = align_bm(dec_burst/255, params, debug=True, cuda_al=False)
     evaluate_bm(pre_alignment, ground_truth_flow, params, label='numpy')
 
 

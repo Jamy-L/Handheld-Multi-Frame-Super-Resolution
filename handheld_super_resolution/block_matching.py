@@ -139,7 +139,7 @@ def align_image_block_matching(img, referencePyramid, options, params, debug=Fal
             if cuda_al:
                 debug_list.append(alignments.copy_to_host())
             else:
-                debug_list.append(or_alignments.copy_to_host())
+                debug_list.append(or_alignments)
         ########################
         
         if verbose:
