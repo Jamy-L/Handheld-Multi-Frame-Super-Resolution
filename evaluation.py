@@ -234,7 +234,7 @@ def align_bm(dec_burst, params, debug=False, cuda_al=True):
     grey_method_bm = params['block matching']['grey method']
     bayer_mode = params['mode']=='bayer'
     cat_pre_al = []
-    if bayer_mode :
+    if bayer_mode and grey_method_bm in ["FFT", "demosaicing"]:
         ref_grey = cuda.to_device(compute_grey_images(dec_burst[0], grey_method_bm))
         referencePyramid = init_block_matching(ref_grey, options, params['block matching'])
         
@@ -246,14 +246,10 @@ def align_bm(dec_burst, params, debug=False, cuda_al=True):
             else:
                 cat_pre_al.append(pre_alignment.copy_to_host())
             
-            if grey_method_bm in ["gauss", "decimating"] and bayer_mode:
-                cat_pre_al[-1]*=2
-                # BM is always in grey mode, so input scale is output scale.
-                # we choose by convention, to always return flow on the coarse scale, so x2 if grey is 2x smaller
             
-            
+    
     else:
-        raise NotImplementedError('Use bayer pls')
+        raise NotImplementedError('Use bayer with grey FFT pls')
     
     if debug:
         al = []
@@ -574,16 +570,16 @@ if __name__=="__main__":
 
     
     ## FFT 
-    pre_alignment = align_bm(dec_burst/255, params, debug=True, cuda_al=True)
-    evaluate_bm(pre_alignment, ground_truth_flow, params, label='cuda')
     pre_alignment = align_bm(dec_burst/255, params, debug=True, cuda_al=False)
     evaluate_bm(pre_alignment, ground_truth_flow, params, label='numpy')
+    pre_alignment = align_bm(dec_burst/255, params, debug=True, cuda_al=True)
+    evaluate_bm(pre_alignment, ground_truth_flow, params, label='cuda')
 
 
     
-    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
-    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment[-1])
-    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+    # label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
+    # raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment[-1])
+    # lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
 
 
 #%% plot flow
