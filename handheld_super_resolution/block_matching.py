@@ -7,7 +7,7 @@ Created on Mon Sep 12 11:31:38 2022
 from time import time
 
 import numpy as np
-from numba import vectorize, guvectorize, uint8, uint16, int32, float32, float64, jit, njit, cuda
+from numba import vectorize, guvectorize, uint8, uint16, int32, float32, float64, jit, njit, cuda, typeof
 
 from .utils import getTime, isTypeInt, clamp, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE
 from .utils_image import getTiles, getAlignedTiles, downsample, computeTilesDistanceL1_, computeDistance, subPixelMinimum
@@ -382,6 +382,42 @@ def upsampleAlignments(referencePyramidLevel, alternatePyramidLevel, previousAli
 
 def alignOnALevel2(referencePyramidLevel, alternatePyramidLevel, options, upsamplingFactor, tileSize, 
                   previousTileSize, searchRadius, distance, subpixel, previousAlignments):
+    """
+    Alignment will always be an integer with this function, however it is 
+    set to DEFAULT_FLOAT_TYPE. This enables to directly use the outputed
+    alignment for ICA without any casting from int to float, which would be hard
+    to perform on GPU : Numba is completely powerless and cannot make the
+    casting.
+
+    Parameters
+    ----------
+    referencePyramidLevel : TYPE
+        DESCRIPTION.
+    alternatePyramidLevel : TYPE
+        DESCRIPTION.
+    options : TYPE
+        DESCRIPTION.
+    upsamplingFactor : TYPE
+        DESCRIPTION.
+    tileSize : TYPE
+        DESCRIPTION.
+    previousTileSize : TYPE
+        DESCRIPTION.
+    searchRadius : TYPE
+        DESCRIPTION.
+    distance : TYPE
+        DESCRIPTION.
+    subpixel : TYPE
+        DESCRIPTION.
+    previousAlignments : TYPE
+        DESCRIPTION.
+
+    Returns
+    -------
+    upsampledAlignments : TYPE
+        DESCRIPTION.
+
+    """
     # For convenience
     verbose, currentTime = options['verbose'] > 3, time()
     
@@ -397,10 +433,10 @@ def alignOnALevel2(referencePyramidLevel, alternatePyramidLevel, options, upsamp
     w = imshape[1] // (tileSize // 2) - 1
     
     sR = 2 * searchRadius + 1
-    
+    print(typeof(previousAlignments))
     # Upsample the previous alignements for initialization
     if previousAlignments is None:
-        upsampledAlignments = cuda.to_device(np.zeros((h, w, 2), dtype=np.int16))
+        upsampledAlignments = cuda.to_device(np.zeros((h, w, 2), dtype=DEFAULT_NUMPY_FLOAT_TYPE))
     else:
         # use the upsampled previous alignments as initial guesses
         upsampledAlignments = upsampleAlignments2(
@@ -434,7 +470,7 @@ def alignOnALevel2(referencePyramidLevel, alternatePyramidLevel, options, upsamp
     cuda.synchronize()
     if verbose:
         currentTime = getTime(currentTime, ' ---- Upsample alignments')
-
+    print(typeof(upsampledAlignments))
     
     dist = get_patch_distance(cu_referencePyramidLevel, cu_alternatePyramidLevel,
                               tileSize, searchRadius,
@@ -480,7 +516,7 @@ def upsampleAlignments2(referencePyramidLevel, alternatePyramidLevel, previousAl
     n_tiles_x_new = referencePyramidLevel.shape[1] // (tileSize // 2) - 1
 
 
-    candidate_flows = cuda.device_array((n_tiles_y_prev*repeatFactor, n_tiles_x_prev*repeatFactor, 3, 2), np.int32) # 3 candidates
+    candidate_flows = cuda.device_array((n_tiles_y_prev*repeatFactor, n_tiles_x_prev*repeatFactor, 3, 2), DEFAULT_NUMPY_FLOAT_TYPE) # 3 candidates
     distances = cuda.device_array((n_tiles_y_prev*repeatFactor, n_tiles_x_prev*repeatFactor, 3), DEFAULT_NUMPY_FLOAT_TYPE) # 3 candidates
 
 
@@ -493,7 +529,7 @@ def upsampleAlignments2(referencePyramidLevel, alternatePyramidLevel, previousAl
 
     
     cuda.synchronize()
-    upsampledAlignments = cuda.device_array((n_tiles_y_new, n_tiles_x_new, 2))
+    upsampledAlignments = cuda.device_array((n_tiles_y_new, n_tiles_x_new, 2), dtype=DEFAULT_NUMPY_FLOAT_TYPE)
     cuda_apply_best_flow[(n_tiles_x_new, n_tiles_y_new), (3)](candidate_flows, distances, repeatFactor, upsampledAlignments)
 
     return upsampledAlignments
@@ -544,7 +580,7 @@ def cuda_get_candidate_flows(ref_level, alt_level,
     
 
     # The 3 candidate flow are stored in Global memory
-    local_flow = cuda.shared.array(2, int32)
+    local_flow = cuda.shared.array(2, DEFAULT_NUMPY_FLOAT_TYPE)
 
 
     if tx == 0 and ty <= 1:
@@ -644,7 +680,7 @@ def cuda_computeL1Distance_(referencePyramidLevel, alternatePyramidLevel,
     idx = int(tile_x * tileSize//2 + tx)
     idy = int(tile_y * tileSize//2 + ty)
     
-    local_flow = cuda.shared.array(2, int32)
+    local_flow = cuda.shared.array(2, DEFAULT_NUMPY_FLOAT_TYPE)
     if cuda.threadIdx.x == 0 and cuda.threadIdx.y <= 1:
         local_flow[cuda.threadIdx.y] = upsampledAlignments[tile_y, tile_x, cuda.threadIdx.y]
     cuda.syncthreads()
@@ -683,7 +719,7 @@ def cuda_computeL2Distance_(referencePyramidLevel, alternatePyramidLevel,
     idx = int(tile_x * tileSize//2 + tx)
     idy = int(tile_y * tileSize//2 + ty)
     
-    local_flow = cuda.shared.array(2, int32)
+    local_flow = cuda.shared.array(2, DEFAULT_NUMPY_FLOAT_TYPE)
     if cuda.threadIdx.x == 0 and cuda.threadIdx.y <= 1:
         local_flow[cuda.threadIdx.y] = upsampledAlignments[tile_y, tile_x, cuda.threadIdx.y]
     cuda.syncthreads()

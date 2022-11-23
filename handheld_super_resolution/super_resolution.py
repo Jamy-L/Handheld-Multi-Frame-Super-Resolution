@@ -11,7 +11,7 @@ from time import time
 
 from pathlib import Path
 import numpy as np
-from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda, int32
+from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda, int32, typeof
 import exifread
 import rawpy
 import matplotlib.pyplot as plt
@@ -77,19 +77,18 @@ def main(ref_img, comp_imgs, options, params):
     
     #___ init merge
     num, den = init_merge(cuda_ref_img, cuda_kernels, options, params["merging"])
+
     
-    
-    n_images = comp_imgs.shape[0]
+    n_images = 8 #comp_imgs.shape[0]
     for im_id in range(n_images):
         if verbose :
             print("\nProcessing image {} ---------\n".format(im_id+1))
         im_time = time()
         
-        current_time = time()
         if bayer_mode:
             im_grey = compute_grey_images(comp_imgs[im_id], grey_method)
             if verbose_2 :
-                current_time = getTime(current_time, "- LK grey images estimated by {}".format(grey_method))
+                current_time = getTime(im_time, "- LK grey images estimated by {}".format(grey_method))
         else:
             im_grey = comp_imgs[im_id]
         
@@ -109,8 +108,7 @@ def main(ref_img, comp_imgs, options, params):
         if verbose_2 : 
             current_time = getTime(
                 current_time, 'Arrays moved to GPU')
-        
-        #___ Lucas-Kanade Optical flow (or ICA)
+            
         cuda_final_alignment = ICA_optical_flow(
             cuda_im_grey, cuda_ref_grey, ref_gradx, ref_grady, hessian, pre_alignment, options, params['kanade'])
     
@@ -131,6 +129,7 @@ def main(ref_img, comp_imgs, options, params):
         if verbose : 
             current_time = getTime(
                 current_time, 'Kernels estimated (Total)')
+            
         #___ Merging
         merge(cuda_img, cuda_final_alignment, cuda_kernels, cuda_robustness, num, den,
               options, params['merging'])
