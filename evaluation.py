@@ -519,7 +519,7 @@ if params["kanade"]["grey method"] in ["FFT", "demosaicing"]:
 
 params['robustness']['std_curve'] = np.load('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/data/noise_model_std_ISO_50.npy')
 params['robustness']['diff_curve'] = np.load('C:/Users/jamyl/Documents/GitHub/Handheld-Multi-Frame-Super-Resolution/data/noise_model_diff_ISO_50.npy')
-options = {'verbose' : 3}
+options = {'verbose' : 4}
 
 # TODO for debugging !
 params['block matching']['tuning']['subpixels'] = [False, False, False, False]

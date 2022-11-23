@@ -60,7 +60,7 @@ params = get_params(PSNR = 35)
 params["scale"] = 1
 options = {'verbose' : 4}
 
-params['merging']['kernel'] = 'handheld'
+params['merging']['kernel'] = 'act'
 params['robustness']['on'] = False
 params['kanade']['tuning']['kanadeIter'] = 3
 burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'

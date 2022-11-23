@@ -239,8 +239,8 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern
         chan = ty+1
         # this assignment is the initialisation of the accumulators.
         # There is no racing condition.
-        # num[output_pixel_idy, output_pixel_idx, chan] = val[chan]
-        # den[output_pixel_idy, output_pixel_idx, chan] = acc[chan]
+        num[output_pixel_idy, output_pixel_idx, chan] = 0 #val[chan]
+        den[output_pixel_idy, output_pixel_idx, chan] = 0 #acc[chan]
     
 def merge(comp_img, alignments, covs, r, num, den,
           options, params):
@@ -279,7 +279,7 @@ def merge(comp_img, alignments, covs, r, num, den,
     bayer_mode = params['mode'] == 'bayer'
     act = params['kernel'] == 'act'
     
-    # TODO check the case bayer + decimat grey or gauss grey
+    # TODO check the case bayer + decimate grey or gauss grey
     TILE_SIZE = params['tuning']['tileSize']
     
     
@@ -358,9 +358,9 @@ def accumulate(comp_img, alignments, covs, r,
     output_pixel_idx, output_pixel_idy = cuda.blockIdx.x, cuda.blockIdx.y
     tx = cuda.threadIdx.x-1
     ty = cuda.threadIdx.y-1
-    output_size_y, output_size_x, _ = num.shape
-    input_size_y, input_size_x = comp_img.shape
-    input_imsize = (input_size_y, input_size_x)
+    
+    output_imsize = output_size_y, output_size_x, _ = num.shape
+    input_imsize = input_size_y, input_size_x = comp_img.shape
     
     if bayer_mode:
         n_channels = 3
@@ -409,37 +409,33 @@ def accumulate(comp_img, alignments, covs, r,
     # Single threaded fetch of the flow
     if tx == 0 and ty == 0 and inbound: 
         # get_closest_flow(coarse_ref_sub_pos[1], # flow is x, y and pos is y, x
-        #                  coarse_ref_sub_pos[0],
-        #                  alignments,
-        #                  tile_size,
-        #                  input_imsize,
-        #                  local_optical_flow)
+        #                   coarse_ref_sub_pos[0],
+        #                   alignments,
+        #                   tile_size,
+        #                   input_imsize,
+        #                   local_optical_flow)
         
-        # nearest neigbhoor
-        patch_idx = round(coarse_ref_sub_pos[1]/(tile_size//2))
-        patch_idy = round(coarse_ref_sub_pos[0]/(tile_size//2))
-        
+        patch_idy = round(coarse_ref_sub_pos[0]//(tile_size//2))
+        patch_idx = round(coarse_ref_sub_pos[1]//(tile_size//2))
         local_optical_flow[0] = alignments[patch_idy, patch_idx, 0]
-        local_optical_flow[0] = alignments[patch_idy, patch_idx, 1]
-
+        local_optical_flow[1] = alignments[patch_idy, patch_idx, 1]
             
         patch_center_pos[1] = coarse_ref_sub_pos[1] + local_optical_flow[0]
         patch_center_pos[0] = coarse_ref_sub_pos[0] + local_optical_flow[1]
-        
-        
+    
+    
+    # we need the position of the patch before computing the kernel
+    cuda.syncthreads()  
+    
     # updating inbound condition
     inbound &= (1 <= patch_center_pos[1] < input_size_x - 1 and
                 1 <= patch_center_pos[0] < input_size_y - 1)
     
-    # we need the position of the patch before computing the kernel
-    cuda.syncthreads()
+
 
     interpolated_cov = cuda.shared.array((2, 2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
     cov_i = cuda.shared.array((2, 2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
-    # coordinates of the top left bayer pixel in each of the 9
-    # neigbhoors bayer cells
-    
     thread_pixel_idx = round(patch_center_pos[1]) + tx
     thread_pixel_idy = round(patch_center_pos[0]) + ty
     
@@ -523,7 +519,7 @@ def accumulate(comp_img, alignments, covs, r,
     cuda.syncthreads()
     if tx == 0 and ty+1 < n_channels and inbound:
         chan = ty+1
-        # This is the update of the accumulators, but it is single_threade :
+        # This is the update of the accumulators, but it is single threaded :
         # no racing condition.
         num[output_pixel_idy, output_pixel_idx, chan] += val[chan] 
         den[output_pixel_idy, output_pixel_idx, chan] += acc[chan]
