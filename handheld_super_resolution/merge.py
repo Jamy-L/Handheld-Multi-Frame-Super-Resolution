@@ -24,10 +24,8 @@ def init_merge(ref_img, kernels, options, params):
     CFA_pattern = cuda.to_device(params['exif']['CFA Pattern'])
     bayer_mode = params['mode'] == 'bayer'
     act = params['kernel'] == 'act'
-    if bayer_mode : 
-        TILE_SIZE = params['tuning']['tileSize']*2
-    else:
-        TILE_SIZE = params['tuning']['tileSize']
+
+    TILE_SIZE = params['tuning']['tileSize']
 
     if VERBOSE > 1:
         print('Beginning merge process')
@@ -239,6 +237,8 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern
         # There is no racing condition.
         num[output_pixel_idy, output_pixel_idx, chan] = 0 #val[chan]
         den[output_pixel_idy, output_pixel_idx, chan] = 0 #acc[chan]
+        
+        
     
 def merge(comp_img, alignments, covs, r, num, den,
           options, params):
