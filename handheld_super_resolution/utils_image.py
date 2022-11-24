@@ -31,35 +31,78 @@ import math
 import numpy as np
 from scipy import signal
 from scipy.ndimage import gaussian_filter
-from numba import vectorize, guvectorize, uint8, uint16, float32, float64
+from numba import vectorize, guvectorize, uint8, uint16, float32, float64, cuda
 import torch as th
 import torch.fft
 
 import colour_demosaicing
-from .utils import getSigned, isTypeInt, DEFAULT_NUMPY_FLOAT_TYPE
+from .utils import getSigned, isTypeInt, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_COMPLEX_TYPE, DEFAULT_TORCH_FLOAT_TYPE
 
 def compute_grey_images(img, method):
+    """
+    img must already be on device
+
+    Parameters
+    ----------
+    img : TYPE
+        DESCRIPTION.
+    method : TYPE
+        DESCRIPTION.
+
+    Raises
+    ------
+    ValueError
+        DESCRIPTION.
+
+    Returns
+    -------
+    TYPE
+        DESCRIPTION.
+
+    """
     imsize = imsize_y, imsize_x = img.shape
-    if method == "decimating":
-        img_grey = (img[::2, ::2] + img[1::2, 1::2] + img[::2, 1::2] + img[1::2, ::2])/4
+    if method == "FFT":
+        torch_img_grey = th.as_tensor(img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+        torch_img_grey = torch.fft.fft2(torch_img_grey) 
+        # th FFT induces copy on the fly : this is good because we dont want to 
+        # modify the raw image, it is needed in the future
+        # Note : the complex dtype of the fft2 is inherited from DEFAULT_TORCH_FLOAT_TYPE.
+        # Therefore, for DEFAULT_TORCH_FLOAT_TYPE = float32 we directly get complex64
+        torch_img_grey = torch.fft.fftshift(torch_img_grey)
         
-    elif method == "FFT":
-
-            # lowpass filtering
-            img_grey = fft_lowpass(img)
-
-            
-    elif method == "demosaicing":
-            img_dem = colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(img)
-            
-            img_grey = np.mean(img_dem, axis=2)
-
-    elif method == "gauss":
-        img_grey = downsample(img, kernel='bayer')
+        imsize = imsize_y, imsize_x = torch_img_grey.shape
+        torch_img_grey[:imsize_y//4, :] = 0
+        torch_img_grey[:, :imsize_x//4] = 0
+        torch_img_grey[-imsize_y//4:, :] = 0
+        torch_img_grey[:, -imsize_x//4:] = 0
+        
+        torch_img_grey = torch.fft.ifftshift(torch_img_grey)
+        torch_img_grey = torch.fft.ifft2(torch_img_grey)
+        # Here, .real() type inherits once again from the complex type.
+        # numba type is read directly from the torch tensor, so everything goes fine.
+        return cuda.as_cuda_array(torch_img_grey.real)
     else:
-        raise ValueError('unknown method : {}'.format(method))
+        raise NotImplemented('Computation of gray level on GPU is only supported for FFT')
+    # if method == "decimating":
+    #     img_grey = (img[::2, ::2] + img[1::2, 1::2] + img[::2, 1::2] + img[1::2, ::2])/4
+        
+    # elif method == "FFT":
+
+    #         # lowpass filtering
+    #         img_grey = fft_lowpass(img)
+
+            
+    # elif method == "demosaicing":
+    #         img_dem = colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(img)
+            
+    #         img_grey = np.mean(img_dem, axis=2)
+
+    # elif method == "gauss":
+    #     img_grey = downsample(img, kernel='bayer')
+    # else:
+    #     raise ValueError('unknown method : {}'.format(method))
     
-    return img_grey.astype(DEFAULT_NUMPY_FLOAT_TYPE)
+    # return img_grey.astype(DEFAULT_NUMPY_FLOAT_TYPE)
 
 def fft_lowpass(img_grey):
     img_grey = th.from_numpy(img_grey).to("cuda")

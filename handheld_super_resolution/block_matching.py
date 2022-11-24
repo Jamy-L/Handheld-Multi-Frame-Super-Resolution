@@ -433,7 +433,6 @@ def alignOnALevel2(referencePyramidLevel, alternatePyramidLevel, options, upsamp
     w = imshape[1] // (tileSize // 2) - 1
     
     sR = 2 * searchRadius + 1
-    print(typeof(previousAlignments))
     # Upsample the previous alignements for initialization
     if previousAlignments is None:
         upsampledAlignments = cuda.to_device(np.zeros((h, w, 2), dtype=DEFAULT_NUMPY_FLOAT_TYPE))
@@ -466,11 +465,9 @@ def alignOnALevel2(referencePyramidLevel, alternatePyramidLevel, options, upsamp
         
 
     
-    # TODO the new upsamleAlignments should round and cast final type to int.
     cuda.synchronize()
     if verbose:
         currentTime = getTime(currentTime, ' ---- Upsample alignments')
-    print(typeof(upsampledAlignments))
     
     dist = get_patch_distance(cu_referencePyramidLevel, cu_alternatePyramidLevel,
                               tileSize, searchRadius,
