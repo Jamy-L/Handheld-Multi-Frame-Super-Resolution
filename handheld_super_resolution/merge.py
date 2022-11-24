@@ -55,7 +55,7 @@ def init_merge(ref_img, kernels, options, params):
     
     if VERBOSE > 2:
         current_time = getTime(
-            current_time, ' - Ref framed merged')
+            current_time, ' - Ref frame merged')
     
     return num, den
     
@@ -136,8 +136,6 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern
     
     cuda.syncthreads()
     if inbound:
-
-
         interpolated_cov = cuda.shared.array((2, 2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
         cov_i = cuda.shared.array((2, 2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
     

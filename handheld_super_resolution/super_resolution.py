@@ -35,30 +35,30 @@ def main(ref_img, comp_imgs, options, params):
     verbose_2 = options['verbose'] > 2
     bayer_mode = params['mode']=='bayer'
     
+    #___ Moving to GPU
+    cuda_ref_img = cuda.to_device(ref_img)
+    
     
     #___ Raw to grey
     grey_method = params['grey method']
+    t1 = time()
     
     if bayer_mode :
-        t1 = time()
-        ref_grey = compute_grey_images(ref_img, grey_method)
+        cuda_ref_grey = compute_grey_images(cuda_ref_img, grey_method)
         if verbose_2 :
-            currentTime = getTime(t1, "- Ref grey image estimated by {}".format(grey_method))
+            getTime(t1, "- Ref grey image estimated by {}".format(grey_method))
     else:
-        ref_grey = ref_img
+        cuda_ref_grey = cuda_ref_img
         
     #___ Block Matching
-    
-    referencePyramid = init_block_matching(ref_grey, options, params['block matching'])
+    # TODO this function should be written for gpu
+    referencePyramid = init_block_matching(cuda_ref_grey.copy_to_host(), options, params['block matching'])
 
-    
-    #___ Moving to GPU
-    cuda_ref_img = cuda.to_device(ref_img)
-    cuda_ref_grey = cuda.to_device(ref_grey)
     
     
     #___ ICA : compute grad and hessian
-    ref_gradx, ref_grady, hessian = init_ICA(ref_grey, options, params['kanade'])
+    # CPU array here, for convoluting with cv2 filters it's easier
+    ref_gradx, ref_grady, hessian = init_ICA(cuda_ref_grey.copy_to_host(), options, params['kanade'])
     
     
     #___ Local stats estimation
@@ -79,39 +79,37 @@ def main(ref_img, comp_imgs, options, params):
     num, den = init_merge(cuda_ref_img, cuda_kernels, options, params["merging"])
 
     
-    n_images = 8 #comp_imgs.shape[0]
+    n_images = comp_imgs.shape[0]
     for im_id in range(n_images):
         if verbose :
             print("\nProcessing image {} ---------\n".format(im_id+1))
         im_time = time()
         
+        #___ Moving to GPU
+        cuda_img = cuda.to_device(comp_imgs[im_id])
+        if verbose_2 : 
+            current_time = getTime(
+                im_time, 'Arrays moved to GPU')
+        
         if bayer_mode:
-            im_grey = compute_grey_images(comp_imgs[im_id], grey_method)
+            cuda_im_grey = compute_grey_images(comp_imgs[im_id], grey_method)
             if verbose_2 :
-                current_time = getTime(im_time, "- LK grey images estimated by {}".format(grey_method))
+                current_time = getTime(current_time, "- LK grey images estimated by {}".format(grey_method))
         else:
-            im_grey = comp_imgs[im_id]
+            cuda_im_grey = cuda_img
         
         #___ Block Matching
         current_time = time()
         if verbose :
             print('Beginning block matching')
         
-        pre_alignment = align_image_block_matching(im_grey, referencePyramid, options, params['block matching'])
+        pre_alignment = align_image_block_matching(cuda_im_grey.copy_to_host(), referencePyramid, options, params['block matching'])
         
         if verbose : 
             current_time = getTime(current_time, 'Block Matching (Total)')
-        #___ Moving to GPU
-        cuda_img = cuda.to_device(comp_imgs[im_id])
-        cuda_im_grey = cuda.to_device(im_grey)
         
-        if verbose_2 : 
-            current_time = getTime(
-                current_time, 'Arrays moved to GPU')
-            
         cuda_final_alignment = ICA_optical_flow(
             cuda_im_grey, cuda_ref_grey, ref_gradx, ref_grady, hessian, pre_alignment, options, params['kanade'])
-    
         #___ Robustness
         cuda.synchronize()
         if verbose : 
