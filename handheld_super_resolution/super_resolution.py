@@ -58,7 +58,7 @@ def main(ref_img, comp_imgs, options, params):
     
     #___ ICA : compute grad and hessian
     # CPU array here, for convoluting with cv2 filters it's easier
-    ref_gradx, ref_grady, hessian = init_ICA(cuda_ref_grey.copy_to_host(), options, params['kanade'])
+    ref_gradx, ref_grady, hessian = init_ICA(cuda_ref_grey, options, params['kanade'])
     
     
     #___ Local stats estimation

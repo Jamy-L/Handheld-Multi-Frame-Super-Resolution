@@ -63,10 +63,11 @@ options = {'verbose' : 4}
 params['merging']['kernel'] = 'act'
 params['robustness']['on'] = False
 params['kanade']['tuning']['kanadeIter'] = 3
-burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
-# burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
+# burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
+burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
 # burst_path = 'P:/0001/Samsung'
 
+params['kanade']['tuning']['sigma blur'] = 1
 output_img, cudal = process(burst_path, options, params, crop_str)
 
 
