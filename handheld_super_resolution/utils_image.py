@@ -27,13 +27,16 @@ you can benefit from the following license terms attached to this file.
 """
 
 import math
+from time import perf_counter
 
 import numpy as np
 from scipy import signal
 from scipy.ndimage import gaussian_filter, gaussian_filter1d
+from scipy.ndimage._filters import _gaussian_kernel1d
 from numba import vectorize, guvectorize, uint8, uint16, float32, float64, cuda
 import torch as th
 import torch.fft
+import torch.nn.functional as F
 
 import colour_demosaicing
 from .utils import getSigned, isTypeInt, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_COMPLEX_TYPE, DEFAULT_TORCH_FLOAT_TYPE
@@ -187,6 +190,45 @@ def downsample(image, kernel='gaussian', factor=2):
     	return np.rint(filteredImage[:h2 * factor:factor, :w2 * factor:factor]).astype(image.dtype)
     else:
     	return filteredImage[:h2 * factor:factor, :w2 * factor:factor]
+
+def cuda_downsample(image, kernel='gaussian', factor=2):
+    '''Apply a convolution by a kernel if required, then downsample an image.
+    Args:
+     	image: Device Array the input image (WARNING: single channel only!)
+     	kernel: None / str ('gaussian' / 'bayer') / 2d numpy array
+     	factor: downsampling factor
+    '''
+    # Special case
+    if factor == 1:
+     	return image
+
+    # Filter the image before downsampling it
+    if kernel is None:
+     	filteredImage = image
+    elif kernel == 'gaussian':
+    	 t0 = perf_counter()
+     	# gaussian kernel std is proportional to downsampling factor
+    	 # filteredImage = gaussian_filter(image, sigma=factor * 0.5, order=0, output=None, mode='reflect')
+         
+    	 th_img = torch.as_tensor(image, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
+          # This is the default kernel of scipy gaussian_filter1d
+          # Note that pytorch Convolve is actually a correlation, hence the ::-1 flip.
+          # copy to avoid negative stride
+    	 gaussian_kernel = _gaussian_kernel1d(sigma=factor * 0.5, order=0, radius=int(4*factor * 0.5 + 0.5))[::-1].copy()
+    	 th_gaussian_kernel = torch.as_tensor(gaussian_kernel, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+        
+
+        # 2 times gaussian 1d is faster than gaussian 2d
+        # TODO I have not checked if the gaussian blur was exactly the same as outputed byt gaussian_filter1d
+    	 temp = F.conv2d(th_img, th_gaussian_kernel[None, None, :, None]) # convolve y
+    	 th_filteredImage = F.conv2d(temp, th_gaussian_kernel[None, None, None, :])[0, 0] # convolve x
+    else:
+        raise ValueError("please use gaussian kernel")
+
+    # Shape of the downsampled image
+    h2, w2 = np.floor(np.array(th_filteredImage.shape) / float(factor)).astype(np.int)
+
+    return cuda.as_cuda_array(th_filteredImage[:h2 * factor:factor, :w2 * factor:factor])
 
 
 def getAlignedTiles(image, tileSize, motionVectors):

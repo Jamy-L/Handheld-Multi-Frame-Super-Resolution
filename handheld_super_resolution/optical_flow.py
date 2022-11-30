@@ -5,25 +5,27 @@ Created on Sun Jul 31 00:00:36 2022
 @author: jamyl
 """
 
-from time import time
+from time import time, perf_counter
 
 from math import floor, ceil, modf, exp, sqrt
 import numpy as np
 import cv2
 from numba import cuda, float32, float64, int16, typeof
+from scipy.ndimage._filters import _gaussian_kernel1d
 from scipy.ndimage import gaussian_filter1d
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
+import torch.nn.functional as F
+import torch
 
 import colour_demosaicing
 import matplotlib.pyplot as plt
 
 from .linalg import bilinear_interpolation
-from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, hann, hamming, clamp
+from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, hann, hamming, clamp
 from .linalg import solve_2x2, solve_6x6_krylov, get_eighen_val_2x2
     
 def init_ICA(ref_img, options, params):
     current_time, verbose, verbose_2 = time(), options['verbose'] > 1, options['verbose'] > 2
-
 
     sigma_blur = params['tuning']['sigma blur']
 
@@ -39,28 +41,56 @@ def init_ICA(ref_img, options, params):
     kernely = np.array([[-1],
                         [0],
                         [1]])
-    # kernely2 = np.array([[1, 1, 1]])
     
     kernelx = np.array([[-1,0,1]])
-    # kernelx2 = np.array([[1],
-    #                      [1],
-    #                      [1]])
-
+    
+    t0 = perf_counter()
+    # translating ref_img numba pointer to pytorch
+    # the type needs to be explicitely specified. Furthermore, filters need to be casted to float to perform convolution
+    # on float image
+    th_ref_img = torch.as_tensor(ref_img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
+    th_kernely = torch.as_tensor(kernely, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
+    th_kernelx = torch.as_tensor(kernelx, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
+    
+    
+    # adding 2 dummy dims for batch, channel, to use torch convolve
     if sigma_blur != 0:
+        # This is the default kernel of scipy gaussian_filter1d
+        # Note that pytorch Convolve is actually a correlation, hence the ::-1 flip.
+        # copy to avoid negative stride
+        gaussian_kernel = _gaussian_kernel1d(sigma=sigma_blur, order=0, radius=int(4*sigma_blur+0.5))[::-1].copy()
+        th_gaussian_kernel = torch.as_tensor(gaussian_kernel, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+        
+        
         # 2 times gaussian 1d is faster than gaussian 2d
-        temp = gaussian_filter1d(ref_img, sigma=sigma_blur, axis=-1)
-        temp = gaussian_filter1d(temp, sigma=sigma_blur, axis=-2)
+        # TODO I have not checked if the gaussian blur was exactly the same as outputed byt gaussian_filter1d
         
-        gradx = cv2.filter2D(temp, -1, kernelx)
-        # gradx = cv2.filter2D(gradx, -1, kernelx2)
-        grady = cv2.filter2D(temp, -1, kernely)
-        # grady = cv2.filter2D(grady, -1, kernely2)
+        temp = F.conv2d(th_ref_img, th_gaussian_kernel[None, None, :, None]) # convolve y
+        temp = F.conv2d(temp, th_gaussian_kernel[None, None, None, :]) # convolve x
+        
+        
+        th_gradx = F.conv2d(temp, th_kernelx)[0, 0] # 1 batch, 1 channel
+        th_grady = F.conv2d(temp, th_kernely)[0, 0]
+        
+        
+        
+        # temp = gaussian_filter1d(ref_img, sigma=sigma_blur, axis=-1)
+        # temp = gaussian_filter1d(temp, sigma=sigma_blur, axis=-2)
+                
+        
+        # gradx = cv2.filter2D(temp, -1, kernelx)
+        # grady = cv2.filter2D(temp, -1, kernely)
     else:
-        gradx = cv2.filter2D(ref_img, -1, kernelx)
-        # gradx = cv2.filter2D(gradx, -1, kernelx2)
-        grady = cv2.filter2D(ref_img, -1, kernely)
-        # grady = cv2.filter2D(grady, -1, kernely2)
+        th_gradx = F.conv2d(th_ref_img, th_kernelx)[0, 0] # 1 batch, 1 channel
+        th_grady = F.conv2d(th_ref_img, th_kernely)[0, 0]
         
+        # gradx = cv2.filter2D(ref_img, -1, kernelx)
+        # grady = cv2.filter2D(ref_img, -1, kernely)
+    
+    # swapping grads back to numba
+    gradx = cuda.as_cuda_array(th_gradx)
+    grady = cuda.as_cuda_array(th_grady)
+    
     if verbose_2:
         current_time = getTime(
             current_time, ' -- Gradients estimated')

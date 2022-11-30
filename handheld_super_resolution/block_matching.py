@@ -4,13 +4,13 @@ Created on Mon Sep 12 11:31:38 2022
 
 @author: jamyl
 """
-from time import time
+from time import time, perf_counter
 
 import numpy as np
 from numba import vectorize, guvectorize, uint8, uint16, int32, float32, float64, jit, njit, cuda, typeof
 
 from .utils import getTime, isTypeInt, clamp, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE
-from .utils_image import getTiles, getAlignedTiles, downsample, computeTilesDistanceL1_, computeDistance, subPixelMinimum
+from .utils_image import getTiles, getAlignedTiles, downsample, computeTilesDistanceL1_, computeDistance, subPixelMinimum, cuda_downsample
 
 
 def init_block_matching(ref_img, options, params):
@@ -45,7 +45,8 @@ def init_block_matching(ref_img, options, params):
 
 
     # construct 4-level coarse-to fine pyramid of the reference
-    referencePyramid = hdrplusPyramid(ref_img_padded, factors)
+    # TODO Pad image on GPU to save bandwith
+    referencePyramid = hdrplusPyramid(cuda.to_device(ref_img_padded), factors)
     if verbose:
         currentTime = getTime(currentTime, ' --- Create ref pyramid')
     
@@ -77,8 +78,9 @@ def align_image_block_matching(img, referencePyramid, options, params, debug=Fal
     img_padded = np.pad(img, ((paddingTop, paddingBottom), (paddingLeft, paddingRight)), 'symmetric')
     
     
-    
-
+    # TODO
+    dev_img_padded = cuda.to_device(img_padded) # for debug only
+    cuda.synchronize()
     # For convenience
     currentTime, verbose = time(), options['verbose'] > 2
     # factors, tileSizes, distances, searchRadia and subpixels are described fine-to-coarse
@@ -95,7 +97,7 @@ def align_image_block_matching(img, referencePyramid, options, params, debug=Fal
     # Align alternate image to the reference image
 
     # 4-level coarse-to fine pyramid of alternate image
-    alternatePyramid = hdrplusPyramid(img_padded, factors)
+    alternatePyramid = hdrplusPyramid(dev_img_padded, factors)
     if verbose:
         currentTime = getTime(currentTime, ' --- Create alt pyramid')
 
@@ -283,12 +285,14 @@ def hdrplusPyramid(image, factors=[1, 2, 4, 4], kernel='gaussian'):
             factors: [int], dowsampling factors (fine-to-coarse)
             kernel: convolution kernel to apply before downsampling (default: gaussian kernel)'''
     # Start with the finest level computed from the input
-    pyramidLevels = [downsample(image, kernel, factors[0])]
+    pyramidLevels = [cuda_downsample(image, kernel, factors[0])]
+    # pyramidLevels = [downsample(image, kernel, factors[0])]
 
     # Subsequent pyramid levels are successively created
     # with convolution by a kernel followed by downsampling
     for factor in factors[1:]:
-        pyramidLevels.append(downsample(pyramidLevels[-1], kernel, factor))
+        pyramidLevels.append(cuda_downsample(pyramidLevels[-1], kernel, factor))
+        # pyramidLevels.append(downsample(pyramidLevels[-1], kernel, factor))
 
     # Reverse the pyramid to get it coarse-to-fine
     return pyramidLevels[::-1]
