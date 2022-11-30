@@ -238,172 +238,174 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern
         num[output_pixel_idy, output_pixel_idx, chan] = 0 #val[chan]
         den[output_pixel_idy, output_pixel_idx, chan] = 0 #acc[chan]
         
-def init_merge2(ref_img, kernels, options, params):
-    VERBOSE = options['verbose']
-    SCALE = params['scale']
+# def init_merge2(ref_img, kernels, options, params):
+#     VERBOSE = options['verbose']
+#     SCALE = params['scale']
     
-    CFA_pattern = cuda.to_device(params['exif']['CFA Pattern'])
-    bayer_mode = params['mode'] == 'bayer'
-    act = params['kernel'] == 'act'
+#     CFA_pattern = cuda.to_device(params['exif']['CFA Pattern'])
+#     bayer_mode = params['mode'] == 'bayer'
+#     act = params['kernel'] == 'act'
 
-    TILE_SIZE = params['tuning']['tileSize']
+#     TILE_SIZE = params['tuning']['tileSize']
 
-    if VERBOSE > 1:
-        print('Beginning merge process')
-        current_time = time()
+#     if VERBOSE > 1:
+#         print('Beginning merge process')
+#         current_time = time()
         
 
-    native_im_size = ref_img.shape
-    # casting to integer to account for floating scale
-    output_size = (round(SCALE*native_im_size[0]), round(SCALE*native_im_size[1]))
+#     native_im_size = ref_img.shape
+#     # casting to integer to account for floating scale
+#     output_size = (round(SCALE*native_im_size[0]), round(SCALE*native_im_size[1]))
 
-    num = cuda.device_array(output_size+(3,), dtype = DEFAULT_NUMPY_FLOAT_TYPE)
-    den = cuda.device_array(output_size+(3,), dtype = DEFAULT_NUMPY_FLOAT_TYPE)
+#     num = cuda.device_array(output_size+(3,), dtype = DEFAULT_NUMPY_FLOAT_TYPE)
+#     den = cuda.device_array(output_size+(3,), dtype = DEFAULT_NUMPY_FLOAT_TYPE)
 
-    # number of alignment vectors
-    n_tyles_y_big = int(math.ceil(native_im_size[0]/(TILE_SIZE//2)))
-    n_tyles_x_big = int(math.ceil(native_im_size[1]/(TILE_SIZE//2)))
+#     # number of alignment vectors
+#     n_tyles_y_big = int(math.ceil(native_im_size[0]/(TILE_SIZE//2)))
+#     n_tyles_x_big = int(math.ceil(native_im_size[1]/(TILE_SIZE//2)))
     
-    # specifying the block size
-    block_y = n_tyles_y_big * int(math.ceil(SCALE))
-    block_x = n_tyles_x_big * int(math.ceil(SCALE))
+#     # specifying the block size
+#     block_y = n_tyles_y_big * int(math.ceil(SCALE))
+#     block_x = n_tyles_x_big * int(math.ceil(SCALE))
     
 
-    threadsperblock = (TILE_SIZE//2 + 2, TILE_SIZE//2 + 2, 3)
-
-
-    blockspergrid = (block_x, block_y, 1)
-    
-    accumulate_ref2[blockspergrid, threadsperblock](
-        ref_img, kernels, bayer_mode, act, SCALE, TILE_SIZE, CFA_pattern,
-        num, den)
-    cuda.synchronize()
-    
-    if VERBOSE > 2:
-        current_time = getTime(
-            current_time, ' - Ref frame merged')
-    
-    return num, den
-    
-    
-@cuda.jit('void(float32[:,:], float32[:,:,:,:], boolean, boolean, int32, int32, int32[:,:], float32[:,:,:], float32[:,:,:])')
-def accumulate_ref2(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern,
-                   num, den):
-    """
-    Cuda kernel, each block represents an output pixel. Each block contains
-    a 3 by 3 neighborhood for each moving image. A single threads takes
-    care of one of these pixels, for all the moving images.
+#     threadsperblock = (TILE_SIZE//2 + 2, TILE_SIZE//2 + 2, 3)
 
 
+#     blockspergrid = (block_x, block_y, 1)
+    
+#     accumulate_ref2[blockspergrid, threadsperblock](
+#         ref_img, kernels, bayer_mode, act, SCALE, TILE_SIZE, CFA_pattern,
+#         num, den)
+#     cuda.synchronize()
+    
+#     if VERBOSE > 2:
+#         current_time = getTime(
+#             current_time, ' - Ref frame merged')
+    
+#     return num, den
+    
+    
+# @cuda.jit('void(float32[:,:], float32[:,:,:,:], boolean, boolean, int32, int32, int32[:,:], float32[:,:,:], float32[:,:,:])')
+# def accumulate_ref2(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern,
+#                    num, den):
+#     """
+#     Cuda kernel, each block represents an output pixel. Each block contains
+#     a 3 by 3 neighborhood for each moving image. A single threads takes
+#     care of one of these pixels, for all the moving images.
 
-    Parameters
-    ----------
-    ref_img : Array[imsize_y, imsize_x]
-        The reference image
-    comp_imgs : Array[n_images, imsize_y, imsize_x]
-        The compared images
-    alignements : Array[n_images, n_tiles_y, n_tiles_x, 2]
-        The alignemtn vectors for each tile of each image
-    covs : device array[n_images+1, imsize_y/2, imsize_x/2, 2, 2]
-        covariance matrices sampled at the center of each bayer quad.
-    r : Device_Array[n_images, imsize_y/2, imsize_x/2, 3]
-            Robustness of the moving images
-    bayer_mode : bool
-        Whether the burst is raw or grey
-    act : bool
-        Whether ACT kernels should be used, or handhled's kernels.
-    scale : float
-        scaling factor
-    tile_size : int
-        tile size used for alignment (on the raw scale !)
-    CFA_pattern : device Array[2, 2]
-        CFA pattern of the burst
-    output_img : Array[SCALE*imsize_y, SCALE_imsize_x]
-        The empty output image
 
-    Returns
-    -------
-    None.
 
-    """
+#     Parameters
+#     ----------
+#     ref_img : Array[imsize_y, imsize_x]
+#         The reference image
+#     comp_imgs : Array[n_images, imsize_y, imsize_x]
+#         The compared images
+#     alignements : Array[n_images, n_tiles_y, n_tiles_x, 2]
+#         The alignemtn vectors for each tile of each image
+#     covs : device array[n_images+1, imsize_y/2, imsize_x/2, 2, 2]
+#         covariance matrices sampled at the center of each bayer quad.
+#     r : Device_Array[n_images, imsize_y/2, imsize_x/2, 3]
+#             Robustness of the moving images
+#     bayer_mode : bool
+#         Whether the burst is raw or grey
+#     act : bool
+#         Whether ACT kernels should be used, or handhled's kernels.
+#     scale : float
+#         scaling factor
+#     tile_size : int
+#         tile size used for alignment (on the raw scale !)
+#     CFA_pattern : device Array[2, 2]
+#         CFA pattern of the burst
+#     output_img : Array[SCALE*imsize_y, SCALE_imsize_x]
+#         The empty output image
 
-    big_patch_x, big_patch_y = cuda.blockIdx.x//int(math.ceil(scale)), cuda.blockIdx.y//int(math.ceil(scale))
-    sub_patch_x, sub_patch_y = cuda.blockIdx.x%int(math.ceil(scale)), cuda.blockIdx.y%int(math.ceil(scale))
+#     Returns
+#     -------
+#     None.
+
+#     """
+
+#     big_patch_x, big_patch_y = cuda.blockIdx.x//int(math.ceil(scale)), cuda.blockIdx.y//int(math.ceil(scale))
+#     sub_patch_x, sub_patch_y = cuda.blockIdx.x%int(math.ceil(scale)), cuda.blockIdx.y%int(math.ceil(scale))
     
     
-    tx, ty, tz = cuda.threadIdx.x, cuda.threadIdx.y, cuda.threadIdx.z
-    output_size_y, output_size_x, _ = num.shape
-    input_size_y, input_size_x = ref_img.shape
-    input_imsize = (input_size_y, input_size_x)
+#     tx, ty, tz = cuda.threadIdx.x, cuda.threadIdx.y, cuda.threadIdx.z
+#     output_size_y, output_size_x, _ = num.shape
+#     input_size_y, input_size_x = ref_img.shape
+#     input_imsize = (input_size_y, input_size_x)
     
-    # extraxting the ref patch from glob mem with a single query
-    # not that the role played by tx and ty is completely uncorrelated 
-    # with the role they play later in the code
-    patch = cuda.shared.array((tile_size//2+2, tile_size//2+2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
-    if tz == 0:
-        if (0 <= tile_size//2*big_patch_y + (ty-1) < input_size_y and
-            0 <= tile_size//2*big_patch_x + (tx-1) < input_size_x):
-            patch[ty, tx] = ref_img[tile_size//2*big_patch_y + (ty-1), tile_size//2*big_patch_x + (tx-1)]
-    cuda.syncthreads()
-    #####################
+#     # extraxting the ref patch from glob mem with a single query
+#     # not that the role played by tx and ty is completely uncorrelated 
+#     # with the role they play later in the code
+#     patch = cuda.shared.array((tile_size//2+2, tile_size//2+2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
+#     if tz == 0:
+#         if (0 <= tile_size//2*big_patch_y + (ty-1) < input_size_y and
+#             0 <= tile_size//2*big_patch_x + (tx-1) < input_size_x):
+#             patch[ty, tx] = ref_img[tile_size//2*big_patch_y + (ty-1), tile_size//2*big_patch_x + (tx-1)]
+#     cuda.syncthreads()
+#     #####################
     
-    # Note : the use of ceil is not an approximation of any sort, but
-    # rather a method of efficient thread dipatching. In this expression,
-    # it outputs exactly the first output pixel of a block.
-    output_pixel_idy = int(math.ceil(big_patch_y * scale * tile_size//2)) + sub_patch_y * tile_size//2 + ty
-    output_pixel_idx = int(math.ceil(big_patch_x * scale * tile_size//2)) + sub_patch_y * tile_size//2 + tx
+#     # Note : the use of ceil is not an approximation of any sort, but
+#     # rather a method of efficient thread dipatching. In this expression,
+#     # it outputs exactly the first output pixel of a block.
+#     output_pixel_idy = int(math.ceil(big_patch_y * scale * tile_size//2)) + sub_patch_y * tile_size//2 + ty
+#     output_pixel_idx = int(math.ceil(big_patch_x * scale * tile_size//2)) + sub_patch_y * tile_size//2 + tx
     
-    inbound = (0 <= output_pixel_idy < output_size_y and
-               0 <= output_pixel_idx < output_size_x)
+#     inbound = (0 <= output_pixel_idy < output_size_y and
+#                0 <= output_pixel_idx < output_size_x)
     
-    # the next condition ensures that subtiles are not overlapping.
-    inbound &= (sub_patch_y *tile_size//2 + ty < scale * tile_size//2 and
-                sub_patch_x *tile_size//2 + tx < scale * tile_size//2)
+#     # the next condition ensures that subtiles are not overlapping.
+#     inbound &= (sub_patch_y *tile_size//2 + ty < scale * tile_size//2 and
+#                 sub_patch_x *tile_size//2 + tx < scale * tile_size//2)
     
-    if bayer_mode:
-        n_channels = 3
-        acc = cuda.shared.array((tile_size//2, tile_size//2, 3), dtype=DEFAULT_CUDA_FLOAT_TYPE)
-        val = cuda.shared.array((tile_size//2, tile_size//2, 3), dtype=DEFAULT_CUDA_FLOAT_TYPE)
-    else:
-        n_channels = 1
-        acc = cuda.shared.array((tile_size//2, tile_size//2, 1), dtype=DEFAULT_CUDA_FLOAT_TYPE)
-        val = cuda.shared.array((tile_size//2, tile_size//2, 1), dtype=DEFAULT_CUDA_FLOAT_TYPE)
+#     if bayer_mode:
+#         n_channels = 3
+#         acc = cuda.shared.array((tile_size//2, tile_size//2, 3), dtype=DEFAULT_CUDA_FLOAT_TYPE)
+#         val = cuda.shared.array((tile_size//2, tile_size//2, 3), dtype=DEFAULT_CUDA_FLOAT_TYPE)
+#     else:
+#         n_channels = 1
+#         acc = cuda.shared.array((tile_size//2, tile_size//2, 1), dtype=DEFAULT_CUDA_FLOAT_TYPE)
+#         val = cuda.shared.array((tile_size//2, tile_size//2, 1), dtype=DEFAULT_CUDA_FLOAT_TYPE)
         
-    if ty < tile_size//2 and tx < tile_size//2 and tz < n_channels :
-        acc[ty, tx, tz] = 0
-        val[ty, tx, tz] = 0
+#     if ty < tile_size//2 and tx < tile_size//2 and tz < n_channels :
+#         acc[ty, tx, tz] = 0
+#         val[ty, tx, tz] = 0
 
     
-    coarse_ref_sub_pos = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) # y, x
-    coarse_ref_sub_pos[0] = output_pixel_idy / scale          
-    coarse_ref_sub_pos[1] = output_pixel_idx / scale
+#     coarse_ref_sub_pos = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) # y, x
+#     coarse_ref_sub_pos[0] = output_pixel_idy / scale          
+#     coarse_ref_sub_pos[1] = output_pixel_idx / scale
     
-    for i in range(-1, 2):
-        for j in range(-1, 2):
-            if tz == 0:
-                pixel_idy = round(coarse_ref_sub_pos[0]) + i
-                pixel_idx = round(coarse_ref_sub_pos[1]) + j
+#     for i in range(-1, 2):
+#         for j in range(-1, 2):
+#             if tz == 0:
+#                 pixel_idy = round(coarse_ref_sub_pos[0]) + i
+#                 pixel_idx = round(coarse_ref_sub_pos[1]) + j
                 
-                if bayer_mode : 
-                    channel = uint8(CFA_pattern[pixel_idy%2, pixel_idx%2])
-                else:
-                    channel = 0
+#                 if bayer_mode : 
+#                     channel = uint8(CFA_pattern[pixel_idy%2, pixel_idx%2])
+#                 else:
+#                     channel = 0
                     
                     
-                if inbound: 
-                    c = patch[round(coarse_ref_sub_pos[0])%(tile_size//2) + 1+i, round(coarse_ref_sub_pos[1])%(tile_size//2) + 1+j]
-                    cuda.atomic.add(val, (ty, tx, channel), c)
-                    cuda.atomic.add(acc, (ty, tx, channel), 1)
+#                 if inbound: 
+#                     c = patch[round(coarse_ref_sub_pos[0])%(tile_size//2) + 1+i, round(coarse_ref_sub_pos[1])%(tile_size//2) + 1+j]
+#                     cuda.atomic.add(val, (ty, tx, channel), c)
+#                     cuda.atomic.add(acc, (ty, tx, channel), 1)
     
             
-    # TODO is syncthreads necessary ?
-    cuda.syncthreads()
-    if tx < tile_size//2 and ty <= tile_size//2 and tz < n_channels:
-        chan = tz
-        # this assignment is the initialisation of the accumulators.
-        # There is no racing condition.
-        num[output_pixel_idy, output_pixel_idx, chan] = val[ty, tx, chan]
-        den[output_pixel_idy, output_pixel_idx, chan] = acc[ty, tx, chan]  
+#     # TODO is syncthreads necessary ?
+#     cuda.syncthreads()
+#     if tx < tile_size//2 and ty <= tile_size//2 and tz < n_channels:
+#         chan = tz
+#         # this assignment is the initialisation of the accumulators.
+#         # There is no racing condition.
+#         num[output_pixel_idy, output_pixel_idx, chan] = val[ty, tx, chan]
+#         den[output_pixel_idy, output_pixel_idx, chan] = acc[ty, tx, chan]
+
+##########################
     # cuda.syncthreads()
     # if inbound:
     #     interpolated_cov = cuda.shared.array((2, 2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
