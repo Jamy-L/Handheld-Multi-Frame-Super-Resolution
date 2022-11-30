@@ -5,6 +5,7 @@ Created on Mon Sep 12 11:31:38 2022
 @author: jamyl
 """
 from time import time, perf_counter
+import math
 
 import numpy as np
 from numba import vectorize, guvectorize, uint8, uint16, int32, float32, float64, jit, njit, cuda, typeof
@@ -423,13 +424,11 @@ def alignOnALevel2(referencePyramidLevel, alternatePyramidLevel, options, upsamp
 
     """
     
-    cu_referencePyramidLevel = cuda.to_device(np.ascontiguousarray(referencePyramidLevel))
-    cu_alternatePyramidLevel = cuda.to_device(np.ascontiguousarray(alternatePyramidLevel))
     
     # For convenience
     cuda.synchronize()
     verbose, currentTime = options['verbose'] > 3, time()
-    imshape = cu_referencePyramidLevel.shape
+    imshape = referencePyramidLevel.shape
     
     # This formula is checked : it is correct
     # Number of patches that can fit on this level
@@ -443,8 +442,8 @@ def alignOnALevel2(referencePyramidLevel, alternatePyramidLevel, options, upsamp
     else:
         # use the upsampled previous alignments as initial guesses
         upsampledAlignments = upsampleAlignments2(
-            cu_referencePyramidLevel,
-            cu_alternatePyramidLevel,
+            referencePyramidLevel,
+            alternatePyramidLevel,
             previousAlignments,
             upsamplingFactor,
             tileSize,
@@ -473,7 +472,7 @@ def alignOnALevel2(referencePyramidLevel, alternatePyramidLevel, options, upsamp
     if verbose:
         currentTime = getTime(currentTime, ' ---- Upsample alignments')
     
-    dist = get_patch_distance(cu_referencePyramidLevel, cu_alternatePyramidLevel,
+    dist = get_patch_distance(referencePyramidLevel, alternatePyramidLevel,
                               tileSize, searchRadius,
                               upsampledAlignments, distance)
     
@@ -689,23 +688,56 @@ def cuda_computeL1Distance_(referencePyramidLevel, alternatePyramidLevel,
     new_idx = int(idx + local_flow[0] + sRx - searchRadius)
     new_idy = int(idy + local_flow[1] + sRy - searchRadius)
     
-    d = cuda.shared.array(1, DEFAULT_CUDA_FLOAT_TYPE)
+    #  32x32 is the max size. We may need less, but shared array size must
+    # be known at compilation time. working with a flattened array makes reduction
+    # easier
+    d = cuda.shared.array((32*32), DEFAULT_CUDA_FLOAT_TYPE)
     
-    if tx == 0 and ty==0:
-        d[0]=0
-    cuda.syncthreads()
-    
+    z = tx + ty*tileSize # flattened id
     if not (0 <= new_idx < referencePyramidLevel.shape[1] and
             0 <= new_idy < referencePyramidLevel.shape[0]) :
-        local_dst = 1/0 # infty out of bound
-    else:
-        local_dst = abs(referencePyramidLevel[idy, idx]-alternatePyramidLevel[new_idy, new_idx])
-    cuda.atomic.add(d, 0,local_dst)
+        local_diff = 1/0 # infty out of bound
+    else :
+        local_diff = referencePyramidLevel[idy, idx]-alternatePyramidLevel[new_idy, new_idx]
+        
+    d[z] = abs(local_diff)
+    
+    
+    # now reduction
+    N_reduction = int(math.log2(tileSize**2))
+    
+    step = 1
+    for i in range(N_reduction):
+        cuda.syncthreads()
+        if z%(2*step) == 0:
+            d[z] += d[z + step]
+        
+        step *= 2
     
     cuda.syncthreads()
-    
-    if tx==0 and ty ==0:
+    if tx== 0 and ty==0:
         dst[tile_y, tile_x, sRy, sRx] = d[0]
+    
+    
+    
+    # OLD implementation = BAD
+    # d = cuda.shared.array(1, DEFAULT_CUDA_FLOAT_TYPE)
+    
+    # if tx == 0 and ty==0:
+    #     d[0]=0
+    # cuda.syncthreads()
+    
+    # if not (0 <= new_idx < referencePyramidLevel.shape[1] and
+    #         0 <= new_idy < referencePyramidLevel.shape[0]) :
+    #     local_dst = 1/0 # infty out of bound
+    # else:
+    #     local_dst = abs(referencePyramidLevel[idy, idx]-alternatePyramidLevel[new_idy, new_idx])
+    # cuda.atomic.add(d, 0,local_dst)
+    
+    # cuda.syncthreads()
+    
+    # if tx==0 and ty ==0:
+    #     dst[tile_y, tile_x, sRy, sRx] = d[0]
 
 @cuda.jit
 def cuda_computeL2Distance_(referencePyramidLevel, alternatePyramidLevel,
@@ -728,23 +760,55 @@ def cuda_computeL2Distance_(referencePyramidLevel, alternatePyramidLevel,
     new_idx = int(idx + local_flow[0] + sRx - searchRadius)
     new_idy = int(idy + local_flow[1] + sRy - searchRadius)
     
-    d = cuda.shared.array(1, DEFAULT_CUDA_FLOAT_TYPE)
+    #  32x32 is the max size. We may need less, but shared array size must
+    # be known at compilation time. working with a flattened array makes reduction
+    # easier
+    d = cuda.shared.array((32*32), DEFAULT_CUDA_FLOAT_TYPE)
     
-    if tx == 0 and ty==0:
-        d[0]=0
-    cuda.syncthreads()
-    
+    z = tx + ty*tileSize # flattened id
     if not (0 <= new_idx < referencePyramidLevel.shape[1] and
             0 <= new_idy < referencePyramidLevel.shape[0]) :
         local_diff = 1/0 # infty out of bound
-    else:
+    else :
         local_diff = referencePyramidLevel[idy, idx]-alternatePyramidLevel[new_idy, new_idx]
-    cuda.atomic.add(d, 0, local_diff*local_diff)
+        
+    d[z] = local_diff*local_diff
+    
+    
+    # now reduction
+    N_reduction = int(math.log2(tileSize**2))
+    
+    step = 1
+    for i in range(N_reduction):
+        cuda.syncthreads()
+        if z%(2*step) == 0:
+            d[z] += d[z + step]
+        
+        step *= 2
     
     cuda.syncthreads()
-    
-    if tx==0 and ty ==0:
+    if tx== 0 and ty==0:
         dst[tile_y, tile_x, sRy, sRx] = d[0]
+    
+    
+    # OLD IMPLEMENTATION (ATOMIC ADD = SLOW = BAD)
+    # d = cuda.shared.array(1, DEFAULT_CUDA_FLOAT_TYPE)
+    
+    # if tx == 0 and ty==0:
+    #     d[0]=0
+    # cuda.syncthreads()
+    
+    # if not (0 <= new_idx < referencePyramidLevel.shape[1] and
+    #         0 <= new_idy < referencePyramidLevel.shape[0]) :
+    #     local_diff = 1/0 # infty out of bound
+    # else:
+    #     local_diff = referencePyramidLevel[idy, idx]-alternatePyramidLevel[new_idy, new_idx]
+    # cuda.atomic.add(d, 0, local_diff*local_diff)
+    
+    # cuda.syncthreads()
+    
+    # if tx==0 and ty ==0:
+    #     dst[tile_y, tile_x, sRy, sRx] = d[0]
 
 @cuda.jit
 def cuda_minimize_distance(distances, alignment, searchRadius):
