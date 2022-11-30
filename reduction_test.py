@@ -7,9 +7,10 @@ Created on Wed Nov 30 14:56:46 2022
 
 import numpy as np
 from numba import cuda, float32, float64
+from math import log2
 import time
 
-threads = 32
+threads = 16
 threads_sq = threads**2
 blocks = 50000
 
@@ -26,15 +27,14 @@ def fancy_add(A, B, C):
     
     tx = int(x + y*threads)
     
-    s = cuda.shared.array(threads_sq, float64)
-    dif = A[x, y, z] - B[x, y]
-    s[tx] = dif*dif
+    s = cuda.shared.array(32*32, float64)
     
+    s[tx] = A[x, y, z] + B[x, y]
     
+    N_reduc = int(log2(threads_sq))
     # reduction
     step = 1
-    for reduc in range(7):
-        
+    for reduc in range(N_reduc):
         cuda.syncthreads()
         if tx%(2*step) == 0:
             s[tx] += s[tx + step]
@@ -68,11 +68,11 @@ fancy_add[(blocks), (threads, threads)](cu_A, cu_B, cu_C)
 cuda.synchronize()
 print("fancy : ", time.perf_counter() - t1)
 
-cuda.synchronize()
-t1 = time.perf_counter()
-lazy_add[(blocks), (threads, threads)](cu_A, cu_B, cu_D)
-cuda.synchronize()
-print("lazy : ", time.perf_counter() - t1)
+# cuda.synchronize()
+# t1 = time.perf_counter()
+# lazy_add[(blocks), (threads, threads)](cu_A, cu_B, cu_D)
+# cuda.synchronize()
+# print("lazy : ", time.perf_counter() - t1)
 
 
 

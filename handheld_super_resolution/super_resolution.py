@@ -55,7 +55,6 @@ def main(ref_img, comp_imgs, options, params):
     referencePyramid = init_block_matching(cuda_ref_grey.copy_to_host(), options, params['block matching'])
 
     
-    
     #___ ICA : compute grad and hessian
     # CPU array here, for convoluting with cv2 filters it's easier
     ref_gradx, ref_grady, hessian = init_ICA(cuda_ref_grey, options, params['kanade'])
@@ -94,7 +93,7 @@ def main(ref_img, comp_imgs, options, params):
         if bayer_mode:
             cuda_im_grey = compute_grey_images(comp_imgs[im_id], grey_method)
             if verbose_2 :
-                current_time = getTime(current_time, "- LK grey images estimated by {}".format(grey_method))
+                current_time = getTime(current_time, "- grey images estimated by {}".format(grey_method))
         else:
             cuda_im_grey = cuda_img
         
@@ -110,6 +109,7 @@ def main(ref_img, comp_imgs, options, params):
         
         cuda_final_alignment = ICA_optical_flow(
             cuda_im_grey, cuda_ref_grey, ref_gradx, ref_grady, hessian, pre_alignment, options, params['kanade'])
+        
         #___ Robustness
         cuda.synchronize()
         if verbose : 
