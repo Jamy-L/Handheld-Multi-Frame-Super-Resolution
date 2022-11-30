@@ -30,7 +30,7 @@ import math
 
 import numpy as np
 from scipy import signal
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, gaussian_filter1d
 from numba import vectorize, guvectorize, uint8, uint16, float32, float64, cuda
 import torch as th
 import torch.fft
@@ -154,7 +154,21 @@ def downsample(image, kernel='gaussian', factor=2):
     	filteredImage = image
     elif kernel == 'gaussian':
     	# gaussian kernel std is proportional to downsampling factor
-    	filteredImage = gaussian_filter(image, sigma=factor * 0.5, order=0, output=None, mode='reflect')
+    	 filteredImage = gaussian_filter(image, sigma=factor * 0.5, order=0, output=None, mode='reflect')
+        # std = factor*0.5
+        # lim = int(np.ceil(3*std))
+        
+        # t = np.linspace(-lim, lim, 2*lim+1, dtype=DEFAULT_NUMPY_FLOAT_TYPE)/std
+        
+        # gauss = np.exp(-0.5*t*t)
+        # # TODO check syntax
+        # gauss /= np.sum(gauss) #normalizing
+        
+        # filteredImage = signal.convolve(image, gauss[:, None], mode="same", method = "fft")
+        # filteredImage = signal.convolve(filteredImage, gauss[None, :], mode="same", method = "fft")
+        
+        # filteredImage = gaussian_filter1d(image, axis = 0, sigma=factor * 0.5, order=0, output=None, mode='reflect', truncate=2.5)
+        # filteredImage = gaussian_filter1d(filteredImage, axis = 1, sigma=factor * 0.5, order=0, output=None, mode='reflect', truncate=2.5)
     elif kernel == 'bayer':
     	# Bayer means that a simple 2x2 aggregation is required
     	if isTypeInt(image):

@@ -418,13 +418,13 @@ def alignOnALevel2(referencePyramidLevel, alternatePyramidLevel, options, upsamp
         DESCRIPTION.
 
     """
-    # For convenience
-    verbose, currentTime = options['verbose'] > 3, time()
     
     cu_referencePyramidLevel = cuda.to_device(np.ascontiguousarray(referencePyramidLevel))
     cu_alternatePyramidLevel = cuda.to_device(np.ascontiguousarray(alternatePyramidLevel))
     
-    
+    # For convenience
+    cuda.synchronize()
+    verbose, currentTime = options['verbose'] > 3, time()
     imshape = cu_referencePyramidLevel.shape
     
     # This formula is checked : it is correct

@@ -21,7 +21,7 @@ from scipy.fft import fft2, ifft2, fftshift, ifftshift
 import colour_demosaicing
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, crop
 from .utils_image import downsample, compute_grey_images
-from .merge import merge, init_merge, division, init_merge2
+from .merge import merge, init_merge, division
 from .kernels import estimate_kernels
 from .block_matching import alignBurst, init_block_matching, align_image_block_matching
 from .optical_flow import lucas_kanade_optical_flow, ICA_optical_flow, init_ICA
@@ -76,10 +76,10 @@ def main(ref_img, comp_imgs, options, params):
     
     
     #___ init merge
-    num, den = init_merge2(cuda_ref_img, cuda_kernels, options, params["merging"])
+    num, den = init_merge(cuda_ref_img, cuda_kernels, options, params["merging"])
 
     
-    n_images = 0 #comp_imgs.shape[0]
+    n_images = comp_imgs.shape[0]
     for im_id in range(n_images):
         if verbose :
             print("\nProcessing image {} ---------\n".format(im_id+1))
