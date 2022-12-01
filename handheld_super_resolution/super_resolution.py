@@ -34,7 +34,9 @@ def main(ref_img, comp_imgs, options, params):
     verbose = options['verbose'] > 1
     verbose_2 = options['verbose'] > 2
     bayer_mode = params['mode']=='bayer'
-    
+    # debug
+    R, r = [], []
+    ###
     #___ Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
     
@@ -116,6 +118,10 @@ def main(ref_img, comp_imgs, options, params):
             current_time = time()
         cuda_Robustness, cuda_robustness = compute_robustness(cuda_img, ref_local_stats, cuda_final_alignment,
                                                  options, params['robustness'])
+        # TODO debug
+        R.append(cuda_Robustness.copy_to_host())
+        r.append(cuda_robustness.copy_to_host())
+        ######
         if verbose : 
             current_time = getTime(
                 current_time, 'Robustness estimated (Total)')
@@ -153,7 +159,7 @@ def main(ref_img, comp_imgs, options, params):
             current_time, 'Merge finished (Total)')
         print('\nTotal ellapsed time : ', time() - t1)
         
-    return output, cuda_final_alignment
+    return output, cuda_final_alignment, R, r
 
 #%%
 
@@ -251,6 +257,7 @@ def process(burst_path, options, params, crop_str=None):
         
     if params['mode'] == 'bayer':
         params["merging"]["tuning"]['tileSize'] *= 2
+        params["robustness"]["tuning"]['tileSize'] *= 2
 
     
         

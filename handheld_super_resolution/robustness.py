@@ -109,6 +109,8 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
     s2 = params['tuning']["s2"]
     Mt = params['tuning']["Mt"]
     
+    n_patch_y, n_patch_x, _ = flows.shape
+    
     # moving noise model to GPU
     cuda_std_curve = cuda.to_device(params['std_curve'])
     cuda_diff_curve = cuda.to_device(params['diff_curve'])
@@ -136,7 +138,7 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
             decimate_to_rgb[rgb_imshape, (2, 2)](comp_img, cuda_comp_rgb_img, CFA_pattern)
             
             
-            comp_local_stats = cuda.device_array(rgb_imshape+(2, 3), dtype=DEFAULT_NUMPY_FLOAT_TYPE) # mu for rgb
+            comp_local_stats = cuda.device_array(rgb_imshape+(2, 3), dtype=DEFAULT_NUMPY_FLOAT_TYPE) # mu, sigma for rgb
         else:
             comp_rgb_img = comp_img[None].transpose((1,2,3,0)) # adding dimension 1 for single channel
             cuda_comp_rgb_img = cuda.to_device(comp_rgb_img)
@@ -160,6 +162,7 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
                 current_time, ' - Local stats estimated')
         
         # computing d
+        # TODO this is taking too long
         d = cuda.device_array(rgb_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
         cuda_compute_patch_dist[rgb_imshape, (n_channels)](
             ref_local_stats, comp_local_stats, flows, tile_size, d)
@@ -180,9 +183,8 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
                 current_time, ' - Applied noise model')
         
         # applying flow discontinuity penalty
-        # TODO how about a patchwise S ?
-        S = cuda.device_array(rgb_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
-        compute_s[S.shape, (3, 3)](flows, rgb_imshape, tile_size, Mt, s1, s2, S)
+        S = cuda.device_array((n_patch_y, n_patch_x), DEFAULT_NUMPY_FLOAT_TYPE)
+        compute_s[S.shape, (3, 3)](flows, Mt, s1, s2, S)
         
         cuda.synchronize()
         if VERBOSE > 2 :
@@ -206,7 +208,7 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
         temp = np.ones(rgb_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
         r = cuda.to_device(temp)
         R = cuda.to_device(temp)
-    return R, r
+    return S, r
 
 @cuda.jit
 def decimate_to_rgb(raw_img, rgb_img, CFA):
@@ -271,17 +273,47 @@ def compute_local_stats(rgb_img, local_stats):
         local_stats[idy, idx, 1, tx] = local_stats[idy, idx, 1, tx]/9 -  local_stats[idy, idx, 0, tx]**2
         
 @cuda.jit
-def cuda_compute_patch_dist(ref_local_stats, comp_local_stats, flow, tile_size, d):
+def cuda_compute_patch_dist(ref_local_stats, comp_local_stats, flow, tile_size, dist):
+    """
+    Computes the map of d**2 based on the map of µ
+
+    Parameters
+    ----------
+    ref_local_stats : Device Array[tgb_imshape_y, rgb_imshape_x, 2, 3]
+        mu, sigma map for rgb (or grey) for reference image
+    comp_local_stats : Device Array[tgb_imshape_y, rgb_imshape_x, 2, 3]
+        mu, sigma map for rgb (or grey) for compared image
+    flow : TYPE
+        DESCRIPTION.
+    tile_size : TYPE
+        DESCRIPTION.
+    dist : TYPE
+        DESCRIPTION.
+
+    Returns
+    -------
+    None.
+
+    """
     idy, idx = cuda.blockIdx.x, cuda.blockIdx.y
     channel = cuda.threadIdx.x
     imsize = ref_local_stats.shape[:-1]
+    channels = cuda.blockDim.x # number of channels 
     
-    # 0 init in parallel
-    d[idy, idx] = 0
-    cuda.syncthreads()
+    d = cuda.shared.array(3, DEFAULT_CUDA_FLOAT_TYPE) # we may use only 1 coeff
+    d[channel] = 0
     
+    ## Fetching flow
     local_flow = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE) # local array would work too, but shared memory is faster
-    get_closest_flow(idx, idy, flow, tile_size, imsize, local_flow)
+    if channels == 1:
+        patch_idy = round(idy//(tile_size//2)) # "rgb" scale is actually coarse scale
+        patch_idx = round(idx//(tile_size//2))
+    else:
+        patch_idy = round(2*idy//(tile_size//2)) # rgb scale is 2 times sparser
+        patch_idx = round(2*idx//(tile_size//2))
+    local_flow[0] = flow[patch_idy, patch_idx, 0]
+    local_flow[1] = flow[patch_idy, patch_idx, 1]
+    # get_closest_flow(idx, idy, flow, tile_size, imsize, local_flow)
     # tile_size is defined in term of grey pixels. In bayer case, the grey pixel density is the same as the rgb decimated density : 4 times less than bayer
     # In the grey case, all densities are equal.
     
@@ -290,14 +322,18 @@ def cuda_compute_patch_dist(ref_local_stats, comp_local_stats, flow, tile_size, 
     # TODO rgb values to be compared are not proprely known. Nearest neighboor interpolation
     # is a possibility, but bilinear may be better
     
-    inbound = (0 <= new_idx < imsize[1]) and (0<= new_idy < imsize[0])
+    inbound = (0 <= new_idx < imsize[1]) and (0 <= new_idy < imsize[0])
     if inbound : 
-        diff = ref_local_stats[idy, idx, 0, channel] - comp_local_stats[new_idy, new_idx, 0, channel]
-        cuda.atomic.add(d, (idy, idx), diff*diff)
-        # d[channel] = ref_local_stats[idy, idx, channel] - comp_local_stats[im_id, new_idy, new_idx, channel]
+        d[channel] = ref_local_stats[idy, idx, 0, channel] - comp_local_stats[new_idy, new_idx, 0, channel]
     else:
-        d[idy, idx] = 0/0 # Nan
-
+        d[channel] = +1/0 # + infinite distance will induce R = 0
+    
+    if channels == 1:
+        dist[idy, idx] = d[0]*d[0]
+    else:
+        cuda.syncthreads()
+        dist[idy, idx] = d[0]*d[0] + d[1]*d[1] + d[2]*d[2]
+        
 @cuda.jit
 def cuda_apply_noise_model(d, sigma, ref_local_stats, std_curve, diff_curve):
     idy, idx = cuda.blockIdx.x, cuda.blockIdx.y
@@ -321,18 +357,14 @@ def cuda_apply_noise_model(d, sigma, ref_local_stats, std_curve, diff_curve):
     sigma[idy, idx] = max(sigma_ms, sigma_md)
     
 @cuda.jit
-def compute_s(flows, rgb_imsize, tile_size, M_th, s1, s2, S):
+def compute_s(flows, M_th, s1, s2, S):
     """ Computes s at avery position based on flow irregularities
     
 
     Parameters
     ----------
-    flows : device Array[n_images, n_tiles_y, n_tiles_x, 2]
+    flows : device Array[n_tiles_y, n_tiles_x, 2]
         Patch wise optical flow
-    rgb_imsize : tuple (2)
-        Shape of the rgb image
-    tile_size : int
-        Size of the tiles
     M_th : float
         Threshold for M.
     s1 : float
@@ -348,7 +380,10 @@ def compute_s(flows, rgb_imsize, tile_size, M_th, s1, s2, S):
 
     """
     tx, ty = cuda.threadIdx.x - 1, cuda.threadIdx.y - 1 # 3 by 3 neigbhorhood
-    pixel_idy, pixel_idx = cuda.blockIdx.x, cuda.blockIdx.y
+    patch_idy, patch_idx = cuda.blockIdx.x, cuda.blockIdx.y
+    
+    n_patch_y, n_patch_x, _ = flows.shape
+    
     
     mini = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
     maxi = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
@@ -357,14 +392,15 @@ def compute_s(flows, rgb_imsize, tile_size, M_th, s1, s2, S):
     maxi[0] = -1/0
     maxi[1] = -1/0
     
-    y = pixel_idy + ty
-    x = pixel_idx + tx
+    y = patch_idy + ty
+    x = patch_idx + tx
     
-    inbound = (0 <= x < rgb_imsize[1] and 0 <= y < rgb_imsize[0])
+    inbound = (0 <= x < n_patch_x and 0 <= y < n_patch_y)
 
     if inbound:
         flow = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) #local array, each threads manipulates a different flow
-        get_closest_flow(x, y, flows, tile_size, rgb_imsize, flow)# x and y are on grey scale and tile_size is expressed in grey pixels
+        flow[0] = flows[y, x, 0]
+        flow[1] = flows[y, x, 1]
         
         #local max search
         cuda.atomic.max(maxi, 0, flow[0])
@@ -376,9 +412,9 @@ def compute_s(flows, rgb_imsize, tile_size, M_th, s1, s2, S):
     cuda.syncthreads()    
     if tx == 0 and ty == 0:
         if (maxi[0] - mini[0])**2 + (maxi[1] - mini[1])**2 > M_th**2:
-            S[pixel_idy, pixel_idx] = s1
+            S[patch_idy, patch_idx] = s1
         else:
-            S[pixel_idy, pixel_idx] = s2
+            S[patch_idy, patch_idx] = s2
 
 @cuda.jit
 def compute_local_min(R, r):
@@ -422,7 +458,15 @@ def compute_local_min(R, r):
 @cuda.jit    
 def cuda_compute_robustness(d, sigma, S, t, R):
     idy, idx = cuda.blockIdx.x, cuda.blockIdx.y
+    n_patch_y, n_patch_x = S.shape
+    rgb_imshape_y, rgb_imshaep_x = d.shape
     
-    R[idy, idx] = clamp(S[idy, idx]*exp(-d[idy, idx]/sigma[idy, idx]) - t,
+    # fetching patch id (for S). I use a cross product to avoid
+    # adding unnecessary arguments to the function. Not that it works with 1 or 3 channels
+    patch_idy = round(idy * n_patch_y / rgb_imshape_y)
+    patch_idx = round(idy * n_patch_y / rgb_imshape_y)
+
+    
+    R[idy, idx] = clamp(S[patch_idy, patch_idx]*exp(-d[idy, idx]/sigma[idy, idx]) - t,
                         0, 1)
         
