@@ -208,7 +208,7 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
         temp = np.ones(rgb_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
         r = cuda.to_device(temp)
         R = cuda.to_device(temp)
-    return S, r
+    return R, r
 
 @cuda.jit
 def decimate_to_rgb(raw_img, rgb_img, CFA):
