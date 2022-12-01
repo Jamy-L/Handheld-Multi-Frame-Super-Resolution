@@ -79,9 +79,7 @@ def align_image_block_matching(img, referencePyramid, options, params, debug=Fal
     img_padded = np.pad(img, ((paddingTop, paddingBottom), (paddingLeft, paddingRight)), 'symmetric')
     
     
-    # TODO
-    dev_img_padded = cuda.to_device(img_padded) # for debug only
-    cuda.synchronize()
+
     # For convenience
     currentTime, verbose = time(), options['verbose'] > 2
     # factors, tileSizes, distances, searchRadia and subpixels are described fine-to-coarse
@@ -98,7 +96,7 @@ def align_image_block_matching(img, referencePyramid, options, params, debug=Fal
     # Align alternate image to the reference image
 
     # 4-level coarse-to fine pyramid of alternate image
-    alternatePyramid = hdrplusPyramid(dev_img_padded, factors)
+    alternatePyramid = hdrplusPyramid(cuda.to_device(img_padded), factors)
     if verbose:
         currentTime = getTime(currentTime, ' --- Create alt pyramid')
 
@@ -653,7 +651,6 @@ def get_patch_distance(referencePyramidLevel, alternatePyramidLevel,
     dst = cuda.device_array((h, w, sR, sR), DEFAULT_NUMPY_FLOAT_TYPE)
     threadsPerBlock = (tileSize, tileSize)
     blocks = (w, h, sR*sR)
-    
     if distance == 'L1':
         cuda_computeL1Distance_[blocks, threadsPerBlock](referencePyramidLevel, alternatePyramidLevel,
                                                           tileSize, searchRadius,
@@ -688,7 +685,7 @@ def cuda_computeL1Distance_(referencePyramidLevel, alternatePyramidLevel,
     new_idx = int(idx + local_flow[0] + sRx - searchRadius)
     new_idy = int(idy + local_flow[1] + sRy - searchRadius)
     
-    #  32x32 is the max size. We may need less, but shared array size must
+    # 32x32 is the max size. We may need less, but shared array size must
     # be known at compilation time. working with a flattened array makes reduction
     # easier
     d = cuda.shared.array((32*32), DEFAULT_CUDA_FLOAT_TYPE)
@@ -703,7 +700,7 @@ def cuda_computeL1Distance_(referencePyramidLevel, alternatePyramidLevel,
     d[z] = abs(local_diff)
     
     
-    # now reduction
+    # sum reduction
     N_reduction = int(math.log2(tileSize**2))
     
     step = 1
@@ -760,7 +757,8 @@ def cuda_computeL2Distance_(referencePyramidLevel, alternatePyramidLevel,
     new_idx = int(idx + local_flow[0] + sRx - searchRadius)
     new_idy = int(idy + local_flow[1] + sRy - searchRadius)
     
-    #  32x32 is the max size. We may need less, but shared array size must
+    
+    # 32x32 is the max size. We may need less, but shared array size must
     # be known at compilation time. working with a flattened array makes reduction
     # easier
     d = cuda.shared.array((32*32), DEFAULT_CUDA_FLOAT_TYPE)
@@ -770,12 +768,12 @@ def cuda_computeL2Distance_(referencePyramidLevel, alternatePyramidLevel,
             0 <= new_idy < referencePyramidLevel.shape[0]) :
         local_diff = 1/0 # infty out of bound
     else :
-        local_diff = referencePyramidLevel[idy, idx]-alternatePyramidLevel[new_idy, new_idx]
+        local_diff = referencePyramidLevel[idy, idx] - alternatePyramidLevel[new_idy, new_idx]
         
     d[z] = local_diff*local_diff
     
     
-    # now reduction
+    # sum reduction
     N_reduction = int(math.log2(tileSize**2))
     
     step = 1
