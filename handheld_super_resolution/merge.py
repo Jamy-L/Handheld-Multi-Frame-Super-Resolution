@@ -235,8 +235,8 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern
         chan = ty+1
         # this assignment is the initialisation of the accumulators.
         # There is no racing condition.
-        num[output_pixel_idy, output_pixel_idx, chan] = 0 #val[chan]
-        den[output_pixel_idy, output_pixel_idx, chan] = 0 #acc[chan]
+        num[output_pixel_idy, output_pixel_idx, chan] = val[chan]
+        den[output_pixel_idy, output_pixel_idx, chan] = acc[chan]
         
 # def init_merge2(ref_img, kernels, options, params):
 #     VERBOSE = options['verbose']
