@@ -596,6 +596,7 @@ def cuda_get_candidate_flows(ref_level, alt_level,
 def cuda_L1_dist(ref_level, alt_level, local_flow, new_tileSize):
     ups_tile_x, ups_tile_y = cuda.blockIdx.x, cuda.blockIdx.y
     tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
+    tile_size = cuda.blockDim.y
     
     x = int(ups_tile_x * new_tileSize//2 + tx)
     y = int(ups_tile_y * new_tileSize//2 + ty)
@@ -603,14 +604,36 @@ def cuda_L1_dist(ref_level, alt_level, local_flow, new_tileSize):
     new_x = int(x + local_flow[0])
     new_y = int(y + local_flow[1])
     
-    dist = cuda.shared.array(1, DEFAULT_CUDA_FLOAT_TYPE)
-    if tx==0 and ty==0:
-        dist[0]=0
+    
+    d = cuda.shared.array(32*32, DEFAULT_CUDA_FLOAT_TYPE)
+    z = ty*tile_size + tx
+    d[z] = abs(ref_level[y, x]-alt_level[new_y, new_x])
     cuda.syncthreads()
     
-    cuda.atomic.add(dist, 0, abs(ref_level[y, x]-alt_level[new_y, new_x]))
+    # reduction
+    N_reduction = int(math.log2(tile_size**2))
+    
+    step = 1
+    for i in range(N_reduction):
+        cuda.syncthreads()
+        if z%(2*step) == 0:
+            d[z] += d[z + step]
+        
+        step *= 2
+    
     cuda.syncthreads()
-    return dist[0]
+    return d[0]
+    
+    
+    # Slow old implementation
+    # dist = cuda.shared.array(1, DEFAULT_CUDA_FLOAT_TYPE)
+    # if tx==0 and ty==0:
+    #     dist[0]=0
+    # cuda.syncthreads()
+    
+    # cuda.atomic.add(dist, 0, abs(ref_level[y, x]-alt_level[new_y, new_x]))
+    # cuda.syncthreads()
+    # return dist[0]
 
 @cuda.jit
 def cuda_apply_best_flow(candidate_flows, distances, repeatFactor, upsampledAlignments):
