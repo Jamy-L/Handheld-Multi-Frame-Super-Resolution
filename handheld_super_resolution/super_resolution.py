@@ -31,8 +31,9 @@ from .params import check_params_validity
 NOISE_MODEL_PATH = Path(os.getcwd()) / 'data' 
         
 def main(ref_img, comp_imgs, options, params):
-    verbose = options['verbose'] > 1
-    verbose_2 = options['verbose'] > 2
+    verbose = options['verbose'] >= 1
+    verbose_2 = options['verbose'] >= 2
+    verbose_3 = options['verbose'] >= 3
     bayer_mode = params['mode']=='bayer'
     # debug
     R, r = [], []
@@ -47,7 +48,7 @@ def main(ref_img, comp_imgs, options, params):
     
     if bayer_mode :
         cuda_ref_grey = compute_grey_images(cuda_ref_img, grey_method)
-        if verbose_2 :
+        if verbose_3 :
             getTime(t1, "- Ref grey image estimated by {}".format(grey_method))
     else:
         cuda_ref_grey = cuda_ref_img
@@ -67,11 +68,11 @@ def main(ref_img, comp_imgs, options, params):
 
         
     #___ Kernel estimation
-    if verbose : 
+    if verbose_2 : 
         current_time = time()
         print('Estimating kernels')
     cuda_kernels = estimate_kernels(ref_img, options, params['merging'])
-    if verbose : 
+    if verbose_2 : 
         current_time = getTime(
             current_time, 'Kernels estimated (Total)')
     
@@ -88,33 +89,33 @@ def main(ref_img, comp_imgs, options, params):
         
         #___ Moving to GPU
         cuda_img = cuda.to_device(comp_imgs[im_id])
-        if verbose_2 : 
+        if verbose_3 : 
             current_time = getTime(
                 im_time, 'Arrays moved to GPU')
         
         if bayer_mode:
             cuda_im_grey = compute_grey_images(comp_imgs[im_id], grey_method)
-            if verbose_2 :
+            if verbose_3 :
                 current_time = getTime(current_time, "- grey images estimated by {}".format(grey_method))
         else:
             cuda_im_grey = cuda_img
         
         #___ Block Matching
         current_time = time()
-        if verbose :
+        if verbose_2 :
             print('Beginning block matching')
         
-        pre_alignment = align_image_block_matching(cuda_im_grey.copy_to_host(), referencePyramid, options, params['block matching'])
+        pre_alignment = align_image_block_matching(cuda_im_grey, referencePyramid, options, params['block matching'])
         
-        if verbose : 
+        if verbose_2 : 
             current_time = getTime(current_time, 'Block Matching (Total)')
         
         cuda_final_alignment = ICA_optical_flow(
             cuda_im_grey, cuda_ref_grey, ref_gradx, ref_grady, hessian, pre_alignment, options, params['kanade'])
         
         #___ Robustness
-        cuda.synchronize()
-        if verbose : 
+        if verbose_2 : 
+            cuda.synchronize()
             current_time = time()
         cuda_Robustness, cuda_robustness = compute_robustness(cuda_img, ref_local_stats, cuda_final_alignment,
                                                  options, params['robustness'])
@@ -122,15 +123,15 @@ def main(ref_img, comp_imgs, options, params):
         R.append(cuda_Robustness.copy_to_host())
         r.append(cuda_robustness.copy_to_host())
         ######
-        if verbose : 
+        if verbose_2 : 
             current_time = getTime(
                 current_time, 'Robustness estimated (Total)')
             print('\nEstimating kernels')
             
         #___ Kernel estimation
         cuda_kernels = estimate_kernels(comp_imgs[im_id], options, params['merging'])
-        cuda.synchronize()
-        if verbose : 
+        if verbose_2 :
+            cuda.synchronize()
             current_time = getTime(
                 current_time, 'Kernels estimated (Total)')
             
@@ -157,6 +158,7 @@ def main(ref_img, comp_imgs, options, params):
     if verbose : 
         current_time = getTime(
             current_time, 'Merge finished (Total)')
+    if verbose :
         print('\nTotal ellapsed time : ', time() - t1)
         
     return output, cuda_final_alignment, R, r

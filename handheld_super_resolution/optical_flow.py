@@ -185,7 +185,7 @@ def ICA_optical_flow(cuda_im_grey, cuda_ref_grey, cuda_gradx, cuda_grady, hessia
     if debug : 
         debug_list = []
         
-    current_time, verbose, verbose_2 = time(), options['verbose'] > 1, options['verbose'] > 2
+    verbose, verbose_2 = options['verbose'] > 1, options['verbose'] > 2
     n_iter = params['tuning']['kanadeIter']
     
     imsize_y, imsize_x = cuda_im_grey.shape
@@ -193,14 +193,16 @@ def ICA_optical_flow(cuda_im_grey, cuda_ref_grey, cuda_gradx, cuda_grady, hessia
 
         
     if verbose:
+        cuda.synchronize()
         t1 = time()
         current_time = time()
-        print("Estimating Lucas-Kanade's optical flow")
+        print("\nEstimating Lucas-Kanade's optical flow")
         
 
     cuda_alignment = cuda_pre_alignment
 
     if verbose_2 : 
+        cuda.synchronize()
         current_time = getTime(
             current_time, ' -- Arrays moved to GPU')
     
@@ -213,6 +215,7 @@ def ICA_optical_flow(cuda_im_grey, cuda_ref_grey, cuda_gradx, cuda_grady, hessia
             debug_list.append(cuda_alignment.copy_to_host())
     
     if verbose:
+        cuda.synchronize()
         getTime(t1, 'Flows estimated (Total)')
         print('\n')
         
@@ -261,7 +264,8 @@ def ICA_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, hes
     imsize_y, imsize_x = comp_img.shape
     n_patch_y, n_patch_x, _ = alignment.shape
     
-    if verbose_2 : 
+    if verbose_2 :
+        cuda.synchronize()
         print(" -- Lucas-Kanade iteration {}".format(iter_index))
     
     current_time = time()
@@ -275,6 +279,7 @@ def ICA_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, hes
             double_flow)   
 
     if verbose_2:
+        cuda.synchronize()
         current_time = getTime(
             current_time, ' --- Systems calculated and solved')
 

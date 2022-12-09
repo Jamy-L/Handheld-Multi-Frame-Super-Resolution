@@ -9,8 +9,10 @@ import math
 
 import numpy as np
 from numba import vectorize, guvectorize, uint8, uint16, int32, float32, float64, jit, njit, cuda, typeof
+import torch.nn.functional as F
+import torch
 
-from .utils import getTime, isTypeInt, clamp, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE
+from .utils import getTime, isTypeInt, clamp, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE
 from .utils_image import getTiles, getAlignedTiles, downsample, computeTilesDistanceL1_, computeDistance, subPixelMinimum, cuda_downsample
 
 
@@ -34,8 +36,11 @@ def init_block_matching(ref_img, options, params):
     
 	# pad all images (by mirroring image edges)
 	# separate reference and alternate images
-    ref_img_padded = np.pad(ref_img, ((paddingTop, paddingBottom), (paddingLeft, paddingRight)), 'symmetric')
-
+    # ref_img_padded = np.pad(ref_img, ((paddingTop, paddingBottom), (paddingLeft, paddingRight)), 'symmetric')
+    
+    th_ref_img = torch.as_tensor(ref_img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
+    
+    th_ref_img_padded = F.pad(th_ref_img, (paddingLeft, paddingRight, paddingTop, paddingBottom), 'circular')
 
 
 
@@ -47,7 +52,7 @@ def init_block_matching(ref_img, options, params):
 
     # construct 4-level coarse-to fine pyramid of the reference
     # TODO Pad image on GPU to save bandwith
-    referencePyramid = hdrplusPyramid(cuda.to_device(ref_img_padded), factors)
+    referencePyramid = hdrplusPyramid(th_ref_img_padded, factors)
     if verbose:
         currentTime = getTime(currentTime, ' --- Create ref pyramid')
     
@@ -76,8 +81,11 @@ def align_image_block_matching(img, referencePyramid, options, params, debug=Fal
     
 	# pad all images (by mirroring image edges)
 	# separate reference and alternate images
-    img_padded = np.pad(img, ((paddingTop, paddingBottom), (paddingLeft, paddingRight)), 'symmetric')
     
+    th_img = torch.as_tensor(img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
+    
+    # img_padded = np.pad(img, ((paddingTop, paddingBottom), (paddingLeft, paddingRight)), 'symmetric')
+    img_padded = F.pad(th_img, (paddingLeft, paddingRight, paddingTop, paddingBottom), 'circular')
     
 
     # For convenience
@@ -96,7 +104,7 @@ def align_image_block_matching(img, referencePyramid, options, params, debug=Fal
     # Align alternate image to the reference image
 
     # 4-level coarse-to fine pyramid of alternate image
-    alternatePyramid = hdrplusPyramid(cuda.to_device(img_padded), factors)
+    alternatePyramid = hdrplusPyramid(img_padded, factors)
     if verbose:
         currentTime = getTime(currentTime, ' --- Create alt pyramid')
 
@@ -293,6 +301,10 @@ def hdrplusPyramid(image, factors=[1, 2, 4, 4], kernel='gaussian'):
         pyramidLevels.append(cuda_downsample(pyramidLevels[-1], kernel, factor))
         # pyramidLevels.append(downsample(pyramidLevels[-1], kernel, factor))
 
+    # torch to numba, remove batch, channel dimensions
+    for i, pyramidLevel in enumerate(pyramidLevels):
+        pyramidLevels[i] = cuda.as_cuda_array(pyramidLevel.squeeze())
+        
     # Reverse the pyramid to get it coarse-to-fine
     return pyramidLevels[::-1]
 
@@ -424,8 +436,10 @@ def alignOnALevel2(referencePyramidLevel, alternatePyramidLevel, options, upsamp
     
     
     # For convenience
-    cuda.synchronize()
-    verbose, currentTime = options['verbose'] > 3, time()
+    verbose = options['verbose'] > 3
+    if verbose :
+        cuda.synchronize()
+        currentTime = time()
     imshape = referencePyramidLevel.shape
     
     # This formula is checked : it is correct
@@ -466,16 +480,16 @@ def alignOnALevel2(referencePyramidLevel, alternatePyramidLevel, options, upsamp
         
 
     
-    cuda.synchronize()
     if verbose:
+        cuda.synchronize()
         currentTime = getTime(currentTime, ' ---- Upsample alignments')
     
     dist = get_patch_distance(referencePyramidLevel, alternatePyramidLevel,
                               tileSize, searchRadius,
                               upsampledAlignments, distance)
     
-    cuda.synchronize()
     if verbose:
+        cuda.synchronize()
         currentTime = getTime(currentTime, ' ---- Distance computed')
     # threads of a same block are computing a single distance.
     # Therefore, the minimisation cannot be computed at the same time,
@@ -483,8 +497,8 @@ def alignOnALevel2(referencePyramidLevel, alternatePyramidLevel, options, upsamp
 
     cuda_minimize_distance[(w, h), (sR, sR)](dist, upsampledAlignments, searchRadius)
 
-    cuda.synchronize()
     if verbose:
+        cuda.synchronize()
         currentTime = getTime(currentTime, ' ---- Distance minimized')
     # TODO no subpixel. Maybe the effect is neglectible with LK
     # if subpixel:
@@ -526,7 +540,6 @@ def upsampleAlignments2(referencePyramidLevel, alternatePyramidLevel, previousAl
                                  upsamplingFactor, repeatFactor, tileSize)
 
     
-    cuda.synchronize()
     upsampledAlignments = cuda.device_array((n_tiles_y_new, n_tiles_x_new, 2), dtype=DEFAULT_NUMPY_FLOAT_TYPE)
     cuda_apply_best_flow[(n_tiles_x_new, n_tiles_y_new), (3)](candidate_flows, distances, repeatFactor, upsampledAlignments)
 
