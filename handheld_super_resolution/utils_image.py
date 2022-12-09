@@ -191,7 +191,7 @@ def downsample(image, kernel='gaussian', factor=2):
     else:
     	return filteredImage[:h2 * factor:factor, :w2 * factor:factor]
 
-def cuda_downsample(image, kernel='gaussian', factor=2):
+def cuda_downsample(th_img, kernel='gaussian', factor=2):
     '''Apply a convolution by a kernel if required, then downsample an image.
     Args:
      	image: Device Array the input image (WARNING: single channel only!)
@@ -200,17 +200,16 @@ def cuda_downsample(image, kernel='gaussian', factor=2):
     '''
     # Special case
     if factor == 1:
-     	return image
+     	return th_img
 
     # Filter the image before downsampling it
     if kernel is None:
-     	filteredImage = image
+     	raise ValueError('use Kernel')
     elif kernel == 'gaussian':
     	 t0 = perf_counter()
      	# gaussian kernel std is proportional to downsampling factor
     	 # filteredImage = gaussian_filter(image, sigma=factor * 0.5, order=0, output=None, mode='reflect')
          
-    	 th_img = torch.as_tensor(image, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
           # This is the default kernel of scipy gaussian_filter1d
           # Note that pytorch Convolve is actually a correlation, hence the ::-1 flip.
           # copy to avoid negative stride
@@ -221,14 +220,14 @@ def cuda_downsample(image, kernel='gaussian', factor=2):
         # 2 times gaussian 1d is faster than gaussian 2d
         # TODO I have not checked if the gaussian blur was exactly the same as outputed byt gaussian_filter1d
     	 temp = F.conv2d(th_img, th_gaussian_kernel[None, None, :, None]) # convolve y
-    	 th_filteredImage = F.conv2d(temp, th_gaussian_kernel[None, None, None, :])[0, 0] # convolve x
+    	 th_filteredImage = F.conv2d(temp, th_gaussian_kernel[None, None, None, :]) # convolve x
     else:
         raise ValueError("please use gaussian kernel")
 
     # Shape of the downsampled image
-    h2, w2 = np.floor(np.array(th_filteredImage.shape) / float(factor)).astype(np.int)
+    h2, w2 = np.floor(np.array(th_filteredImage.shape[2:]) / float(factor)).astype(np.int)
 
-    return cuda.as_cuda_array(th_filteredImage[:h2 * factor:factor, :w2 * factor:factor])
+    return th_filteredImage[:, :, :h2 * factor:factor, :w2 * factor:factor]
 
 
 def getAlignedTiles(image, tileSize, motionVectors):
