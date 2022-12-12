@@ -40,11 +40,12 @@ def init_merge(ref_img, kernels, options, params):
     den = cuda.device_array(output_size+(3,), dtype = DEFAULT_NUMPY_FLOAT_TYPE)
 
 
-    # specifying the block size
-    # 1 block per output pixel, 9 threads per block
-    threadsperblock = (3, 3)
-    # we need to swap the shape to have idx horiztonal
-    blockspergrid = (output_size[1], output_size[0])
+    # dispatching threads. 1 thread for 1 output pixel
+    threadsperblock = (16, 16) # maximum, we may take less
+    
+    blockspergrid_x = int(np.ceil(output_size[1]/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(output_size[0]/threadsperblock[0]))
+    blockspergrid = (blockspergrid_x, blockspergrid_y)
     
     accumulate_ref[blockspergrid, threadsperblock](
         ref_img, kernels, bayer_mode, act, SCALE, TILE_SIZE, CFA_pattern,
@@ -99,142 +100,130 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern
 
     """
 
-    output_pixel_idx, output_pixel_idy = cuda.blockIdx.x, cuda.blockIdx.y
-    tx = cuda.threadIdx.x-1
-    ty = cuda.threadIdx.y-1
+    output_pixel_idx, output_pixel_idy = cuda.grid(2)
+
     output_size_y, output_size_x, _ = num.shape
     input_size_y, input_size_x = ref_img.shape
     input_imsize = (input_size_y, input_size_x)
     
+    if not (0 <= output_pixel_idx < output_size_x and
+            0 <= output_pixel_idy < output_size_y):
+        return
+    
+    
     if bayer_mode:
         n_channels = 3
-        acc = cuda.shared.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-        val = cuda.shared.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        acc = cuda.local.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        val = cuda.local.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
     else:
         n_channels = 1
-        acc = cuda.shared.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-        val = cuda.shared.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        acc = cuda.local.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        val = cuda.local.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
 
     
-    coarse_ref_sub_pos = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) # y, x
-    
-    # single Threaded section
-    if tx == 0 and ty == 0:
-        
-        coarse_ref_sub_pos[0] = output_pixel_idy / scale          
-        coarse_ref_sub_pos[1] = output_pixel_idx / scale
-        
-        for chan in range(n_channels):
-            acc[chan] = 0
-            val[chan] = 0
+    coarse_ref_sub_pos = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) # y, x
 
-    inbound = (0 <= coarse_ref_sub_pos[1] + tx < input_size_x and
-               0 <= coarse_ref_sub_pos[0] + ty < input_size_y)
+    coarse_ref_sub_pos[0] = output_pixel_idy / scale          
+    coarse_ref_sub_pos[1] = output_pixel_idx / scale
     
-    cuda.syncthreads()
-    if inbound:
-        interpolated_cov = cuda.shared.array((2, 2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
-        cov_i = cuda.shared.array((2, 2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
+    for chan in range(n_channels):
+        acc[chan] = 0
+        val[chan] = 0
+
     
+    # computing kernel
+    if not act:
+        interpolated_cov = cuda.local.array((2, 2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+        cov_i = cuda.local.array((2, 2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
         
-        # coordinates of the top left bayer pixel in each of the 9
-        # neigbhoors bayer cells
         
-        thread_pixel_idx = round(coarse_ref_sub_pos[1]) + tx
-        thread_pixel_idy = round(coarse_ref_sub_pos[0]) + ty
-        
-        # computing kernel
-        if not act:
-            # fetching the 4 closest covs
-            close_covs = cuda.shared.array((2, 2, 2 ,2), DEFAULT_CUDA_FLOAT_TYPE)
-            grey_pos = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
-            if bayer_mode and tx==0 and ty==0:
-                grey_pos[0] = (coarse_ref_sub_pos[0]-0.5)/2 # grey grid is offseted and twice more sparse
-                grey_pos[1] = (coarse_ref_sub_pos[1]-0.5)/2
-                
-            elif tx==0 and ty==0:
-                grey_pos[0] = coarse_ref_sub_pos[0] # grey grid is exactly the coarse grid
-                grey_pos[1] = coarse_ref_sub_pos[1]
+        # fetching the 4 closest covs
+        close_covs = cuda.local.array((2, 2, 2 ,2), DEFAULT_CUDA_FLOAT_TYPE)
+        grey_pos = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
+        if bayer_mode:
+            grey_pos[0] = (coarse_ref_sub_pos[0]-0.5)/2 # grey grid is offseted and twice more sparse
+            grey_pos[1] = (coarse_ref_sub_pos[1]-0.5)/2
+            
+        else:
+            grey_pos[0] = coarse_ref_sub_pos[0] # grey grid is exactly the coarse grid
+            grey_pos[1] = coarse_ref_sub_pos[1]
     
-    cuda.syncthreads()
-    if inbound and not act:
-        
-            if tx >= 0 and ty >= 0: # TODO sides can get negative grey indexes. It leads to weird covs.
-                close_covs[0, 0, ty, tx] = covs[ 
+        for i in range(0, 2): # TODO sides can get negative grey indexes. It leads to weird covs.
+            for j in range(0, 2):    
+                close_covs[0, 0, i, j] = covs[ 
                                                 int(math.floor(grey_pos[0])),
                                                 int(math.floor(grey_pos[1])),
-                                                ty, tx]
-                close_covs[0, 1, ty, tx] = covs[
+                                                i, j]
+                close_covs[0, 1, i, j] = covs[
                                                 int(math.floor(grey_pos[0])),
                                                 int(math.ceil(grey_pos[1])),
-                                                ty, tx]
-                close_covs[1, 0, ty, tx] = covs[
+                                                i, j]
+                close_covs[1, 0, i, j] = covs[
                                                 int(math.ceil(grey_pos[0])),
                                                 int(math.floor(grey_pos[1])),
-                                                ty, tx]
-                close_covs[1, 1, ty, tx] = covs[
+                                                i, j]
+                close_covs[1, 1, i, j] = covs[
                                                 int(math.ceil(grey_pos[0])),
                                                 int(math.ceil(grey_pos[1])),
-                                                ty, tx]
-    cuda.syncthreads()
-    if inbound and not act:
-            # interpolating covs at the desired spot
-            if tx == 0 and ty == 0: # single threaded interpolation # TODO we may parallelize later
-                interpolate_cov(close_covs, grey_pos, interpolated_cov)
-                
-                
-                if abs(interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0]) > 1e-6: # checking if cov is invertible
-                    invert_2x2(interpolated_cov, cov_i)
-                else:
-                    cov_i[0, 0] = 1
-                    cov_i[0, 1] = 0
-                    cov_i[1, 0] = 0
-                    cov_i[1, 1] = 1
+                                                i, j]
+
+        # interpolating covs
+        interpolate_cov(close_covs, grey_pos, interpolated_cov)
+        
+        if abs(interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0]) > 1e-6: # checking if cov is invertible
+            invert_2x2(interpolated_cov, cov_i)
+        else:
+            cov_i[0, 0] = 1
+            cov_i[0, 1] = 0
+            cov_i[1, 0] = 0
+            cov_i[1, 1] = 1
                     
         
-    cuda.syncthreads()
-    if inbound : 
+    # iterating in 3x3 neighborhood
+    for i in range(-1, 2):
+        for j in range(-1, 2):
+            pixel_idx = round(coarse_ref_sub_pos[1]) + j
+            pixel_idy = round(coarse_ref_sub_pos[0]) + i
+            
+            # in bound condition
+            if (0 <= pixel_idx < output_size_x and
+                0 <= pixel_idy < output_size_y):
+            
+                # checking if pixel is r, g or b
+                if bayer_mode : 
+                    channel = uint8(CFA_pattern[pixel_idy%2, pixel_idx%2])
         
-        # checking if pixel is r, g or b
-        if bayer_mode : 
-            channel = uint8(CFA_pattern[thread_pixel_idy%2, thread_pixel_idx%2])
-
-        else:
-            channel = 0
-            
-            
-        if inbound: 
-            c = ref_img[thread_pixel_idy, thread_pixel_idx]
-
-
-        # applying invert transformation and upscaling
-        fine_sub_pos_x = scale * thread_pixel_idx
-        fine_sub_pos_y = scale * thread_pixel_idy
-        dist_x = (fine_sub_pos_x - output_pixel_idx)
-        dist_y = (fine_sub_pos_y - output_pixel_idy)
-
-        if act : 
-            y = max(0, 2*(dist_x*dist_x + dist_y*dist_y))
-        else:
-            y = max(0, quad_mat_prod(cov_i, dist_x, dist_y))
-            # y can be slightly negative because of numerical precision.
-            # I clamp it to not explode the error with exp
-        if bayer_mode : 
-            w = math.exp(-0.5*y/scale**2)
-        else:
-            w = math.exp(-0.5*4*y/scale**2) # original kernel constants are designed for bayer distances, not greys.
+                else:
+                    channel = 0
+                    
+                c = ref_img[pixel_idy, pixel_idx]
         
-        if inbound :
-            cuda.atomic.add(val, channel, c*w)
-            cuda.atomic.add(acc, channel, w)
-            
+        
+                # applying invert transformation and upscaling
+                fine_sub_pos_x = scale * pixel_idx
+                fine_sub_pos_y = scale * pixel_idy
+                dist_x = (fine_sub_pos_x - output_pixel_idx)
+                dist_y = (fine_sub_pos_y - output_pixel_idy)
+        
+                if act : 
+                    y = max(0, 2*(dist_x*dist_x + dist_y*dist_y))
+                else:
+                    y = max(0, quad_mat_prod(cov_i, dist_x, dist_y))
+                    # y can be slightly negative because of numerical precision.
+                    # I clamp it to not explode the error with exp
+                if bayer_mode : 
+                    w = math.exp(-0.5*y/scale**2)
+                else:
+                    w = math.exp(-0.5*4*y/scale**2) # original kernel constants are designed for bayer distances, not greys.
+                
+    
+                val[channel] += c*w
+                acc[channel] += w
+                    
+        
 
-    cuda.syncthreads()
-    if tx == 0 and ty+1 < n_channels:
-        chan = ty+1
-        # this assignment is the initialisation of the accumulators.
-        # There is no racing condition.
+    for chan in range(n_channels):
         num[output_pixel_idy, output_pixel_idx, chan] = val[chan]
         den[output_pixel_idy, output_pixel_idx, chan] = acc[chan]
           
@@ -291,13 +280,13 @@ def merge(comp_img, alignments, covs, r, num, den,
     output_size = (round(SCALE*native_im_size[0]), round(SCALE*native_im_size[1]))
 
 
-    # specifying the block size
-    # 1 block per output pixel, 9 threads per block
-    threadsperblock = (3, 3)
-    # we need to swap the shape to have idx horiztonal
-    blockspergrid = (output_size[1], output_size[0])
+    # dispatching threads. 1 thread for 1 output pixel
+    threadsperblock = (16, 16) # maximum, we may take less
+    
+    blockspergrid_x = int(np.ceil(output_size[1]/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(output_size[0]/threadsperblock[0]))
+    blockspergrid = (blockspergrid_x, blockspergrid_y)
                     
-    current_time = time()
     accumulate[blockspergrid, threadsperblock](
         comp_img, alignments, covs, r,
         bayer_mode, act, SCALE, TILE_SIZE, CFA_pattern,
@@ -352,172 +341,160 @@ def accumulate(comp_img, alignments, covs, r,
 
     """
 
-    output_pixel_idx, output_pixel_idy = cuda.blockIdx.x, cuda.blockIdx.y
-    tx = cuda.threadIdx.x-1
-    ty = cuda.threadIdx.y-1
+    output_pixel_idx, output_pixel_idy = cuda.grid(2)
+
     
     output_imsize = output_size_y, output_size_x, _ = num.shape
     input_imsize = input_size_y, input_size_x = comp_img.shape
     
+    if not (0 <= output_pixel_idx < output_size_x and
+            0 <= output_pixel_idy < output_size_y):
+        return
+    
     if bayer_mode:
         n_channels = 3
-        acc = cuda.shared.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-        val = cuda.shared.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        acc = cuda.local.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        val = cuda.local.array(3, dtype=DEFAULT_CUDA_FLOAT_TYPE)
     else:
         n_channels = 1
-        acc = cuda.shared.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-        val = cuda.shared.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        acc = cuda.local.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        val = cuda.local.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
 
-    
-    coarse_ref_sub_pos = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) # y, x
-    
-    # single Threaded section
-    if tx == 0 and ty == 0:
-        
-        coarse_ref_sub_pos[0] = output_pixel_idy / scale          
-        coarse_ref_sub_pos[1] = output_pixel_idx / scale
-        
-        for chan in range(n_channels):
-            acc[chan] = 0
-            val[chan] = 0
-    
-    cuda.syncthreads()
-    patch_center_pos = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE) # y, x
-    local_optical_flow = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
-    # inbound conditions are the same for each threads of a block.
-    # it remove the problem of conditional syncthreads()
-    inbound = (1 <= coarse_ref_sub_pos[1] < input_size_x - 1 and
-               1 <= coarse_ref_sub_pos[0] < input_size_y - 1)
     
+    coarse_ref_sub_pos = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) # y, x
+    
+    coarse_ref_sub_pos[0] = output_pixel_idy / scale          
+    coarse_ref_sub_pos[1] = output_pixel_idx / scale
+    
+    for chan in range(n_channels):
+        acc[chan] = 0
+        val[chan] = 0
+    
+
+    patch_center_pos = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE) # y, x
+    local_optical_flow = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+
+
+
     # fetching robustness
-    if inbound: 
-        if bayer_mode : 
-            local_r = r[round((coarse_ref_sub_pos[0] + ty - 0.5)/2),
-                        round((coarse_ref_sub_pos[1] + tx - 0.5)/2)]
+    # The robustness of the center of the patch is picked through neirest neigbhoor
 
-        else:
-            local_r = r[int(coarse_ref_sub_pos[0] + ty),
-                        int(coarse_ref_sub_pos[1] + tx)]
+    if bayer_mode : 
+        local_r = r[round((coarse_ref_sub_pos[0] - 0.5)/2),
+                    round((coarse_ref_sub_pos[1] - 0.5)/2)]
+
+    else:
+        local_r = r[int(coarse_ref_sub_pos[0]),
+                    int(coarse_ref_sub_pos[1])]
     
     
-    
-    # Single threaded fetch of the flow
-    if tx == 0 and ty == 0 and inbound: 
-        # get_closest_flow(coarse_ref_sub_pos[1], # flow is x, y and pos is y, x
-        #                   coarse_ref_sub_pos[0],
-        #                   alignments,
-        #                   tile_size,
-        #                   input_imsize,
-        #                   local_optical_flow)
+    # fetch of the flow
+    patch_idy = round(coarse_ref_sub_pos[0]//(tile_size//2))
+    patch_idx = round(coarse_ref_sub_pos[1]//(tile_size//2))
+    local_optical_flow[0] = alignments[patch_idy, patch_idx, 0]
+    local_optical_flow[1] = alignments[patch_idy, patch_idx, 1]
         
-        patch_idy = round(coarse_ref_sub_pos[0]//(tile_size//2))
-        patch_idx = round(coarse_ref_sub_pos[1]//(tile_size//2))
-        local_optical_flow[0] = alignments[patch_idy, patch_idx, 0]
-        local_optical_flow[1] = alignments[patch_idy, patch_idx, 1]
-            
-        patch_center_pos[1] = coarse_ref_sub_pos[1] + local_optical_flow[0]
-        patch_center_pos[0] = coarse_ref_sub_pos[0] + local_optical_flow[1]
-    
-    
-    # we need the position of the patch before computing the kernel
-    cuda.syncthreads()  
+    patch_center_pos[1] = coarse_ref_sub_pos[1] + local_optical_flow[0]
+    patch_center_pos[0] = coarse_ref_sub_pos[0] + local_optical_flow[1]
+
     
     # updating inbound condition
-    inbound &= (1 <= patch_center_pos[1] < input_size_x - 1 and
-                1 <= patch_center_pos[0] < input_size_y - 1)
+    if not (0 <= patch_center_pos[1] < input_size_x and
+            0 <= patch_center_pos[0] < input_size_y):
+        return
     
 
 
-    interpolated_cov = cuda.shared.array((2, 2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
-    cov_i = cuda.shared.array((2, 2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
-    thread_pixel_idx = round(patch_center_pos[1]) + tx
-    thread_pixel_idy = round(patch_center_pos[0]) + ty
     
     # computing kernel
-    if not act and inbound:
+    if not act:
+        interpolated_cov = cuda.local.array((2, 2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+        cov_i = cuda.local.array((2, 2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
         # fetching the 4 closest covs
-        close_covs = cuda.shared.array((2, 2, 2 ,2), DEFAULT_CUDA_FLOAT_TYPE)
-        grey_pos = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
-        if bayer_mode and tx==0 and ty==0:
+        close_covs = cuda.local.array((2, 2, 2 ,2), DEFAULT_CUDA_FLOAT_TYPE)
+        grey_pos = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
+        
+        if bayer_mode :
             grey_pos[0] = (patch_center_pos[0]-0.5)/2 # grey grid is offseted and twice more sparse
             grey_pos[1] = (patch_center_pos[1]-0.5)/2
             
-        elif tx==0 and ty==0:
+        else:
             grey_pos[0] = patch_center_pos[0] # grey grid is exactly the coarse grid
             grey_pos[1] = patch_center_pos[1]
         
-        cuda.syncthreads()
-        if tx >= 0 and ty >= 0: # TODO sides can get negative grey indexes. It leads to weird covs.
-            close_covs[0, 0, ty, tx] = covs[int(math.floor(grey_pos[0])),
-                                            int(math.floor(grey_pos[1])),
-                                            ty, tx]
-            close_covs[0, 1, ty, tx] = covs[int(math.floor(grey_pos[0])),
-                                            int(math.ceil(grey_pos[1])),
-                                            ty, tx]
-            close_covs[1, 0, ty, tx] = covs[ int(math.ceil(grey_pos[0])),
-                                            int(math.floor(grey_pos[1])),
-                                            ty, tx]
-            close_covs[1, 1, ty, tx] = covs[int(math.ceil(grey_pos[0])),
-                                            int(math.ceil(grey_pos[1])),
-                                            ty, tx]
-        cuda.syncthreads()
+        for i in range(0, 2):
+            for j in range(0, 2):# TODO sides can get negative grey indexes. It leads to weird covs.
+                close_covs[0, 0, i, j] = covs[int(math.floor(grey_pos[0])),
+                                                int(math.floor(grey_pos[1])),
+                                                i, j]
+                close_covs[0, 1, i, j] = covs[int(math.floor(grey_pos[0])),
+                                                int(math.ceil(grey_pos[1])),
+                                                i, j]
+                close_covs[1, 0, i, j] = covs[ int(math.ceil(grey_pos[0])),
+                                                int(math.floor(grey_pos[1])),
+                                                i, j]
+                close_covs[1, 1, i, j] = covs[int(math.ceil(grey_pos[0])),
+                                                int(math.ceil(grey_pos[1])),
+                                                i, j]
+
         # interpolating covs at the desired spot
-        if tx == 0 and ty == 0: # single threaded interpolation # TODO we may parallelize later
-            interpolate_cov(close_covs, grey_pos, interpolated_cov)
-    
-            if abs(interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0]) > 1e-6: # checking if cov is invertible
-                invert_2x2(interpolated_cov, cov_i)
-            else:
-                cov_i[0, 0] = 1
-                cov_i[0, 1] = 0
-                cov_i[1, 0] = 0
-                cov_i[1, 1] = 1
-                
-    
-    cuda.syncthreads()
-    
-    
-    # checking if pixel is r, g or b
-    if bayer_mode : 
-        channel = uint8(CFA_pattern[thread_pixel_idy%2, thread_pixel_idx%2])
-    else:
-        channel = 0
-        
-        
-    if inbound: 
-        c = comp_img[thread_pixel_idy, thread_pixel_idx]
+        interpolate_cov(close_covs, grey_pos, interpolated_cov)
 
-
-        # applying invert transformation and upscaling
-        fine_sub_pos_x = scale * (thread_pixel_idx - local_optical_flow[0])
-        fine_sub_pos_y = scale * (thread_pixel_idy - local_optical_flow[1])
-        dist_x = (fine_sub_pos_x - output_pixel_idx)
-        dist_y = (fine_sub_pos_y - output_pixel_idy)
-
-
-        if act : 
-            y = max(0, 2*(dist_x*dist_x + dist_y*dist_y))
+        if abs(interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0]) > 1e-6: # checking if cov is invertible
+            invert_2x2(interpolated_cov, cov_i)
         else:
-            y = max(0, quad_mat_prod(cov_i, dist_x, dist_y))
-            # y can be slightly negative because of numerical precision.
-            # I clamp it to not explode the error with exp
-        if bayer_mode : 
-            w = math.exp(-0.5*y/scale**2)
-        else:
-            w = math.exp(-0.5*4*y/scale**2) # original kernel constants are designed for bayer distances, not greys.
+            cov_i[0, 0] = 1
+            cov_i[0, 1] = 0
+            cov_i[1, 0] = 0
+            cov_i[1, 1] = 1
+    
+    for i in range(-1, 2):
+        for j in range(-1, 2):
+            
+            pixel_idx = round(patch_center_pos[1]) + j
+            pixel_idy = round(patch_center_pos[0]) + i
+            
+            # in bound condition
+            if (0 <= pixel_idx < output_size_x and
+                0 <= pixel_idy < output_size_y):
+            
+                # checking if pixel is r, g or b
+                if bayer_mode : 
+                    channel = uint8(CFA_pattern[pixel_idy%2, pixel_idx%2])
+                else:
+                    channel = 0
+                    
+                    
 
-
-        cuda.atomic.add(val, channel, c*w*local_r)
-        cuda.atomic.add(acc, channel, w*local_r)
+                c = comp_img[pixel_idy, pixel_idx]
+            
+            
+                # applying invert transformation and upscaling
+                fine_sub_pos_x = scale * (pixel_idx - local_optical_flow[0])
+                fine_sub_pos_y = scale * (pixel_idy - local_optical_flow[1])
+                dist_x = (fine_sub_pos_x - output_pixel_idx)
+                dist_y = (fine_sub_pos_y - output_pixel_idy)
+            
+            
+                if act : 
+                    y = max(0, 2*(dist_x*dist_x + dist_y*dist_y))
+                else:
+                    y = max(0, quad_mat_prod(cov_i, dist_x, dist_y))
+                    # y can be slightly negative because of numerical precision.
+                    # I clamp it to not explode the error with exp
+                if bayer_mode : 
+                    w = math.exp(-0.5*y/scale**2)
+                else:
+                    w = math.exp(-0.5*4*y/scale**2) # original kernel constants are designed for bayer distances, not greys.
         
-    cuda.syncthreads()
-    if tx == 0 and ty+1 < n_channels and inbound:
-        chan = ty+1
-        # This is the update of the accumulators, but it is single threaded :
-        # no racing condition.
+            
+                val[channel] += c*w*local_r
+                acc[channel] += w*local_r
+        
+    for chan in range(n_channels):
         num[output_pixel_idy, output_pixel_idx, chan] += val[chan] 
         den[output_pixel_idy, output_pixel_idx, chan] += acc[chan]
         

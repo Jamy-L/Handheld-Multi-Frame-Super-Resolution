@@ -80,7 +80,7 @@ def main(ref_img, comp_imgs, options, params):
     #___ init merge
     num, den = init_merge(cuda_ref_img, cuda_kernels, options, params["merging"])
 
-    
+    # cuda_final_alignment, R, r = None, None, None
     n_images = comp_imgs.shape[0]
     for im_id in range(n_images):
         if verbose :
