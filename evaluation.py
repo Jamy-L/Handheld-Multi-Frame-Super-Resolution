@@ -19,6 +19,7 @@ from skimage.transform import warp
 import colour_demosaicing
 import math
 from skimage import filters
+import pandas as pd
 
 from handheld_super_resolution.utils_image import compute_grey_images
 from handheld_super_resolution.super_resolution import main
@@ -333,22 +334,22 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, gt_flow, label="", im
 
     """
 
-    warped_images = np.empty(comp_alignment.shape[:-1]+(3,))
+    # warped_images = np.empty(comp_alignment.shape[:-1]+(3,))
     
-    im_EQ = np.empty(comp_alignment.shape[:-1])
+    # im_EQ = np.empty(comp_alignment.shape[:-1])
     mean_flow_qe = np.empty(comp_alignment.shape[0])
     print("Evaluating {}".format(label))
     for iteration in  tqdm(range(comp_alignment.shape[0])):
-        for image_index in range(comp_alignment.shape[1]):
-            warped_images[iteration, image_index] = warp_flow(comp_imgs[image_index],
-                                                              comp_alignment[iteration, image_index], rgb=True)
-            im_EQ[iteration, image_index] = im_SE(ref_img,
-                                                  warped_images[iteration, image_index])
-        # [it, image, posy, posx, flowxy
-        # gt flow : image, flowxyu -> it=None, image, poxy=None, posx=None, flowy
+    #     for image_index in range(comp_alignment.shape[1]):
+    #         warped_images[iteration, image_index] = warp_flow(comp_imgs[image_index],
+    #                                                           comp_alignment[iteration, image_index], rgb=True)
+    #         im_EQ[iteration, image_index] = im_SE(ref_img,
+    #                                               warped_images[iteration, image_index])
+    #     # [it, image, posy, posx, flowxy
+    #     # gt flow : image, flowxyu -> it=None, image, poxy=None, posx=None, flowy
         mean_flow_qe[iteration] = np.mean(np.linalg.norm(gt_flow[None][None][None].transpose((0,3,1,2,4)) - comp_alignment[iteration], axis=4), axis=(1,2,3))
     
-    last_im_MSE = np.mean(im_EQ[-1])
+    # last_im_MSE = np.mean(im_EQ[-1])
     if comp_alignment.shape[0] > 1:
         # plt.figure("flow MSE")
         # plt.plot([i for i in range(len(flow_EQ))], np.mean(flow_EQ, axis=(1,2,3)), label=label)
@@ -356,11 +357,11 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, gt_flow, label="", im
         # plt.ylabel('MSE on flow')
         # plt.legend()
         
-        plt.figure("image MSE")
-        plt.plot([i for i in range(len(im_EQ))], np.mean(im_EQ, axis=(1,2,3)), label=label)
-        plt.xlabel('lk iteration')
-        plt.ylabel('MSE on warped image')
-        plt.legend()
+        # plt.figure("image MSE")
+        # plt.plot([i for i in range(len(im_EQ))], np.mean(im_EQ, axis=(1,2,3)), label=label)
+        # plt.xlabel('lk iteration')
+        # plt.ylabel('MSE on warped image')
+        # plt.legend()
     
         plt.figure("flow norm")
         plt.plot([np.mean(np.linalg.norm(comp_alignment[i], axis=3)) for i in range(comp_alignment.shape[0])], label=label)
@@ -384,9 +385,9 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, gt_flow, label="", im
         # plt.plot([8], [last_flow_MSE], marker = 'x', label = "Farneback")
         # plt.legend()
         
-        plt.figure("image MSE")
-        plt.plot([params['kanade']['tuning']['kanadeIter']], [last_im_MSE], marker = 'x', label = "Farneback")
-        plt.legend()
+        # plt.figure("image MSE")
+        # plt.plot([params['kanade']['tuning']['kanadeIter']], [last_im_MSE], marker = 'x', label = "Farneback")
+        # plt.legend()
         
         plt.figure("flow norm")
         plt.plot([params['kanade']['tuning']['kanadeIter']], [np.mean(np.linalg.norm(comp_alignment[0], axis=3))] , marker = 'x', label = "Farneback")
@@ -400,17 +401,17 @@ def evaluate_alignment(comp_alignment, comp_imgs, ref_img, gt_flow, label="", im
         plt.ylabel("quadratic error on flow")
         plt.legend()
         
-    if imshow : 
-        for i in range(im_EQ.shape[0]):
-            # plt.figure("{} alignment, step {}".format(label, i))
-            # plt.imshow(np.log10(np.mean(flow_EQ[i], axis = 0)), cmap = "Reds")
-            # plt.colorbar()
+    # if imshow : 
+    #     for i in range(im_EQ.shape[0]):
+    #         # plt.figure("{} alignment, step {}".format(label, i))
+    #         # plt.imshow(np.log10(np.mean(flow_EQ[i], axis = 0)), cmap = "Reds")
+    #         # plt.colorbar()
             
-            plt.figure("{} warped alignment, step {}".format(label, i))
-            plt.imshow(np.log10(im_EQ[i,1]),vmin = -3, vmax=4, cmap = "Reds")
-            plt.colorbar()
+    #         plt.figure("{} warped alignment, step {}".format(label, i))
+    #         plt.imshow(np.log10(im_EQ[i,1]),vmin = -3, vmax=4, cmap = "Reds")
+    #         plt.colorbar()
 
-    return warped_images, im_EQ 
+    return mean_flow_qe
 
 #%% params
 #Warning : tileSize is expressed in terms of grey pixels.
@@ -479,11 +480,11 @@ if __name__=="__main__":
     #img = plt.imread("P:/Urban100_SR/image_SRF_4/img_040_SRF_4_HR.png")*255
     # img = plt.imread("P:/0002/Canon/im.JPG")
     img = plt.imread("P:/DIV2K_valid_HR/DIV2K_valid_HR/0900.png")*255
-    transformation_params = {'max_translation':3,
+    transformation_params = {'max_translation':5,
                               'max_shear': 0,
                               'max_ar_factor': 0,
                               'max_rotation': 0}
-    burst, flow = single2lrburst(img, 4, downsample_factor=2, transformation_params=transformation_params)
+    burst, flow = single2lrburst(img, 6, downsample_factor=2, transformation_params=transformation_params)
     # flow is unussable because it is pointing from moving frame to ref. We would need the opposite
     
     
@@ -505,12 +506,14 @@ if __name__=="__main__":
     plt.imshow(cv2.resize(colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(dec_burst[0], pattern='BGGR'), None, fx = params["merging"]['scale'], fy = params["merging"]['scale'], interpolation=cv2.INTER_CUBIC))
 
 #%% aligning LK on bayer
+    df = pd.DataFrame()
+
     ground_truth_flow = flow[1:,:,0,0]
     
     t1 = time()
     fb_alignment = align_fb(dec_burst*255, params)
     print('farneback evaluated : ', time()-t1)
-    fb_warped_images, fb_im_EQ = evaluate_alignment(fb_alignment[None], burst[1:]/255, burst[0]/255, ground_truth_flow, label = "FarneBack", imshow=True, params=params)
+    eq = evaluate_alignment(fb_alignment[None], burst[1:]/255, burst[0]/255, ground_truth_flow, label = "FarneBack", imshow=True, params=params)
 
     
     ## FFT BM
@@ -518,28 +521,28 @@ if __name__=="__main__":
     params["block matching"]['tuning']["tileSizes"] = big_tileSizes
     pre_alignment = align_bm(dec_burst, params)
     
-    mode = "LK"
-    params["kanade"]["grey method"] = "FFT"
-    params["kanade"]['tuning']['tileSize'] = big_Ts
-    label = "BM {}, {} {}, subpixels {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"], params['block matching']['tuning']['subpixels'])
-    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment, mode)
-    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+    
+    # mode = "LK"
+    # params["kanade"]["grey method"] = "FFT"
+    # params["kanade"]['tuning']['tileSize'] = big_Ts
+    # label = "BM {}, {} {}, subpixels {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"], params['block matching']['tuning']['subpixels'])
+    # raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment, mode)
+    # lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
 
     mode = "ICA"
     params["kanade"]["grey method"] = "FFT"
     params["kanade"]['tuning']['tileSize'] = big_Ts
-    label = "BM {}, {} {}, subpixels {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"], params['block matching']['tuning']['subpixels'])
+    label = "BM {}, {} {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"])
     raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment, mode)
-    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
-
+    eq = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+    df[label] = eq
     
-    
-#%%
     params["kanade"]["grey method"] = "decimating"
     params["kanade"]['tuning']['tileSize'] = small_Ts
-    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
-    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
-    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow,  label = label, imshow=False, params=params)
+    label = "BM {}, {} {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment, mode)
+    eq = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow,  label = label, imshow=False, params=params)
+    df[label] = eq
 
     # params["kanade"]["grey method"] = "gauss"
     # params["kanade"]['tuning']['tileSize'] = small_Ts
@@ -547,18 +550,13 @@ if __name__=="__main__":
     # raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
     # lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow,  label = label, imshow=False, params=params)
 
-    params["kanade"]["grey method"] = "FFT"
-    params["kanade"]['tuning']['tileSize'] = big_Ts
-    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
-    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
-    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
-
     params["kanade"]["grey method"] = "demosaicing"
     params["kanade"]['tuning']['tileSize'] = big_Ts
-    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
-    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
-    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
-
+    label = "BM {}, {} {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment, mode)
+    eq = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+    df[label] = eq
+    
     # demosaicing BM
     params["block matching"]["grey method"] = "demosaicing"
     params["block matching"]['tuning']["tileSizes"] = big_tileSizes
@@ -566,21 +564,24 @@ if __name__=="__main__":
     
     params["kanade"]["grey method"] = "decimating"
     params["kanade"]['tuning']['tileSize'] = small_Ts
-    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
-    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
-    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow,  label = label, imshow=False, params=params)
-
+    label = "BM {}, {} {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment, mode)
+    eq = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow,  label = label, imshow=False, params=params)
+    df[label] = eq
+    
     params["kanade"]["grey method"] = "FFT"
     params["kanade"]['tuning']['tileSize'] = big_Ts
-    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
-    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
-    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
-
+    label = "BM {}, {} {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment, mode)
+    eq = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+    df[label] = eq
+    
     params["kanade"]["grey method"] = "demosaicing"
     params["kanade"]['tuning']['tileSize'] = big_Ts
-    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
-    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
-    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+    label = "BM {}, {} {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment, mode)
+    eq = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+    df[label] = eq
 
     # gauss BM
     params["block matching"]["grey method"] = "gauss"
@@ -589,22 +590,25 @@ if __name__=="__main__":
     
     params["kanade"]["grey method"] = "decimating"
     params["kanade"]['tuning']['tileSize'] = small_Ts
-    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
-    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
-    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow,  label = label, imshow=False, params=params)
-
+    label = "BM {}, {} {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment, mode)
+    eq = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow,  label = label, imshow=False, params=params)
+    df[label] = eq
+    
     params["kanade"]["grey method"] = "FFT"
     params["kanade"]['tuning']['tileSize'] = big_Ts
-    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
-    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
-    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+    label = "BM {}, {} {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment, mode)
+    eq = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+    df[label] = eq
 
     params["kanade"]["grey method"] = "demosaicing"
     params["kanade"]['tuning']['tileSize'] = big_Ts
-    label = "BM {}, LK {}".format(params["block matching"]["grey method"],  params["kanade"]["grey method"])
-    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment)
-    lk_warped_images, lk_im_EQ = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
-
+    label = "BM {}, {} {}".format(params["block matching"]["grey method"], mode, params["kanade"]["grey method"])
+    raw_lk_alignment, upscaled_lk_alignment = align_lk(dec_burst, params, pre_alignment, mode)
+    eq = evaluate_alignment(upscaled_lk_alignment, burst[1:]/255, burst[0]/255, ground_truth_flow, label = label, imshow=False, params=params)
+    df[label] = eq
+    
 #%% plot flow
     maxrad = 10
     
