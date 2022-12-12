@@ -27,60 +27,101 @@ you can benefit from the following license terms attached to this file.
 """
 
 import math
+from time import perf_counter
 
 import numpy as np
 from scipy import signal
-from scipy.ndimage import gaussian_filter
-from numba import vectorize, guvectorize, uint8, uint16, float32, float64
+from scipy.ndimage import gaussian_filter, gaussian_filter1d
+from scipy.ndimage._filters import _gaussian_kernel1d
+from numba import vectorize, guvectorize, uint8, uint16, float32, float64, cuda
+import torch as th
+import torch.fft
+import torch.nn.functional as F
 
 import colour_demosaicing
-from .utils import getSigned, isTypeInt, DEFAULT_NUMPY_FLOAT_TYPE
-from scipy.fft import fft2, ifft2, fftshift, ifftshift
+from .utils import getSigned, isTypeInt, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_COMPLEX_TYPE, DEFAULT_TORCH_FLOAT_TYPE
 
-def compute_grey_images(ref_img, comp_img, method):
-    _, *imsize = n_images, imsize_y, imsize_x = comp_img.shape
-    if method == "decimating":
-        ref_img_grey = (ref_img[::2, ::2] + ref_img[1::2, 1::2] + ref_img[::2, 1::2] + ref_img[1::2, ::2])/4
-        comp_img_grey = (comp_img[:,::2, ::2] + comp_img[:,1::2, 1::2] + comp_img[:,::2, 1::2] + comp_img[:,1::2, ::2])/4
-    elif method == "FFT":
-            ref_img_grey = fftshift(fft2(ref_img))
-            # lowpass filtering
-            ref_img_grey[:imsize_y//4, :] = 0
-            ref_img_grey[:, :imsize_x//4] = 0
-            ref_img_grey[-imsize_y//4:, :] = 0
-            ref_img_grey[:, -imsize_x//4:] = 0
-            
-            ref_img_grey = np.real(ifft2(ifftshift(ref_img_grey)))
-            
-            comp_img_grey = np.empty_like(comp_img)
-            for im_id in range(n_images):
-                grey = fftshift(fft2(comp_img[im_id]))
-                # lowpass filtering
-                grey[:imsize_y//4, :] = 0
-                grey[:, :imsize_x//4] = 0
-                grey[-imsize_y//4:, :] = 0
-                grey[:, -imsize_x//4:] = 0
-                
-                comp_img_grey[im_id] = np.real(ifft2(ifftshift(grey)))
-    elif method == "demosaicing":
-            ref_img_dem = colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(ref_img)
-            comp_imgs_dem = []
-            for i in range(comp_img.shape[0]):
-                comp_imgs_dem.append(colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(comp_img[i]))
-            comp_imgs_dem=np.array(comp_imgs_dem)
-            
-            ref_img_grey = np.mean(ref_img_dem, axis=2)
-            comp_img_grey = np.mean(comp_imgs_dem, axis=3)
-    elif method == "gauss":
-        ref_img_grey = downsample(ref_img, kernel='bayer')
-        comp_img_grey = np.empty((comp_img.shape[0],)+ref_img_grey.shape)
-        for i in range(comp_img_grey.shape[0]):
-            comp_img_grey[i] = downsample(comp_img[i], kernel='bayer')
+def compute_grey_images(img, method):
+    """
+    img must already be on device
+
+    Parameters
+    ----------
+    img : TYPE
+        DESCRIPTION.
+    method : TYPE
+        DESCRIPTION.
+
+    Raises
+    ------
+    ValueError
+        DESCRIPTION.
+
+    Returns
+    -------
+    TYPE
+        DESCRIPTION.
+
+    """
+    imsize = imsize_y, imsize_x = img.shape
+    if method == "FFT":
+        torch_img_grey = th.as_tensor(img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+        torch_img_grey = torch.fft.fft2(torch_img_grey) 
+        # th FFT induces copy on the fly : this is good because we dont want to 
+        # modify the raw image, it is needed in the future
+        # Note : the complex dtype of the fft2 is inherited from DEFAULT_TORCH_FLOAT_TYPE.
+        # Therefore, for DEFAULT_TORCH_FLOAT_TYPE = float32 we directly get complex64
+        torch_img_grey = torch.fft.fftshift(torch_img_grey)
+        
+        imsize = imsize_y, imsize_x = torch_img_grey.shape
+        torch_img_grey[:imsize_y//4, :] = 0
+        torch_img_grey[:, :imsize_x//4] = 0
+        torch_img_grey[-imsize_y//4:, :] = 0
+        torch_img_grey[:, -imsize_x//4:] = 0
+        
+        torch_img_grey = torch.fft.ifftshift(torch_img_grey)
+        torch_img_grey = torch.fft.ifft2(torch_img_grey)
+        # Here, .real() type inherits once again from the complex type.
+        # numba type is read directly from the torch tensor, so everything goes fine.
+        return cuda.as_cuda_array(torch_img_grey.real)
     else:
-        raise ValueError('unknown method : {}'.format(method))
-    
-    return ref_img_grey.astype(DEFAULT_NUMPY_FLOAT_TYPE), comp_img_grey.astype(DEFAULT_NUMPY_FLOAT_TYPE)
+        raise NotImplemented('Computation of gray level on GPU is only supported for FFT')
+    # if method == "decimating":
+    #     img_grey = (img[::2, ::2] + img[1::2, 1::2] + img[::2, 1::2] + img[1::2, ::2])/4
+        
+    # elif method == "FFT":
 
+    #         # lowpass filtering
+    #         img_grey = fft_lowpass(img)
+
+            
+    # elif method == "demosaicing":
+    #         img_dem = colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(img)
+            
+    #         img_grey = np.mean(img_dem, axis=2)
+
+    # elif method == "gauss":
+    #     img_grey = downsample(img, kernel='bayer')
+    # else:
+    #     raise ValueError('unknown method : {}'.format(method))
+    
+    # return img_grey.astype(DEFAULT_NUMPY_FLOAT_TYPE)
+
+def fft_lowpass(img_grey):
+    img_grey = th.from_numpy(img_grey).to("cuda")
+    img_grey = torch.fft.fft2(img_grey)
+    img_grey = torch.fft.fftshift(img_grey)
+    
+    imsize = imsize_y, imsize_x = img_grey.shape
+    img_grey[:imsize_y//4, :] = 0
+    img_grey[:, :imsize_x//4] = 0
+    img_grey[-imsize_y//4:, :] = 0
+    img_grey[:, -imsize_x//4:] = 0
+    
+    img_grey = torch.fft.ifftshift(img_grey)
+    img_grey = torch.fft.ifft2(img_grey)
+    return img_grey.cpu().numpy().real
+    
 
 @vectorize([uint8(float32), uint8(float64)], target='parallel')
 def convert8bit_(x):
@@ -116,7 +157,21 @@ def downsample(image, kernel='gaussian', factor=2):
     	filteredImage = image
     elif kernel == 'gaussian':
     	# gaussian kernel std is proportional to downsampling factor
-    	filteredImage = gaussian_filter(image, sigma=factor * 0.5, order=0, output=None, mode='reflect')
+    	 filteredImage = gaussian_filter(image, sigma=factor * 0.5, order=0, output=None, mode='reflect')
+        # std = factor*0.5
+        # lim = int(np.ceil(3*std))
+        
+        # t = np.linspace(-lim, lim, 2*lim+1, dtype=DEFAULT_NUMPY_FLOAT_TYPE)/std
+        
+        # gauss = np.exp(-0.5*t*t)
+        # # TODO check syntax
+        # gauss /= np.sum(gauss) #normalizing
+        
+        # filteredImage = signal.convolve(image, gauss[:, None], mode="same", method = "fft")
+        # filteredImage = signal.convolve(filteredImage, gauss[None, :], mode="same", method = "fft")
+        
+        # filteredImage = gaussian_filter1d(image, axis = 0, sigma=factor * 0.5, order=0, output=None, mode='reflect', truncate=2.5)
+        # filteredImage = gaussian_filter1d(filteredImage, axis = 1, sigma=factor * 0.5, order=0, output=None, mode='reflect', truncate=2.5)
     elif kernel == 'bayer':
     	# Bayer means that a simple 2x2 aggregation is required
     	if isTypeInt(image):
@@ -135,6 +190,44 @@ def downsample(image, kernel='gaussian', factor=2):
     	return np.rint(filteredImage[:h2 * factor:factor, :w2 * factor:factor]).astype(image.dtype)
     else:
     	return filteredImage[:h2 * factor:factor, :w2 * factor:factor]
+
+def cuda_downsample(th_img, kernel='gaussian', factor=2):
+    '''Apply a convolution by a kernel if required, then downsample an image.
+    Args:
+     	image: Device Array the input image (WARNING: single channel only!)
+     	kernel: None / str ('gaussian' / 'bayer') / 2d numpy array
+     	factor: downsampling factor
+    '''
+    # Special case
+    if factor == 1:
+     	return th_img
+
+    # Filter the image before downsampling it
+    if kernel is None:
+     	raise ValueError('use Kernel')
+    elif kernel == 'gaussian':
+    	 t0 = perf_counter()
+     	# gaussian kernel std is proportional to downsampling factor
+    	 # filteredImage = gaussian_filter(image, sigma=factor * 0.5, order=0, output=None, mode='reflect')
+         
+          # This is the default kernel of scipy gaussian_filter1d
+          # Note that pytorch Convolve is actually a correlation, hence the ::-1 flip.
+          # copy to avoid negative stride
+    	 gaussian_kernel = _gaussian_kernel1d(sigma=factor * 0.5, order=0, radius=int(4*factor * 0.5 + 0.5))[::-1].copy()
+    	 th_gaussian_kernel = torch.as_tensor(gaussian_kernel, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+        
+
+        # 2 times gaussian 1d is faster than gaussian 2d
+        # TODO I have not checked if the gaussian blur was exactly the same as outputed byt gaussian_filter1d
+    	 temp = F.conv2d(th_img, th_gaussian_kernel[None, None, :, None]) # convolve y
+    	 th_filteredImage = F.conv2d(temp, th_gaussian_kernel[None, None, None, :]) # convolve x
+    else:
+        raise ValueError("please use gaussian kernel")
+
+    # Shape of the downsampled image
+    h2, w2 = np.floor(np.array(th_filteredImage.shape[2:]) / float(factor)).astype(np.int)
+
+    return th_filteredImage[:, :, :h2 * factor:factor, :w2 * factor:factor]
 
 
 def getAlignedTiles(image, tileSize, motionVectors):
@@ -212,7 +305,7 @@ def computeL1Distance_(win, ref, dum, res):
     	        res[n, i, j] = sum
 
 
-# ## NOTE: old implementation.
+
 @guvectorize(['void(float32[:, :, :], float32[:, :, :], float32[:, :, :], float32[:, :, :])'], '(n, w, w), (n, p, p), (n, t, t) -> (n, t, t)')
 def computeL2Distance__(win, ref, dum, res):
     # Dummy array dum only here to know the output size. Won't be used.
@@ -227,7 +320,8 @@ def computeL2Distance__(win, ref, dum, res):
                 sum = 0
                 for p in range(sP):
                     for q in range(sP):
-                        sum += (win[n, i + p, j + q] - ref[n, p, q])**2
+                        temp = (win[n, i + p, j + q] - ref[n, p, q])
+                        sum += temp*temp
                 # Store the distance
                 res[n, i, j] = sum
 
@@ -433,38 +527,3 @@ def getTiles(a, window, steps=None, axis=None):
     strides = tuple(astr * stp) + tuple(astr)
 
     return np.squeeze(np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides))
-
-
-
-if __name__ == '__main__':
-    from skimage import data, img_as_float32
-    import time
-    img = img_as_float32(data.astronaut())
-    img = img.mean(-1)
-    image1 = img[100:130, 100:145]
-    image2 = np.roll(img, (2,3))[100:130, 100:145]
-    win = 16
-    radius = 4
-
-    tiles1 = getTiles(image1, win +2*radius)
-    tiles1 = tiles1[...,radius:-radius, radius:-radius]
-    tiles2 = getTiles(image2, win +2*radius)
-    print(tiles1.shape, tiles2.shape)
-
-    # for convinience
-    h, w, sP, sP2 = tiles1.shape
-    hs, ws, sW, sW2 = tiles2.shape
-
-    # Reshape the input
-    win = tiles2.reshape(h * w, sW, sW)
-    ref = tiles1.reshape(h * w, sP, sP)
-    # Dummy input just to pass the output dimension to numba
-    dum = np.empty((h * w, sW - sP + 1, sW - sP + 1), dtype=ref.dtype)
-
-    # Compute the distance between the reference patch and all patches in the searching area
-    n = 1
-    # n = h*w
-    dst_fft = computeL2Distance_(win[:n], ref[:n], dum[:n])  # new implementation: based on FFT
-    # dst_direct = computeL2Distance_(win[:n], ref[:n], dum[:n])  # old implementation: nested for loops
-
-    print(np.linalg.norm(dst_direct - dst_fft) / np.prod(dst_fft.shape))

@@ -11,7 +11,7 @@ from time import time
 
 from pathlib import Path
 import numpy as np
-from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda, int32
+from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda, int32, typeof
 import exifread
 import rawpy
 import matplotlib.pyplot as plt
@@ -21,93 +21,147 @@ from scipy.fft import fft2, ifft2, fftshift, ifftshift
 import colour_demosaicing
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, crop
 from .utils_image import downsample, compute_grey_images
-from .merge import merge
+from .merge import merge, init_merge, division
 from .kernels import estimate_kernels
-from .block_matching import alignBurst
-from .optical_flow import lucas_kanade_optical_flow, ICA_optical_flow
-from .robustness import compute_robustness
+from .block_matching import alignBurst, init_block_matching, align_image_block_matching
+from .optical_flow import lucas_kanade_optical_flow, ICA_optical_flow, init_ICA
+from .robustness import init_robustness, compute_robustness
+from .params import check_params_validity
 
 NOISE_MODEL_PATH = Path(os.getcwd()) / 'data' 
         
 def main(ref_img, comp_imgs, options, params):
-    verbose = options['verbose'] > 1
-    verbose_2 = options['verbose'] > 2
+    verbose = options['verbose'] >= 1
+    verbose_2 = options['verbose'] >= 2
+    verbose_3 = options['verbose'] >= 3
     bayer_mode = params['mode']=='bayer'
+    # debug
+    R, r = [], []
+    ###
+    #___ Moving to GPU
+    cuda_ref_img = cuda.to_device(ref_img)
     
     
     #___ Raw to grey
-    grey_method_lk = params['kanade']['grey method']
-    grey_method_bm = params['block matching']['grey method']
+    grey_method = params['grey method']
+    t1 = time()
     
     if bayer_mode :
-        t1 = time()
-        ref_grey, comp_grey = compute_grey_images(ref_img, comp_imgs, grey_method_bm)
-        
-        if verbose_2 :
-            currentTime = getTime(t1, "- BM grey images estimated by {}".format(grey_method_bm))
+        cuda_ref_grey = compute_grey_images(cuda_ref_img, grey_method)
+        if verbose_3 :
+            getTime(t1, "- Ref grey image estimated by {}".format(grey_method))
     else:
-        ref_grey, comp_grey = ref_img, comp_imgs
+        cuda_ref_grey = cuda_ref_img
         
     #___ Block Matching
-    t1 = time()
-    if verbose :
-        print('Beginning block matching')
+    # TODO this function should be written for gpu
+    referencePyramid = init_block_matching(cuda_ref_grey.copy_to_host(), options, params['block matching'])
 
-    pre_alignment, _ = alignBurst(ref_grey, comp_grey,params['block matching'], options)
-    pre_alignment = pre_alignment[:, :, :, ::-1] # swapping x and y direction (x must be first)
-    if grey_method_bm in ["gauss", "decimating"] and bayer_mode:
-        pre_alignment*=2
-        # BM is always in grey mode, so input scale is output scale.
-        # we choose by convention, to always return flow on the coarse scale, so x2 if grey is 2x smaller
     
-    if verbose : 
-        current_time = getTime(t1, 'Block Matching (Total)')
+    #___ ICA : compute grad and hessian
+    # CPU array here, for convoluting with cv2 filters it's easier
+    ref_gradx, ref_grady, hessian = init_ICA(cuda_ref_grey, options, params['kanade'])
     
-    # TODO Raw to grey (could be removed in the final pipeline)
-    if bayer_mode:
-        ref_grey, comp_grey = compute_grey_images(ref_img, comp_imgs, grey_method_lk)
-        if verbose_2 :
-            current_time = getTime(current_time, "- LK grey images estimated by {}".format(grey_method_lk))
-    else:
-        ref_grey, comp_grey = ref_img, comp_imgs
-        
+    
+    #___ Local stats estimation
+    ref_local_stats = init_robustness(cuda_ref_img,options, params['robustness'])
 
-    #___ Moving to GPU
-    cuda_ref_img = cuda.to_device(ref_img)
-    cuda_comp_imgs = cuda.to_device(comp_imgs)
-    
-    if verbose_2 : 
-        current_time = getTime(
-            current_time, 'Arrays moved to GPU')
-    
-    #___ Lucas-Kanade Optical flow (or ICA)
-    cuda_final_alignment = ICA_optical_flow(
-        ref_grey, comp_grey, pre_alignment, options, params['kanade'])
-
-    #___ Robustness
-    if verbose : 
-        current_time = time()
-    cuda_Robustness, cuda_robustness = compute_robustness(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment,
-                                             options, params['robustness'])
-    if verbose : 
-        current_time = getTime(
-            current_time, 'Robustness estimated (Total)')
-        print('Estimating kernels')
         
     #___ Kernel estimation
-    cuda_kernels = estimate_kernels(ref_img, comp_imgs, options, params['merging'])
-    if verbose : 
+    if verbose_2 : 
+        current_time = time()
+        print('Estimating kernels')
+    cuda_kernels = estimate_kernels(ref_img, options, params['merging'])
+    if verbose_2 : 
         current_time = getTime(
             current_time, 'Kernels estimated (Total)')
+    
+    
+    #___ init merge
+    num, den = init_merge(cuda_ref_img, cuda_kernels, options, params["merging"])
+
+    
+    n_images = comp_imgs.shape[0]
+    for im_id in range(n_images):
+        if verbose :
+            print("\nProcessing image {} ---------\n".format(im_id+1))
+        im_time = time()
         
-    #___ Merging
-    output = merge(cuda_ref_img, cuda_comp_imgs, cuda_final_alignment, cuda_kernels, cuda_robustness, options, params['merging'])
+        #___ Moving to GPU
+        cuda_img = cuda.to_device(comp_imgs[im_id])
+        if verbose_3 : 
+            current_time = getTime(
+                im_time, 'Arrays moved to GPU')
+        
+        if bayer_mode:
+            cuda_im_grey = compute_grey_images(comp_imgs[im_id], grey_method)
+            if verbose_3 :
+                current_time = getTime(current_time, "- grey images estimated by {}".format(grey_method))
+        else:
+            cuda_im_grey = cuda_img
+        
+        #___ Block Matching
+        current_time = time()
+        if verbose_2 :
+            print('Beginning block matching')
+        
+        pre_alignment = align_image_block_matching(cuda_im_grey, referencePyramid, options, params['block matching'])
+        
+        if verbose_2 : 
+            current_time = getTime(current_time, 'Block Matching (Total)')
+        
+        cuda_final_alignment = ICA_optical_flow(
+            cuda_im_grey, cuda_ref_grey, ref_gradx, ref_grady, hessian, pre_alignment, options, params['kanade'])
+        
+        #___ Robustness
+        if verbose_2 : 
+            cuda.synchronize()
+            current_time = time()
+        cuda_Robustness, cuda_robustness = compute_robustness(cuda_img, ref_local_stats, cuda_final_alignment,
+                                                 options, params['robustness'])
+        # TODO debug
+        R.append(cuda_Robustness.copy_to_host())
+        r.append(cuda_robustness.copy_to_host())
+        ######
+        if verbose_2 : 
+            current_time = getTime(
+                current_time, 'Robustness estimated (Total)')
+            print('\nEstimating kernels')
+            
+        #___ Kernel estimation
+        cuda_kernels = estimate_kernels(comp_imgs[im_id], options, params['merging'])
+        if verbose_2 :
+            cuda.synchronize()
+            current_time = getTime(
+                current_time, 'Kernels estimated (Total)')
+            
+        #___ Merging
+        merge(cuda_img, cuda_final_alignment, cuda_kernels, cuda_robustness, num, den,
+              options, params['merging'])
+        if verbose :
+            getTime(
+                im_time, 'Image processed (Total)')
+    
+    # num is outwritten into num/den
+    channels = num.shape[-1]
+    threadsperblock = (16, 16, channels) # may be modified (3 h)
+    blockspergrid_x = int(np.ceil(num.shape[1]/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(num.shape[0]/threadsperblock[0]))
+    blockspergrid_z = 1
+
+    blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
+
+    division[blockspergrid, threadsperblock](num, den)
+    
+    output = num.copy_to_host()
+
     if verbose : 
         current_time = getTime(
             current_time, 'Merge finished (Total)')
-    if verbose:
+    if verbose :
         print('\nTotal ellapsed time : ', time() - t1)
-    return output, cuda_Robustness.copy_to_host(), cuda_robustness.copy_to_host(), cuda_final_alignment.copy_to_host(), cuda_kernels.copy_to_host()
+        
+    return output, cuda_final_alignment, R, r
 
 #%%
 
@@ -132,6 +186,7 @@ def process(burst_path, options, params, crop_str=None):
     # Reference image selection and metadata     
     raw = rawpy.imread(raw_path_list[ref_id])
     ref_raw = raw.raw_image.copy()
+    check_params_validity(params)
     
     if crop_str is not None:
         ref_raw = crop(ref_raw, crop_str, axis=(0, 1))
@@ -186,21 +241,27 @@ def process(burst_path, options, params, crop_str=None):
     if 'tileSize' not in params["merging"]["tuning"].keys():
         params["merging"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
 
-    # if 'mode' not in params["block matching"].keys():
-    #     params["block matching"]["mode"] = params['mode']
+
     if 'mode' not in params["kanade"].keys():
         params["kanade"]["mode"] = params['mode']
     if 'mode' not in params["robustness"].keys():
         params["robustness"]["mode"] = params['mode']
     if 'mode' not in params["merging"].keys():
         params["merging"]["mode"] = params['mode']
+        
+    params['kanade']['grey method'] = params['grey method']
     
     # systematically grey, so we can control internally how grey is obtained
     params["block matching"]["mode"] = 'grey'
-    if params["block matching"]["grey method"] in ["FFT", "demosaicing"]:
+    if params["grey method"] in ["FFT", "demosaicing"]:
         params["block matching"]['tuning']["tileSizes"] = [ts*2 for ts in params["block matching"]['tuning']["tileSizes"]]
-    if params["kanade"]["grey method"] in ["FFT", "demosaicing"]:
         params["kanade"]['tuning']["tileSize"] *= 2
+        
+    if params['mode'] == 'bayer':
+        params["merging"]["tuning"]['tileSize'] *= 2
+        params["robustness"]["tuning"]['tileSize'] *= 2
+
+    
         
 
     
