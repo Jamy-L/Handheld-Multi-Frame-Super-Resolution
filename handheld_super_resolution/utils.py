@@ -8,14 +8,16 @@ import time
 from math import cos, pi
 
 import numpy as np
-
 from numba import uint8, uint16, float32, float64, complex64, cuda
+import torch as th
+import torch.fft
 
 
 DEFAULT_CUDA_FLOAT_TYPE = float32
-# DEFAULT_CUDA_COMPLEX_TYPE = complex64
 DEFAULT_NUMPY_FLOAT_TYPE = np.float32
-# DEFAULT_NUMPY_COMPLEX_TYPE = np.complex64
+
+DEFAULT_TORCH_FLOAT_TYPE = th.float32
+DEFAULT_TORCH_COMPLEX_TYPE = th.complex64
 EPSILON = 1e-6
 
 

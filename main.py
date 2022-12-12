@@ -47,26 +47,28 @@ def cfa_to_grayscale(raw_img):
 # logger.setLevel(logging.WARNING)
 
 # crop_str = "[1638:2600, 1912:2938]" # for friant
-crop_str = "[1002:1686, 2406:3130]" # for rue4 (arrondissement)
+# crop_str = "[1002:1686, 2406:3130]" # for rue4 (arrondissement)
 # crop_str = "[1002:1686, 2000:2700]" # for rue4 (truck plate)
 # crop_str = "[500:2500, 1000:2500]" # for samsung 0
-# crop_str=None
+crop_str = None
 # crop_str = "[1500:2500, 2000:3000]" # for samsung 1
 
 #%%
 
 params = get_params(PSNR = 35)
-params["scale"] = 1.5
-options = {'verbose' : 3}
 
-params['merging']['kernel'] = 'handheld'
+params["scale"] = 1
+options = {'verbose' : 4}
+
+params['merging']['kernel'] = 'act'
 params['robustness']['on'] = False
 params['kanade']['tuning']['kanadeIter'] = 3
-# burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
-burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
+burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
+# burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
 # burst_path = 'P:/0001/Samsung'
 
-output, R, r, alignment, covs = process(burst_path, options, params, crop_str)
+params['kanade']['tuning']['sigma blur'] = 1
+output_img, cudal, R, r = process(burst_path, options, params, crop_str)
 
 
 #%% extracting images locally for comparison 
@@ -121,9 +123,6 @@ comp_images = np.clip(comp_images, 0.0, 1.0)
 
 #%% extracting handhled's output data
 
-upscaled_al = upscale_alignement(alignment, ref_img.shape, 16*2) 
-
-output_img = output[:,:,:3].copy()
 imsize = output_img.shape
 
 
@@ -165,7 +164,7 @@ plt.imshow(postprocessed_bicubic)
 #%% ploting images in crops
 crops_x = 2
 crops_y = 2
-crop_size = (int(output.shape[0]/crops_y), int(output.shape[1]/crops_x))
+crop_size = (int(output_img.shape[0]/crops_y), int(output_img.shape[1]/crops_x))
 
 for i in range(crops_y):
     for j in range(crops_x):

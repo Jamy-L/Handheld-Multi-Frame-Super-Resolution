@@ -22,11 +22,11 @@ def get_params(PSNR):
     
     params = {'scale' : 1,
               'mode' : 'bayer', # 'bayer' or grey if something else 
+              'grey method' : 'FFT',
               'block matching': {
-                    'grey method':"FFT",
                     'tuning': {
                         # WARNING: these parameters are defined fine-to-coarse!
-                        'factors': [1, 2, 2, 4],
+                        'factors': [1, 2, 4, 4],
                         'tileSizes': [Ts, Ts, Ts, int(Ts/2)],
                         'searchRadia': [1, 4, 4, 4],
                         'distances': ['L1', 'L2', 'L2', 'L2'],
@@ -34,8 +34,6 @@ def get_params(PSNR):
                         'subpixels': [False, True, True, True]
                         }},
                 'kanade' : {
-                    # FFT, demosaicing, decimating, gauss
-                    'grey method':"FFT",
                     'tuning' : {
                         'kanadeIter': 6, # 3
                         # gaussian blur before computing grads. If 0, no blur is applied
@@ -46,7 +44,7 @@ def get_params(PSNR):
                     'tuning' : {
                         't' : 0.12,         # 0.12
                         's1' : 2,           # 12
-                        's2' : 237,         # 2
+                        's2' : 12,#237,         # 2
                         'Mt' : 0.8,         # 0.8
                         }
                     },
@@ -62,3 +60,9 @@ def get_params(PSNR):
                         }
                     }}
     return params
+
+def check_params_validity(params):
+    # TODO
+    pass
+
+    
