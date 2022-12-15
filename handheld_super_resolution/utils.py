@@ -24,8 +24,8 @@ EPSILON = 1e-6
 def getTime(currentTime, labelName, printTime=True, spaceSize=50):
 	'''Print the elapsed time since currentTime. Return the new current time.'''
 	if printTime:
-		print(labelName, ' ' * (spaceSize - len(labelName)), ': ', round((time.time() - currentTime) * 1000, 2), 'milliseconds')
-	return time.time()
+		print(labelName, ' ' * (spaceSize - len(labelName)), ': ', round((time.perf_counter() - currentTime) * 1000, 2), 'milliseconds')
+	return time.perf_counter()
 
 def isTypeInt(array):
 	'''Check if the type of a numpy array is an int type.'''
@@ -67,7 +67,7 @@ def hamming(i, j, tile_size):
     return (0.54 + 0.46*cos(2*pi*i/tile_size)) * (0.54 + 0.46*cos(2*pi*j/tile_size))
 
 
-# for debugging and testing only, this is probably dirty and unoptimised
+# for debugging and testing only, this is probably unoptimised
 def crop(array, crop_str, axis):
     """
     

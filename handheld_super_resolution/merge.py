@@ -6,14 +6,13 @@ Created on Mon Aug  1 18:38:07 2022
 """
 
 
-from time import time
+import time
 import math
 
 import numpy as np
-from numba import uint8, uint16, int16, float32, float64, jit, njit, cuda, int32
+from numba import uint8, cuda
 
-from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, EPSILON
-from .optical_flow import get_closest_flow
+from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
 from .kernels import interpolate_cov
 from .linalg import quad_mat_prod, invert_2x2
 
@@ -28,14 +27,15 @@ def init_merge(ref_img, kernels, options, params):
     TILE_SIZE = params['tuning']['tileSize']
 
     if VERBOSE > 1:
+        cuda.synchronize()
         print('Beginning merge process')
-        current_time = time()
+        current_time = time.perf_counter()
         
 
     native_im_size = ref_img.shape
     # casting to integer to account for floating scale
     output_size = (round(SCALE*native_im_size[0]), round(SCALE*native_im_size[1]))
-    # output_img = cuda.device_array(output_size+(19 + 10*N_IMAGES,), dtype = DEFAULT_NUMPY_FLOAT_TYPE) #third dim for rgb channel
+
     num = cuda.device_array(output_size+(3,), dtype = DEFAULT_NUMPY_FLOAT_TYPE)
     den = cuda.device_array(output_size+(3,), dtype = DEFAULT_NUMPY_FLOAT_TYPE)
 
@@ -50,9 +50,10 @@ def init_merge(ref_img, kernels, options, params):
     accumulate_ref[blockspergrid, threadsperblock](
         ref_img, kernels, bayer_mode, act, SCALE, TILE_SIZE, CFA_pattern,
         num, den)
-    cuda.synchronize()
     
-    if VERBOSE > 2:
+    
+    if VERBOSE > 1:
+        cuda.synchronize()
         current_time = getTime(
             current_time, ' - Ref frame merged')
     
@@ -60,12 +61,9 @@ def init_merge(ref_img, kernels, options, params):
     
     
 @cuda.jit('void(float32[:,:], float32[:,:,:,:], boolean, boolean, int32, int32, int32[:,:], float32[:,:,:], float32[:,:,:])')
-def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern,
+def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
                    num, den):
     """
-    Cuda kernel, each block represents an output pixel. Each block contains
-    a 3 by 3 neighborhood for each moving image. A single threads takes
-    care of one of these pixels, for all the moving images.
 
 
 
@@ -73,23 +71,15 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern
     ----------
     ref_img : Array[imsize_y, imsize_x]
         The reference image
-    comp_imgs : Array[n_images, imsize_y, imsize_x]
-        The compared images
-    alignements : Array[n_images, n_tiles_y, n_tiles_x, 2]
-        The alignemtn vectors for each tile of each image
-    covs : device array[n_images+1, imsize_y/2, imsize_x/2, 2, 2]
-        covariance matrices sampled at the center of each bayer quad.
-    r : Device_Array[n_images, imsize_y/2, imsize_x/2, 3]
-            Robustness of the moving images
+    covs : device array[grey_imsize_y, grey_imsize_x, 2, 2]
+        covariance matrices sampled at the center of each grey pixel.
     bayer_mode : bool
         Whether the burst is raw or grey
     act : bool
         Whether ACT kernels should be used, or handhled's kernels.
     scale : float
         scaling factor
-    tile_size : int
-        tile size used for alignment (on the raw scale !)
-    CFA_pattern : device Array[2, 2]
+    CFA_pattern : Array[2, 2]
         CFA pattern of the burst
     output_img : Array[SCALE*imsize_y, SCALE_imsize_x]
         The empty output image
@@ -103,8 +93,6 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern
     output_pixel_idx, output_pixel_idy = cuda.grid(2)
 
     output_size_y, output_size_x, _ = num.shape
-    input_size_y, input_size_x = ref_img.shape
-    input_imsize = (input_size_y, input_size_x)
     
     if not (0 <= output_pixel_idx < output_size_x and
             0 <= output_pixel_idy < output_size_y):
@@ -133,6 +121,7 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern
 
     
     # computing kernel
+    # TODO this is rather slow and could probably be sped up
     if not act:
         interpolated_cov = cuda.local.array((2, 2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
         cov_i = cuda.local.array((2, 2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
@@ -149,7 +138,7 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern
             grey_pos[0] = coarse_ref_sub_pos[0] # grey grid is exactly the coarse grid
             grey_pos[1] = coarse_ref_sub_pos[1]
     
-        for i in range(0, 2): # TODO sides can get negative grey indexes. It leads to weird covs.
+        for i in range(0, 2): # TODO Check undesirable effects on the imagse side
             for j in range(0, 2):    
                 close_covs[0, 0, i, j] = covs[ 
                                                 int(math.floor(grey_pos[0])),
@@ -173,7 +162,7 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern
         
         if abs(interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0]) > 1e-6: # checking if cov is invertible
             invert_2x2(interpolated_cov, cov_i)
-        else:
+        else: # if not invertible, identity matrix
             cov_i[0, 0] = 1
             cov_i[0, 1] = 0
             cov_i[1, 0] = 0
@@ -193,7 +182,6 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern
                 # checking if pixel is r, g or b
                 if bayer_mode : 
                     channel = uint8(CFA_pattern[pixel_idy%2, pixel_idx%2])
-        
                 else:
                     channel = 0
                     
@@ -212,16 +200,13 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, tile_size, CFA_pattern
                     y = max(0, quad_mat_prod(cov_i, dist_x, dist_y))
                     # y can be slightly negative because of numerical precision.
                     # I clamp it to not explode the error with exp
-                if bayer_mode : 
-                    w = math.exp(-0.5*y/scale**2)
-                else:
-                    w = math.exp(-0.5*4*y/scale**2) # original kernel constants are designed for bayer distances, not greys.
-                
+         
+            
+                w = math.exp(-0.5*y/(scale**2))
     
                 val[channel] += c*w
                 acc[channel] += w
                     
-        
 
     for chan in range(n_channels):
         num[output_pixel_idy, output_pixel_idx, chan] = val[chan]
@@ -273,7 +258,7 @@ def merge(comp_img, alignments, covs, r, num, den,
 
     if VERBOSE > 1:
         print('\nBeginning merge process')
-        current_time = time()
+        current_time = time.perf_counter()
 
     native_im_size = comp_img.shape
     # casting to integer to account for floating scale
@@ -294,7 +279,7 @@ def merge(comp_img, alignments, covs, r, num, den,
         )
     cuda.synchronize()
 
-    if VERBOSE > 2:
+    if VERBOSE > 1:
         current_time = getTime(
             current_time, ' - Image merged on GPU side')
 

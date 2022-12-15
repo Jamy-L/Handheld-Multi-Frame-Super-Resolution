@@ -4,7 +4,7 @@ Created on Mon Sep 12 11:31:38 2022
 
 @author: jamyl
 """
-from time import time, perf_counter
+import time
 import math
 
 import numpy as np
@@ -45,7 +45,7 @@ def init_block_matching(ref_img, options, params):
 
 
     # For convenience
-    currentTime, verbose = time(), options['verbose'] > 2
+    currentTime, verbose = time.perf_counter(), options['verbose'] > 2
     # factors, tileSizes, distances, searchRadia and subpixels are described fine-to-coarse
     factors = params['tuning']['factors']
 
@@ -89,7 +89,7 @@ def align_image_block_matching(img, referencePyramid, options, params, debug=Fal
     
 
     # For convenience
-    currentTime, verbose = time(), options['verbose'] > 2
+    currentTime, verbose = time.perf_counter(), options['verbose'] > 2
     # factors, tileSizes, distances, searchRadia and subpixels are described fine-to-coarse
     factors = params['tuning']['factors']
     tileSizes = params['tuning']['tileSizes']
@@ -196,7 +196,7 @@ def alignHdrplus(referenceImage, alternateImages, params, options):
             options: dict containing options extracted from the script command (input/output path, mode, verbose)
     '''
     # For convenience
-    currentTime, verbose = time(), options['verbose'] > 2
+    currentTime, verbose = time.perf_counter(), options['verbose'] > 2
     # factors, tileSizes, distances, searchRadia and subpixels are described fine-to-coarse
     factors = params['tuning']['factors']
     tileSizes = params['tuning']['tileSizes']
@@ -439,7 +439,7 @@ def alignOnALevel2(referencePyramidLevel, alternatePyramidLevel, options, upsamp
     verbose = options['verbose'] > 3
     if verbose :
         cuda.synchronize()
-        currentTime = time()
+        currentTime = time.perf_counter()
     imshape = referencePyramidLevel.shape
     
     # This formula is checked : it is correct
@@ -882,7 +882,7 @@ def alignOnALevel(referencePyramidLevel, alternatePyramidLevel, options, upsampl
             previousAlignments: None / 2d array of 2d arrays, can be used to update the initial guess
     '''
     # For convenience
-    verbose, currentTime = options['verbose'] > 3, time()
+    verbose, currentTime = options['verbose'] > 3, time.perf_counter()
 
     # Distances shall be computed over float32 values.
     # By casting the input images here, this save the casting of much more data afterwards
