@@ -13,8 +13,7 @@ import numpy as np
 from numba import uint8, cuda
 
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
-from .kernels import interpolate_cov
-from .linalg import quad_mat_prod, invert_2x2
+from .linalg import quad_mat_prod, invert_2x2, interpolate_cov
 
 def init_merge(ref_img, kernels, options, params):
     VERBOSE = options['verbose']
@@ -23,8 +22,6 @@ def init_merge(ref_img, kernels, options, params):
     CFA_pattern = cuda.to_device(params['exif']['CFA Pattern'])
     bayer_mode = params['mode'] == 'bayer'
     act = params['kernel'] == 'act'
-
-    TILE_SIZE = params['tuning']['tileSize']
 
     if VERBOSE > 1:
         cuda.synchronize()
@@ -48,7 +45,7 @@ def init_merge(ref_img, kernels, options, params):
     blockspergrid = (blockspergrid_x, blockspergrid_y)
     
     accumulate_ref[blockspergrid, threadsperblock](
-        ref_img, kernels, bayer_mode, act, SCALE, TILE_SIZE, CFA_pattern,
+        ref_img, kernels, bayer_mode, act, SCALE, CFA_pattern,
         num, den)
     
     
@@ -59,8 +56,7 @@ def init_merge(ref_img, kernels, options, params):
     
     return num, den
     
-    
-@cuda.jit('void(float32[:,:], float32[:,:,:,:], boolean, boolean, int32, int32, int32[:,:], float32[:,:,:], float32[:,:,:])')
+@cuda.jit
 def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
                    num, den):
     """
@@ -329,8 +325,8 @@ def accumulate(comp_img, alignments, covs, r,
     output_pixel_idx, output_pixel_idy = cuda.grid(2)
 
     
-    output_imsize = output_size_y, output_size_x, _ = num.shape
-    input_imsize = input_size_y, input_size_x = comp_img.shape
+    output_size_y, output_size_x, _ = num.shape
+    input_size_y, input_size_x = comp_img.shape
     
     if not (0 <= output_pixel_idx < output_size_x and
             0 <= output_pixel_idy < output_size_y):

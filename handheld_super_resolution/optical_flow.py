@@ -8,6 +8,7 @@ Created on Sun Jul 31 00:00:36 2022
 import time
 
 from math import ceil, modf, exp
+import math
 import numpy as np
 from numba import cuda
 from scipy.ndimage._filters import _gaussian_kernel1d
@@ -136,7 +137,7 @@ def compute_hessian(gradx, grady, tile_size, hessian):
 
 def ICA_optical_flow(cuda_im_grey, cuda_ref_grey, cuda_gradx, cuda_grady, hessian, cuda_pre_alignment, options, params, debug = False):
     """ Computes optical flow between the ref_img and all images of comp_imgs 
-    based on the ICA method (http://www.ipol.im/pub/art/2016/153/).
+    based on the ICA method (http://www.ipol.im/pub/art/2016/153/
     The optical flow follows a translation per patch model, such that :
     ref_img(X) ~= comp_img(X + flow(X))
     
@@ -269,6 +270,11 @@ def ICA_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, hes
 
 @cuda.jit
 def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_size):
+    """
+    The update relies on solving AX = B, a 2 by 2 system.
+    A is precomputed, but B is evaluated each time. 
+
+    """
     imsize_y, imsize_x = comp_img.shape
     
     patch_idy, patch_idx = cuda.blockIdx.x, cuda.blockIdx.y
@@ -278,27 +284,22 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
     pixel_global_idx = tile_size//2 * (patch_idx - 1) + pixel_local_idx # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
     pixel_global_idy = tile_size//2 * (patch_idy - 1) + pixel_local_idy
     
-    ATA = cuda.shared.array((2,2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
-    ATB = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    A = cuda.shared.array((2,2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    B = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
     
     # parallel init
-    if cuda.threadIdx.x <= 1 and cuda.threadIdx.y <=1 : # copy hessian to threads
-        ATA[cuda.threadIdx.y, cuda.threadIdx.x] = hessian[patch_idy, patch_idx,
+    if cuda.threadIdx.x <= 1 and cuda.threadIdx.y <=1 : # copy hessian values
+        A[cuda.threadIdx.y, cuda.threadIdx.x] = hessian[patch_idy, patch_idx,
                                                           cuda.threadIdx.y, cuda.threadIdx.x]
-    if cuda.threadIdx.y == 2 and cuda.threadIdx.x <= 1 :
-            ATB[cuda.threadIdx.x] = 0
   
     
     inbound = (0 <= pixel_global_idx < imsize_x) and (0 <= pixel_global_idy < imsize_y)
 
     if inbound :
         # Warp I with W(x; p) to compute I(W(x; p))
-        new_idx = alignment[patch_idy, patch_idx, 0] + pixel_global_idx 
-
-        
+        new_idx = alignment[patch_idy, patch_idx, 0] + pixel_global_idx
         new_idy = alignment[patch_idy, patch_idx, 1] + pixel_global_idy 
  
-    
     inbound = inbound and (0 <= new_idx < imsize_x -1) and (0 <= new_idy < imsize_y - 1) # -1 for bicubic interpolation
     
     if inbound:
@@ -331,16 +332,19 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
         local_gradx = gradx[pixel_global_idy, pixel_global_idx]
         local_grady = grady[pixel_global_idy, pixel_global_idx]
         
-        cuda.atomic.add(ATB, 0, -local_gradx*gradt*w)
-        cuda.atomic.add(ATB, 1, -local_grady*gradt*w)
+        # Sum reduction slows down the whole thing. Atomic add seems to be faster
+        cuda.atomic.add(B, 0, -local_gradx*gradt*w)
+        cuda.atomic.add(B, 1, -local_grady*gradt*w)
+        
 
+    
     alignment_step = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
     cuda.syncthreads()
         
     if cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:
-        if abs(ATA[0, 0]*ATA[1, 1] - ATA[0, 1]*ATA[1, 0])> 1e-5: # system is solvable 
+        if abs(A[0, 0]*A[1, 1] - A[0, 1]*A[1, 0])> 1e-5: # system is solvable 
             # No racing condition, one thread for one id
-            solve_2x2(ATA, ATB, alignment_step)
+            solve_2x2(A, B, alignment_step)
             alignment[patch_idy, patch_idx, cuda.threadIdx.x] += alignment_step[cuda.threadIdx.x]
 
     cuda.syncthreads()
