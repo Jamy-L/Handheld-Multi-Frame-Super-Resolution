@@ -35,7 +35,7 @@ def get_params(PSNR):
                         }},
                 'kanade' : {
                     'tuning' : {
-                        'kanadeIter': 6, # 3
+                        'kanadeIter': 3, # 3
                         # gaussian blur before computing grads. If 0, no blur is applied
                         'sigma blur':0,
                         }},
@@ -63,6 +63,8 @@ def get_params(PSNR):
 
 def check_params_validity(params):
     # TODO
+    if params["grey method"] != "FFT":
+        raise NotImplementedError("Grey level images should be obtained with FFT")
     pass
 
     

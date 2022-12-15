@@ -7,44 +7,42 @@ Created on Fri Sep 30 16:56:22 2022
 
 import os
 import glob
-from time import time
+import time
 
 from pathlib import Path
 import numpy as np
-from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda, int32, typeof
+from numba import cuda
 import exifread
 import rawpy
-import matplotlib.pyplot as plt
-from scipy.ndimage import gaussian_filter1d
-from scipy.fft import fft2, ifft2, fftshift, ifftshift
 
-import colour_demosaicing
+
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, crop
-from .utils_image import downsample, compute_grey_images
+from .utils_image import compute_grey_images
 from .merge import merge, init_merge, division
 from .kernels import estimate_kernels
-from .block_matching import alignBurst, init_block_matching, align_image_block_matching
-from .optical_flow import lucas_kanade_optical_flow, ICA_optical_flow, init_ICA
+from .block_matching import init_block_matching, align_image_block_matching
+from .optical_flow import ICA_optical_flow, init_ICA
 from .robustness import init_robustness, compute_robustness
 from .params import check_params_validity
 
 NOISE_MODEL_PATH = Path(os.getcwd()) / 'data' 
         
+
+
 def main(ref_img, comp_imgs, options, params):
     verbose = options['verbose'] >= 1
     verbose_2 = options['verbose'] >= 2
     verbose_3 = options['verbose'] >= 3
     bayer_mode = params['mode']=='bayer'
-    # debug
-    R, r = [], []
-    ###
+
+
     #___ Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
     
     
     #___ Raw to grey
     grey_method = params['grey method']
-    t1 = time()
+    t1 = time.perf_counter()
     
     if bayer_mode :
         cuda_ref_grey = compute_grey_images(cuda_ref_img, grey_method)
@@ -54,12 +52,10 @@ def main(ref_img, comp_imgs, options, params):
         cuda_ref_grey = cuda_ref_img
         
     #___ Block Matching
-    # TODO this function should be written for gpu
     referencePyramid = init_block_matching(cuda_ref_grey.copy_to_host(), options, params['block matching'])
 
     
     #___ ICA : compute grad and hessian
-    # CPU array here, for convoluting with cv2 filters it's easier
     ref_gradx, ref_grady, hessian = init_ICA(cuda_ref_grey, options, params['kanade'])
     
     
@@ -69,7 +65,7 @@ def main(ref_img, comp_imgs, options, params):
         
     #___ Kernel estimation
     if verbose_2 : 
-        current_time = time()
+        current_time = time.perf_counter()
         print('Estimating kernels')
     cuda_kernels = estimate_kernels(ref_img, options, params['merging'])
     if verbose_2 : 
@@ -80,34 +76,38 @@ def main(ref_img, comp_imgs, options, params):
     #___ init merge
     num, den = init_merge(cuda_ref_img, cuda_kernels, options, params["merging"])
 
-    # cuda_final_alignment, R, r = None, None, None
     n_images = comp_imgs.shape[0]
     for im_id in range(n_images):
         if verbose :
+            cuda.synchronize()
             print("\nProcessing image {} ---------\n".format(im_id+1))
-        im_time = time()
+            im_time = time.perf_counter()
         
         #___ Moving to GPU
         cuda_img = cuda.to_device(comp_imgs[im_id])
         if verbose_3 : 
+            cuda.synchronize()
             current_time = getTime(
                 im_time, 'Arrays moved to GPU')
         
         if bayer_mode:
             cuda_im_grey = compute_grey_images(comp_imgs[im_id], grey_method)
             if verbose_3 :
+                cuda.synchronize()
                 current_time = getTime(current_time, "- grey images estimated by {}".format(grey_method))
         else:
             cuda_im_grey = cuda_img
         
         #___ Block Matching
-        current_time = time()
         if verbose_2 :
+            cuda.synchronize()
+            current_time = time.perf_counter()
             print('Beginning block matching')
         
         pre_alignment = align_image_block_matching(cuda_im_grey, referencePyramid, options, params['block matching'])
         
-        if verbose_2 : 
+        if verbose_2 :
+            cuda.synchronize()
             current_time = getTime(current_time, 'Block Matching (Total)')
         
         cuda_final_alignment = ICA_optical_flow(
@@ -116,14 +116,13 @@ def main(ref_img, comp_imgs, options, params):
         #___ Robustness
         if verbose_2 : 
             cuda.synchronize()
-            current_time = time()
-        cuda_Robustness, cuda_robustness = compute_robustness(cuda_img, ref_local_stats, cuda_final_alignment,
+            current_time = time.perf_counter()
+            
+            cuda_robustness = compute_robustness(cuda_img, ref_local_stats, cuda_final_alignment,
                                                  options, params['robustness'])
-        # TODO debug
-        R.append(cuda_Robustness.copy_to_host())
-        r.append(cuda_robustness.copy_to_host())
-        ######
-        if verbose_2 : 
+
+        if verbose_2 :
+            cuda.synchronize()
             current_time = getTime(
                 current_time, 'Robustness estimated (Total)')
             print('\nEstimating kernels')
@@ -139,9 +138,12 @@ def main(ref_img, comp_imgs, options, params):
         merge(cuda_img, cuda_final_alignment, cuda_kernels, cuda_robustness, num, den,
               options, params['merging'])
         if verbose :
-            getTime(
-                im_time, 'Image processed (Total)')
+            cuda.synchronize()
+            getTime(im_time, 'Image processed (Total)')
     
+    if verbose_2 :
+        cuda.synchronize()
+        current_time = time.perf_counter()
     # num is outwritten into num/den
     channels = num.shape[-1]
     threadsperblock = (16, 16, channels) # may be modified (3 h)
@@ -152,24 +154,47 @@ def main(ref_img, comp_imgs, options, params):
     blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
 
     division[blockspergrid, threadsperblock](num, den)
-    
-    output = num.copy_to_host()
-
-    if verbose : 
+    if verbose_2 :
+        cuda.synchronize()
         current_time = getTime(
-            current_time, 'Merge finished (Total)')
-    if verbose :
-        print('\nTotal ellapsed time : ', time() - t1)
+            current_time, 'Image normalized (Total)')
         
-    return output, cuda_final_alignment, R, r
+    output = num.copy_to_host()
+    if verbose :
+        print('\nTotal ellapsed time : ', time.perf_counter() - t1)
+        
+    return output, cuda_final_alignment
 
 #%%
 
 def process(burst_path, options, params, crop_str=None):
-    currentTime, verbose = time(), options['verbose'] > 2
+    """
+    Process the burst
+
+    Parameters
+    ----------
+    burst_path : str
+        Path where the .dng burst is located
+    options : dict
+        
+    params : Parameters
+        See params.py for more details.
+    crop_str : str, optional
+        A crop that should be applied before processing the images.
+        It must have an even shift in every direction, so that the CFA remains the same.
+        The default is None.
+        
+        Example : "[500:2500, 1000:2500]"
+
+    Returns
+    -------
+    Array
+        The processed image
+
+    """
+    currentTime, verbose = time.perf_counter(), options['verbose'] > 2
     
-    
-    ref_id = 0 #TODO get ref id
+    ref_id = 0 #TODO Select ref id based on HDR+ method
     
     raw_comp = []
     
@@ -186,8 +211,11 @@ def process(burst_path, options, params, crop_str=None):
     # Reference image selection and metadata     
     raw = rawpy.imread(raw_path_list[ref_id])
     ref_raw = raw.raw_image.copy()
+    
+    # checking parameters coherence
     check_params_validity(params)
     
+    # Cropping the image if needed
     if crop_str is not None:
         ref_raw = crop(ref_raw, crop_str, axis=(0, 1))
         raw_comp = crop(raw_comp, crop_str, axis=(1, 2))
@@ -203,10 +231,10 @@ def process(burst_path, options, params, crop_str=None):
         
     white_level = tags['Image Tag 0xC61D'].values[0] # there is only one white level
     
-    black_levels = tags['Image BlackLevel'] # This tag is a fraction for some reason. It seems that black levels are all integers anyway
+    black_levels = tags['Image BlackLevel'] # This tag is a fraction object for some reason. It seems that black levels are all integers anyway
     black_levels = np.array([int(x.decimal()) for x in black_levels.values])
     
-    white_balance = raw.camera_whitebalance # TODO make sure green is 1 and other ratio
+    white_balance = raw.camera_whitebalance
     
     CFA = tags['Image CFAPattern']
     CFA = np.array([x for x in CFA.values]).reshape(2,2)
@@ -253,16 +281,7 @@ def process(burst_path, options, params, crop_str=None):
     
     # systematically grey, so we can control internally how grey is obtained
     params["block matching"]["mode"] = 'grey'
-    if params["grey method"] in ["FFT", "demosaicing"]:
-        params["block matching"]['tuning']["tileSizes"] = [ts*2 for ts in params["block matching"]['tuning']["tileSizes"]]
-        params["kanade"]['tuning']["tileSize"] *= 2
-        
-    if params['mode'] == 'bayer':
-        params["merging"]["tuning"]['tileSize'] *= 2
-        params["robustness"]["tuning"]['tileSize'] *= 2
 
-    
-        
 
     
     if np.issubdtype(type(ref_raw[0,0]), np.integer):
@@ -272,9 +291,9 @@ def process(burst_path, options, params, crop_str=None):
         ref_raw = ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE)
         for i in range(2):
             for j in range(2):
-                channel = channel = CFA[i, j]
+                channel = CFA[i, j]
                 ref_raw[i::2, j::2] = (ref_raw[i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
-                ref_raw[i::2, j::2] *= white_balance[channel]
+                ref_raw[i::2, j::2] *= white_balance[channel] / white_balance[1]
         
         
         # images[:, 0::2, 1::2] *= float(ref_raw.camera_whitebalance[0]) / raw.camera_whitebalance[1]
@@ -289,6 +308,7 @@ def process(burst_path, options, params, crop_str=None):
             for j in range(2):
                 channel = channel = CFA[i, j]
                 raw_comp[:, i::2, j::2] = (raw_comp[:, i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
-                raw_comp[:, i::2, j::2] *= white_balance[channel]
+                raw_comp[:, i::2, j::2] *= white_balance[channel] / white_balance[1]
+        raw_comp = np.clip(raw_comp, 0., 1.)
 
     return main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), options, params)

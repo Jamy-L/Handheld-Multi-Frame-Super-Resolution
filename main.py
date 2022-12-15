@@ -6,7 +6,7 @@ Created on Mon Sep 12 11:34:02 2022
 """
 import os
 import glob
-from time import time
+
 # import logging
 
 from tqdm import tqdm
@@ -57,18 +57,19 @@ crop_str = None
 
 params = get_params(PSNR = 35)
 
+# Overwritting default parameters
 params["scale"] = 1
 options = {'verbose' : 4}
 
 params['merging']['kernel'] = 'handheld'
-params['robustness']['on'] = False
+params['robustness']['on'] = True
 params['kanade']['tuning']['kanadeIter'] = 3
 burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
 # burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
 # burst_path = 'P:/0001/Samsung'
 
 params['kanade']['tuning']['sigma blur'] = 1
-output_img, cudal, R, r = process(burst_path, options, params, crop_str)
+output_img, cudal = process(burst_path, options, params, crop_str)
 
 
 #%% extracting images locally for comparison 
@@ -124,15 +125,6 @@ comp_images = np.clip(comp_images, 0.0, 1.0)
 #%% extracting handhled's output data
 
 imsize = output_img.shape
-
-
-# D = np.empty((comp_images.shape[0]+1, output.shape[0], output.shape[1], 2, 3))
-# for image in tqdm(range(comp_images.shape[0]+1)):
-#     for i in range(2):
-#         D[image, :, :, i,0] = output[:,:,3 + i*3 + 6*image]
-#         D[image, :, :, i,1] = output[:,:,3 + i*3+1 + 6*image]
-#         D[image, :, :, i,2] = output[:,:,3 + i*3+2 + 6*image]
-
 
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))

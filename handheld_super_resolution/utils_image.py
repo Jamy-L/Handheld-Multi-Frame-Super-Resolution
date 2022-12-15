@@ -27,7 +27,7 @@ you can benefit from the following license terms attached to this file.
 """
 
 import math
-from time import perf_counter
+import time
 
 import numpy as np
 from scipy import signal
@@ -206,7 +206,7 @@ def cuda_downsample(th_img, kernel='gaussian', factor=2):
     if kernel is None:
      	raise ValueError('use Kernel')
     elif kernel == 'gaussian':
-    	 t0 = perf_counter()
+    	 t0 = time.perf_counter()
      	# gaussian kernel std is proportional to downsampling factor
     	 # filteredImage = gaussian_filter(image, sigma=factor * 0.5, order=0, output=None, mode='reflect')
          
