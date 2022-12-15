@@ -291,6 +291,8 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
     if cuda.threadIdx.x <= 1 and cuda.threadIdx.y <=1 : # copy hessian values
         A[cuda.threadIdx.y, cuda.threadIdx.x] = hessian[patch_idy, patch_idx,
                                                           cuda.threadIdx.y, cuda.threadIdx.x]
+    if cuda.threadIdx.y == 2 and cuda.threadIdx.x <= 1 :
+        B[cuda.threadIdx.x] = 0
   
     
     inbound = (0 <= pixel_global_idx < imsize_x) and (0 <= pixel_global_idy < imsize_y)

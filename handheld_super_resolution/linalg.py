@@ -241,7 +241,7 @@ def get_eighen_val_2x2(M, l):
 def get_eighen_vect_2x2(M, l, e1, e2):
     """
     return the eighen vector with norm 1 for eighen values l
-    Me1 = l1e1 ; Me2 = l2e2
+    M.e1 = l1.e1 ; M.e2 = l2.e2
 
     Parameters
     ----------

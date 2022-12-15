@@ -9,9 +9,14 @@ from math import sqrt
 import time
 import numpy as np
 from numba import cuda
+import torch as th
+import torch.nn.functional as F
 
 from .linalg import get_eighen_elmts_2x2
-from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, getTime
+from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, getTime
+from .utils_image import compute_grey_images
+
+import matplotlib.pyplot as plt
 
 
 def estimate_kernels(img, options, params):
@@ -37,7 +42,6 @@ def estimate_kernels(img, options, params):
         covarince matrices samples at the center of each bayer quad).
 
     """
-    t1 = time.perf_counter()
     imshape_y, imshape_x = img.shape
     
     bayer_mode = params['mode']=='bayer'
@@ -50,94 +54,118 @@ def estimate_kernels(img, options, params):
     k_stretch = params['tuning']['k_stretch']
     k_shrink = params['tuning']['k_shrink']
     
+    if VERBOSE>2:
+        cuda.synchronize()
+        t1 = time.perf_counter()
     
-    # TODO this section can be sped up with torch convolution    
     if bayer_mode : 
-        # grey level
-        img_grey = (img[::2, ::2] + img[1::2, 1::2] + img[::2, 1::2] + img[1::2, ::2])/4
-    
+        
+        img_grey = compute_grey_images(img, method="decimating")
+        
         if VERBOSE>2:
+            cuda.synchronize()
             t1 = getTime(t1, "- Decimated Image")
     else :
         img_grey = img # no need to copy now, they will be copied to gpu later.
-
-    covs = cuda.device_array((img_grey.shape[0],
-                              img_grey.shape[1], 2,2), DEFAULT_NUMPY_FLOAT_TYPE)
+        
+    grey_imshape_y, grey_imshape_x = grey_imshape = img_grey.shape
     
-    grey_imshape_y, grey_imshape_x = img_grey.shape
-    
-
-    gradsx = np.empty((grey_imshape_y, grey_imshape_x-1), DEFAULT_NUMPY_FLOAT_TYPE)
-    gradsx = img_grey[:,1:] - img_grey[:,:-1]
+    # computing grads
+    # gradsx = np.empty((grey_imshape_y, grey_imshape_x-1), DEFAULT_NUMPY_FLOAT_TYPE)
+    # gradsx = img_grey[:,1:] - img_grey[:,:-1]
 
     
-    gradsy = np.empty((grey_imshape_y-1, grey_imshape_x), DEFAULT_NUMPY_FLOAT_TYPE)
-    gradsy = img_grey[1:,:] - img_grey[:-1,:]
-
+    # gradsy = np.empty((grey_imshape_y-1, grey_imshape_x), DEFAULT_NUMPY_FLOAT_TYPE)
+    # gradsy = img_grey[1:,:] - img_grey[:-1,:]
     
-    cuda_gradsx = cuda.to_device(gradsx/2)
-    cuda_gradsy = cuda.to_device(gradsy/2)
+    # full_grads = np.empty((grey_imshape_y-1, grey_imshape_x-1, 2), DEFAULT_NUMPY_FLOAT_TYPE) # x, y
+    # full_grads[:, :, 0] = (gradsx[:-1, :] + gradsx[1:, :])/4
+    # full_grads[:, :, 1] = (gradsy[:, :-1] + gradsy[:, 1:])/4
+    
+    # cuda_full_grads = cuda.to_device(full_grads)
+    
+    th_grey_img = th.as_tensor(img_grey, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
+    
+    
+    grad_kernel1 = np.array([[[[-0.5, 0.5]]],
+                              
+                              [[[ 0.5, 0.5]]]])
+    grad_kernel1 = th.as_tensor(grad_kernel1, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+    
+    grad_kernel2 = np.array([[[[0.5], 
+                                [0.5]]],
+                              
+                              [[[-0.5], 
+                                [0.5]]]])
+    grad_kernel2 = th.as_tensor(grad_kernel2, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
 
+
+    tmp = F.conv2d(th_grey_img, grad_kernel1)
+    th_full_grad = F.conv2d(tmp, grad_kernel2, groups=2)
+    # The default padding mode reduces the shape of grey_img of 1 pixel in each
+    # direction, as expected
+    
+    cuda_full_grads = cuda.as_cuda_array(th_full_grad.squeeze().transpose(0,1).transpose(1, 2))
+    # shape [y, x, 2]
+    
+    # grad_kernel1 = th.Tensor([[-0.25, 0.25], [-0.25, 0.25]], dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+    # grad_kernel2 = th.Tensor([[-0.25, -0.25], [0.25, 0.25]], dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+    
     if VERBOSE>2:
+        cuda.synchronize()
         t1 = getTime(t1, "- Gradients computed")
+        
+    covs = cuda.device_array(grey_imshape + (2,2), DEFAULT_NUMPY_FLOAT_TYPE)
 
-    cuda_estimate_kernel[(grey_imshape_x, grey_imshape_y),
-                         (2, 2, 4)](cuda_gradsx, cuda_gradsy,
+    threadsperblock = (16, 16)
+    blockspergrid_x = int(np.ceil(grey_imshape_x/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(grey_imshape_y/threadsperblock[0]))
+    blockspergrid = (blockspergrid_x, blockspergrid_y)
+    
+    cuda_estimate_kernel[blockspergrid, threadsperblock](cuda_full_grads,
                                     k_detail, k_denoise, D_th, D_tr, k_stretch, k_shrink,
                                     covs)  
+    if VERBOSE>2:
+        cuda.synchronize()
+        t1 = getTime(t1, "- Covariances estimated")
     
     return covs
 
 # TODO recode this, thread separation is not good
 @cuda.jit
-def cuda_estimate_kernel(gradsx, gradsy,
+def cuda_estimate_kernel(full_grads,
                          k_detail, k_denoise, D_th, D_tr, k_stretch, k_shrink,
                          covs):
-    pixel_idx, pixel_idy = cuda.blockIdx.x, cuda.blockIdx.y 
-    tx = cuda.threadIdx.x # tx, ty for the 4 gradient point
-    ty = cuda.threadIdx.y
-    tz = cuda.threadIdx.z #tz for the cov 4 coefs
+    pixel_idx, pixel_idy = cuda.grid(2)
     
     imshape_y, imshape_x, _, _ = covs.shape
     
-    
-    structure_tensor = cuda.shared.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
-    grad = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE) #x, y
-    
-    # top left pixel among the 4 that accumulates for 1 grad
-    thread_pixel_idx = pixel_idx - 1 + tx
-    thread_pixel_idy = pixel_idy - 1 + ty
-    
-    inbound = (0 < thread_pixel_idy < imshape_y-1) and (0 < thread_pixel_idx < imshape_x-1)
-    
-    
-    if tz == 0:
-        structure_tensor[ty, tx] = 0 # multithreaded zero init
 
+    
+    if (0 <= pixel_idy < imshape_y and 0 <= pixel_idx < imshape_x) :
+        structure_tensor = cuda.local.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
+        structure_tensor[0, 0] = 0
+        structure_tensor[0, 1] = 0
+        structure_tensor[1, 0] = 0
+        structure_tensor[1, 1] = 0
         
-    cuda.syncthreads()
-    if inbound :
-        grad[0] = (gradsx[thread_pixel_idy+1, thread_pixel_idx] + gradsx[thread_pixel_idy, thread_pixel_idx])/2
-        grad[1] = (gradsy[thread_pixel_idy, thread_pixel_idx+1] + gradsy[thread_pixel_idy, thread_pixel_idx])/2
     
+        for i in range(0, 2):
+            for j in range(0, 2):
+                x = pixel_idx - 1 + j
+                y = pixel_idy - 1 + i
+                
+                if (0 <= y < full_grads.shape[0] and
+                    0 <= x < full_grads.shape[1]):
+                    
+                    full_grad_x = full_grads[y, x, 0]
+                    full_grad_y = full_grads[y, x, 1]
     
-    
-    # each 4 cov coefs are processed in parallel, for each 4 gradient point (2 parallelisations)
-    if tz == 0 and inbound:
-        cuda.atomic.add(structure_tensor, (0, 0), grad[0]*grad[0])
-    elif tz == 1 and inbound:
-        cuda.atomic.add(structure_tensor, (0, 1), grad[0]*grad[1])
-    elif tz == 2 and inbound:
-        cuda.atomic.add(structure_tensor, (1, 0), grad[0]*grad[1])
-    elif inbound:
-        cuda.atomic.add(structure_tensor, (1, 1), grad[1]*grad[1])
-    
-    cuda.syncthreads()
-    # structure tensor is computed at this point. Now calculating covs
-
-    
-    
-    if (tx == 0 and ty ==0): # TODO maybe we can optimize this single threaded section
+                    structure_tensor[0, 0] += full_grad_x * full_grad_x
+                    structure_tensor[1, 0] += full_grad_x * full_grad_y
+                    structure_tensor[0, 1] += full_grad_x * full_grad_y
+                    structure_tensor[1, 1] += full_grad_y * full_grad_y
+        
         l = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         e1 = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         e2 = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
@@ -150,14 +178,11 @@ def cuda_estimate_kernel(gradsx, gradsy,
 
         rho_1_sq = rho[0]*rho[0]
         rho_2_sq = rho[1]*rho[1]
-        if tz == 0:
-            covs[pixel_idy, pixel_idx, 0, 0] = rho_1_sq*e1[0]*e1[0] + rho_2_sq*e2[0]*e2[0]
-        elif tz == 1:
-            covs[pixel_idy, pixel_idx, 0, 1] = rho_1_sq*e1[0]*e1[1] + rho_2_sq*e2[0]*e2[1] 
-        elif tz == 2:
-            covs[pixel_idy, pixel_idx, 1, 0] = rho_1_sq*e1[0]*e1[1] + rho_2_sq*e2[0]*e2[1]
-        else:
-            covs[pixel_idy, pixel_idx, 1, 1] = rho_1_sq*e1[1]*e1[1] + rho_2_sq*e2[1]*e2[1]
+        
+        covs[pixel_idy, pixel_idx, 0, 0] = rho_1_sq*e1[0]*e1[0] + rho_2_sq*e2[0]*e2[0]
+        covs[pixel_idy, pixel_idx, 0, 1] = rho_1_sq*e1[0]*e1[1] + rho_2_sq*e2[0]*e2[1] 
+        covs[pixel_idy, pixel_idx, 1, 0] = rho_1_sq*e1[0]*e1[1] + rho_2_sq*e2[0]*e2[1]
+        covs[pixel_idy, pixel_idx, 1, 1] = rho_1_sq*e1[1]*e1[1] + rho_2_sq*e2[1]*e2[1]
 
     
 @cuda.jit(device=True)
@@ -172,7 +197,7 @@ def compute_rho(l1, l2, rho, k_detail, k_denoise, D_th, D_tr, k_stretch,
         lambda1 (dominant eighen value)
     l2 : float
         lambda2
-    rho : shared Array[2]
+    rho : Array[2]
         empty vector where rho_1 and rho_2 will be stored
     k_detail : TYPE
         DESCRIPTION.

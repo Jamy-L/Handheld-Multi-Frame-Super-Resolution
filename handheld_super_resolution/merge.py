@@ -200,8 +200,8 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
             
                 w = math.exp(-0.5*y/(scale**2))
     
-                val[channel] += c*w
-                acc[channel] += w
+                val[channel] += 0 # c*w
+                acc[channel] += 0 # w
                     
 
     for chan in range(n_channels):
