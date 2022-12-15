@@ -7,7 +7,6 @@ Created on Sat Aug  6 17:26:48 2022
 
 from math import sqrt
 import time
-
 import numpy as np
 from numba import cuda
 

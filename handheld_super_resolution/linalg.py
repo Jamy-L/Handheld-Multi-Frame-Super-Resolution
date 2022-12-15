@@ -288,9 +288,7 @@ def get_eighen_elmts_2x2(M, l, e1, e2):
     get_eighen_vect_2x2(M, l, e1, e2)
     
     
-    
-    
-    
+     
 @cuda.jit(device=True) # TODO this can be parallelized ! 
 def interpolate_cov(covs, center_pos, interpolated_cov):
     reframed_posx, _ = modf(center_pos[1]) # these positions are between 0 and 1
