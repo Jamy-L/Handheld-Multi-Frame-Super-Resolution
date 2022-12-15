@@ -33,8 +33,8 @@ def main(ref_img, comp_imgs, options, params):
     verbose = options['verbose'] >= 1
     verbose_2 = options['verbose'] >= 2
     verbose_3 = options['verbose'] >= 3
+    
     bayer_mode = params['mode']=='bayer'
-
 
     #___ Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
@@ -52,7 +52,7 @@ def main(ref_img, comp_imgs, options, params):
         cuda_ref_grey = cuda_ref_img
         
     #___ Block Matching
-    referencePyramid = init_block_matching(cuda_ref_grey.copy_to_host(), options, params['block matching'])
+    referencePyramid = init_block_matching(cuda_ref_grey, options, params['block matching'])
 
     
     #___ ICA : compute grad and hessian
@@ -67,7 +67,7 @@ def main(ref_img, comp_imgs, options, params):
     if verbose_2 : 
         current_time = time.perf_counter()
         print('Estimating kernels')
-    cuda_kernels = estimate_kernels(ref_img, options, params['merging'])
+    cuda_kernels = estimate_kernels(cuda_ref_img, options, params['merging'])
     if verbose_2 : 
         current_time = getTime(
             current_time, 'Kernels estimated (Total)')
@@ -128,7 +128,7 @@ def main(ref_img, comp_imgs, options, params):
             print('\nEstimating kernels')
             
         #___ Kernel estimation
-        cuda_kernels = estimate_kernels(comp_imgs[im_id], options, params['merging'])
+        cuda_kernels = estimate_kernels(cuda_img, options, params['merging'])
         if verbose_2 :
             cuda.synchronize()
             current_time = getTime(
@@ -145,12 +145,11 @@ def main(ref_img, comp_imgs, options, params):
         cuda.synchronize()
         current_time = time.perf_counter()
     # num is outwritten into num/den
-    channels = num.shape[-1]
-    threadsperblock = (16, 16, channels) # may be modified (3 h)
+    n_channels = num.shape[-1]
+    threadsperblock = (16, 16, 1)
     blockspergrid_x = int(np.ceil(num.shape[1]/threadsperblock[1]))
     blockspergrid_y = int(np.ceil(num.shape[0]/threadsperblock[0]))
-    blockspergrid_z = 1
-
+    blockspergrid_z = n_channels
     blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
 
     division[blockspergrid, threadsperblock](num, den)
@@ -163,7 +162,7 @@ def main(ref_img, comp_imgs, options, params):
     if verbose :
         print('\nTotal ellapsed time : ', time.perf_counter() - t1)
         
-    return output, cuda_final_alignment
+    return output
 
 #%%
 

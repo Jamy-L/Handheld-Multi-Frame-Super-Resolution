@@ -84,10 +84,22 @@ def compute_grey_images(img, method):
         # Here, .real() type inherits once again from the complex type.
         # numba type is read directly from the torch tensor, so everything goes fine.
         return cuda.as_cuda_array(torch_img_grey.real)
+    elif method == "decimating":
+        grey_imshape_y, grey_imshape_x = grey_imshape = imsize_y//2, imsize_x//2
+        
+        img_grey = cuda.device_array(grey_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
+        
+        threadsperblock = (16, 16)
+        blockspergrid_x = int(np.ceil(grey_imshape_x/threadsperblock[1]))
+        blockspergrid_y = int(np.ceil(grey_imshape_y/threadsperblock[0]))
+        blockspergrid = (blockspergrid_x, blockspergrid_y)
+        
+        cuda_decimate_to_grey[blockspergrid, threadsperblock](img, img_grey)
+        return img_grey
+        
     else:
         raise NotImplemented('Computation of gray level on GPU is only supported for FFT')
-    # if method == "decimating":
-    #     img_grey = (img[::2, ::2] + img[1::2, 1::2] + img[::2, 1::2] + img[1::2, ::2])/4
+
         
     # elif method == "FFT":
 
@@ -121,6 +133,19 @@ def fft_lowpass(img_grey):
     img_grey = torch.fft.ifftshift(img_grey)
     img_grey = torch.fft.ifft2(img_grey)
     return img_grey.cpu().numpy().real
+
+@cuda.jit
+def cuda_decimate_to_grey(img, grey_img):
+    x, y = cuda.grid(2)
+    grey_imshape_y, grey_imshape_x = grey_img.shape
+    
+    if (0 <= y < grey_imshape_y and
+        0 <= x < grey_imshape_x):
+        c = 0
+        for i in range(0, 2):
+            for j in range(0, 2):
+                c += img[2*y + i, 2*x + j]
+        grey_img[y, x] = c/4
     
 
 @vectorize([uint8(float32), uint8(float64)], target='parallel')
@@ -206,7 +231,6 @@ def cuda_downsample(th_img, kernel='gaussian', factor=2):
     if kernel is None:
      	raise ValueError('use Kernel')
     elif kernel == 'gaussian':
-    	 t0 = time.perf_counter()
      	# gaussian kernel std is proportional to downsampling factor
     	 # filteredImage = gaussian_filter(image, sigma=factor * 0.5, order=0, output=None, mode='reflect')
          
