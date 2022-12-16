@@ -266,7 +266,7 @@ def compute_guide_image(raw_img, guide_img, CFA):
                 if c == 1: # green
                     g +=  raw_img[2*ty + i, 2*tx + j]
                 else:
-                    guide_img[2*ty, 2*tx, c] = raw_img[2*ty + i, 2*tx + j]
+                    guide_img[ty, tx, c] = raw_img[2*ty + i, 2*tx + j]
                 
         guide_img[ty, tx, 1] = g/2
     
