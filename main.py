@@ -57,17 +57,18 @@ params = get_params(PSNR = 35)
 
 # Overwritting default parameters
 params["scale"] = 1
-options = {'verbose' : 4}
+options = {'verbose' : 1}
 
 params['merging']['kernel'] = 'handheld'
 params['robustness']['on'] = True
 params['kanade']['tuning']['kanadeIter'] = 3
+params['debug'] = True
 burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
 # burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
 # burst_path = 'P:/0001/Samsung'
 
 params['kanade']['tuning']['sigma blur'] = 1
-output_img = process(burst_path, options, params, crop_str)
+output_img, debug_dict = process(burst_path, options, params, crop_str)
 
 
 #%% extracting images locally for comparison 
@@ -151,39 +152,17 @@ plt.imshow(postprocessed_bicubic)
 # plt.figure('mosaicnet output')
 # plt.figure(mosaicnet_output)
 
-#%% ploting images in crops
-crops_x = 2
-crops_y = 2
-crop_size = (int(output_img.shape[0]/crops_y), int(output_img.shape[1]/crops_x))
+#%% Accumulate robustness 
 
-for i in range(crops_y):
-    for j in range(crops_x):
-        plt.figure("output handheld {} {}".format(i,j))
-        plt.imshow(postprocessed_output[i*crop_size[0]:(i+1)*crop_size[0], j*crop_size[1]:(j+1)*crop_size[1]])
-        
-        plt.figure("original bicubic {} {}".format(i,j))
-        plt.imshow(postprocessed_bicubic[i*crop_size[0]:(i+1)*crop_size[0], j*crop_size[1]:(j+1)*crop_size[1]])
+acc_r = np.zeros_like(debug_dict['robustness'][0])
+for r in debug_dict['robustness']:
+    acc_r += r
+acc_r/= len(debug_dict['robustness'])
 
-
-
-#%% Anisotropy and D
-D = covs[:, :, :, 0, 0]
-A = covs[:, :, :, 0, 1]
-l1 = covs[:, :, :, 1, 0]
-im_id = 0
-
-
-plt.figure("D {} (bayer grad)".format(im_id))
-plt.imshow(D[im_id], cmap="gray", vmin=0, vmax = 1)
+plt.figure('acc r')
+plt.imshow(acc_r, cmap="gray", vmin=0, vmax=1)
 plt.colorbar()
-
-plt.figure("A {}".format(im_id))
-plt.imshow(A[im_id], cmap="gray", vmin=1, vmax = 2)
-plt.colorbar()
-
-plt.figure("L1 {}".format(im_id))
-plt.imshow(l1[im_id], cmap="gray", vmin=0, vmax = 0.01)
-plt.colorbar()
+plt.title('accumulated robustness')
 
 
 #%% eighen vectors
@@ -209,32 +188,6 @@ plt.quiver(e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
             -e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale, color='b')
 
 
-
-#%%
-x = upscaled_al[:,:,:,0]%2
-x = x.reshape(x.size)
-x_sample = np.random.choice(x, size = 1000, replace = False)
-
-y = upscaled_al[:,:,:,1]%2
-y = y.reshape(y.size)
-y_sample = np.random.choice(y, size = 1000, replace = False)
-
-ds = pd.DataFrame()
-ds['x'] = x_sample
-ds['y'] = y_sample
-
-sns.pairplot(ds, kind="hist")
-
-
-#%% warp optical flow
-
-plt.figure('ref grey')    
-ref_grey_image = cfa_to_grayscale(ref_img)
-plt.imshow(ref_grey_image, cmap= 'gray')
-#%%
-plt.figure('im 1')    
-ref_grey_image = cfa_to_grayscale(comp_images[1])
-plt.imshow(ref_grey_image, cmap= 'gray')
 
 #%%
 comp_grey_images = cfa_to_grayscale(comp_images)
@@ -270,23 +223,6 @@ Z = np.stack((Xm, Ym)).transpose(1,2,0)
 flow_image = flow2img(Z, maxrad)
 plt.figure("wheel")
 plt.imshow(flow_image)
-
-
-
-#%% warp optical flow rgb
-
-plt.figure('ref rgb')    
-plt.imshow(raw2rgb.postprocess(raw_ref_img, colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(ref_img, pattern = "GRBG"), xyz2cam=xyz2cam))  
-
-upscaled_al = upscale_alignement(alignment, ref_img.shape, 16*2) 
-for image_index in range(comp_images.shape[0]):
-    warped = warp_flow(colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(comp_images[image_index], pattern = "GRBG"), upscaled_al[image_index], rgb = True)
-    plt.figure("image {} warped".format(image_index))
-    plt.imshow(raw2rgb.postprocess(raw_ref_img, warped, xyz2cam=xyz2cam))
-for image_index in range(comp_images.shape[0]):
-    plt.figure("image {}".format(image_index))
-    plt.imshow(raw2rgb.postprocess(raw_ref_img, colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(comp_images[image_index], pattern = "GRBG"), xyz2cam=xyz2cam))
-  
 
 #%% histograms
 
