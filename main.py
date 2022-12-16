@@ -60,7 +60,7 @@ params["scale"] = 1
 options = {'verbose' : 4}
 
 params['merging']['kernel'] = 'handheld'
-params['robustness']['on'] = False
+params['robustness']['on'] = True
 params['kanade']['tuning']['kanadeIter'] = 3
 burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
 # burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
