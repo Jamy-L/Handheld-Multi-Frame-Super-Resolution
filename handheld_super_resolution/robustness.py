@@ -112,9 +112,9 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
         Locally minimized Robustness map, sampled at the center of
         every bayer quad
     """
-    imshape = imshape_y, imshape_x = comp_img.shape
-
     
+    imshape_y, imshape_x = comp_img.shape
+
     bayer_mode = params['mode']=='bayer'
     VERBOSE = options['verbose']
     r_on = params['on']
@@ -129,16 +129,10 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
     
     n_patch_y, n_patch_x, _ = flows.shape
     
-    # moving noise model to GPU
-    cuda_std_curve = cuda.to_device(params['std_curve'])
-    cuda_diff_curve = cuda.to_device(params['diff_curve'])
-    
     if bayer_mode:
         guide_imshape = int(imshape_y/2), int(imshape_x/2)
-        n_channels = 3
     else:
         guide_imshape = imshape_y, imshape_x
-        n_channels = 1
           
     if r_on : 
         r = cuda.device_array(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
@@ -147,6 +141,16 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
         if VERBOSE > 1:
             current_time = time.perf_counter()
             print("Estimating Robustness")
+        
+        # moving noise model to GPU
+        cuda_std_curve = cuda.to_device(params['std_curve'])
+        cuda_diff_curve = cuda.to_device(params['diff_curve'])
+            
+        if VERBOSE > 2:
+            cuda.synchronize()
+            current_time = getTime(
+                current_time, ' - Moved noise model to GPU')
+
             
         # Computing guide image
         if bayer_mode:
@@ -184,11 +188,11 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
                 current_time, ' - Local stats estimated')
         
         # computing d
-        threadsperblock = (16, 16, 1) # maximum, we may take less
+        threadsperblock = (16, 16) # maximum, we may take less
         blockspergrid_x = int(np.ceil(guide_imshape[1]/threadsperblock[1]))
         blockspergrid_y = int(np.ceil(guide_imshape[0]/threadsperblock[0]))
-        blockspergrid_z = n_channels
-        blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
+
+        blockspergrid = (blockspergrid_x, blockspergrid_y)
         
         d = cuda.device_array(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
         cuda_compute_patch_dist[blockspergrid, threadsperblock](
@@ -335,29 +339,30 @@ def cuda_compute_patch_dist(ref_local_stats, comp_local_stats, flow, tile_size, 
     None.
 
     """
-    idy, idx, channel = cuda.grid(3)
+    idx, idy = cuda.grid(2)
+    guide_imshape_y, guide_imshape_x, _, n_channels = ref_local_stats.shape
     
-    if (0 <= idy < dist.shape[0] and
-        0 <= idx < dist.shape[1]):
+    if (0 <= idy < guide_imshape_y and
+        0 <= idx < guide_imshape_x):
 
-        guide_imshape_y, guide_imshape_x, _, n_channels = ref_local_stats.shape
-    
-        
-        d = cuda.shared.array(3, DEFAULT_CUDA_FLOAT_TYPE) # we may use only 1 coeff
-        d[channel] = 0
+        d = 0
         
         ## Fetching flow
-        local_flow = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE) # local array would work too, but shared memory is faster
+        local_flow = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE) 
         if n_channels == 1:
             patch_idy = round(idy//(tile_size//2)) # guide scale is actually coarse scale
             patch_idx = round(idx//(tile_size//2))
+            # guide image is coarse image : the flow stays the same
+            local_flow[0] = flow[patch_idy, patch_idx, 0]
+            local_flow[1] = flow[patch_idy, patch_idx, 1]
+            
         else:
             patch_idy = round(2*idy//(tile_size//2)) # guide scale is 2 times sparser than coarse
             patch_idx = round(2*idx//(tile_size//2))
             
-        local_flow[0] = flow[patch_idy, patch_idx, 0]
-        local_flow[1] = flow[patch_idy, patch_idx, 1]
-    
+            # guide image is 2x smaller than coarse image : the flow must be divided by 2
+            local_flow[0] = flow[patch_idy, patch_idx, 0]/2
+            local_flow[1] = flow[patch_idy, patch_idx, 1]/2
         
         new_idx = round(idx + local_flow[0])
         new_idy = round(idy + local_flow[1])
@@ -365,16 +370,16 @@ def cuda_compute_patch_dist(ref_local_stats, comp_local_stats, flow, tile_size, 
         
         inbound = (0 <= new_idx < guide_imshape_x) and (0 <= new_idy < guide_imshape_y)
         
-        if inbound : 
-            d[channel] = ref_local_stats[idy, idx, 0, channel] - comp_local_stats[new_idy, new_idx, 0, channel]
+        if inbound :
+            for channel in range(n_channels):
+                dif = ref_local_stats[idy, idx, 0, channel] - comp_local_stats[new_idy, new_idx, 0, channel]
+                d += dif * dif
+            dist[idy, idx] = d
+            
         else:
-            d[channel] = +1/0 # + infinite distance will induce R = 0
+            dist[idy, idx] = +1/0 # + infinite distance will induce R = 0
         
-        if n_channels == 1:
-            dist[idy, idx] = d[0]*d[0]
-        else:
-            cuda.syncthreads()
-            dist[idy, idx] = d[0]*d[0] + d[1]*d[1] + d[2]*d[2]
+
         
 @cuda.jit
 def cuda_apply_noise_model(d, sigma, ref_local_stats, std_curve, diff_curve):
@@ -399,7 +404,7 @@ def cuda_apply_noise_model(d, sigma, ref_local_stats, std_curve, diff_curve):
     None.
 
     """
-    idy, idx = cuda.grid(2)
+    idx, idy = cuda.grid(2)
     if (0 <= idy < ref_local_stats.shape[0] and
         0 <= idx < ref_local_stats.shape[1]):
         
@@ -484,7 +489,7 @@ def compute_s(flows, M_th, s1, s2, S):
 
 @cuda.jit    
 def cuda_compute_robustness(d, sigma, S, t, R):
-    idy, idx = cuda.grid(2)
+    idx, idy = cuda.grid(2)
     n_patchs_y, n_patchs_x = S.shape
     guide_imshape_y, guide_imshape_x = d.shape
     

@@ -23,6 +23,7 @@ def get_params(PSNR):
     params = {'scale' : 1,
               'mode' : 'bayer', # 'bayer' or grey if something else 
               'grey method' : 'FFT',
+              'debug': False, # when True, a dict is returned with tensors.
               'block matching': {
                     'tuning': {
                         # WARNING: these parameters are defined fine-to-coarse!
@@ -65,6 +66,9 @@ def check_params_validity(params):
     # TODO
     if params["grey method"] != "FFT":
         raise NotImplementedError("Grey level images should be obtained with FFT")
+        
+    assert params['scale'] >= 1
+    
     pass
 
     

@@ -280,7 +280,7 @@ def merge(comp_img, alignments, covs, r, num, den,
             current_time, ' - Image merged on GPU side')
 
 
-@cuda.jit('void(float32[:,:], float32[:,:,:], float32[:,:,:,:], float32[:,:], boolean, boolean, uint8, int16, uint8[:, :], float32[:,:,:], float32[:,:,:])')
+@cuda.jit
 def accumulate(comp_img, alignments, covs, r,
                bayer_mode, act, scale, tile_size, CFA_pattern,
                num, den):

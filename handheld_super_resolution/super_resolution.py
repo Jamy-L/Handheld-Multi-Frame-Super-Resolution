@@ -35,6 +35,15 @@ def main(ref_img, comp_imgs, options, params):
     verbose_3 = options['verbose'] >= 3
     
     bayer_mode = params['mode']=='bayer'
+    
+    debug_mode = params['debug']
+    if debug_mode : 
+        debug_dict = {"robustness":[]}
+
+    if verbose :
+        cuda.synchronize()
+        print("\nProcessing reference image ---------\n")
+        im_time = time.perf_counter()
 
     #___ Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
@@ -75,6 +84,11 @@ def main(ref_img, comp_imgs, options, params):
     
     #___ init merge
     num, den = init_merge(cuda_ref_img, cuda_kernels, options, params["merging"])
+    
+    if verbose :
+        cuda.synchronize()
+        getTime(im_time, 'Image processed (Total)')
+    
 
     n_images = comp_imgs.shape[0]
     for im_id in range(n_images):
@@ -118,9 +132,9 @@ def main(ref_img, comp_imgs, options, params):
             cuda.synchronize()
             current_time = time.perf_counter()
             
-            cuda_robustness = compute_robustness(cuda_img, ref_local_stats, cuda_final_alignment,
-                                                 options, params['robustness'])
-
+        cuda_robustness = compute_robustness(cuda_img, ref_local_stats, cuda_final_alignment,
+                                             options, params['robustness'])
+        
         if verbose_2 :
             cuda.synchronize()
             current_time = getTime(
@@ -140,6 +154,9 @@ def main(ref_img, comp_imgs, options, params):
         if verbose :
             cuda.synchronize()
             getTime(im_time, 'Image processed (Total)')
+            
+        if debug_mode : 
+            debug_dict['robustness'].append(cuda_robustness.copy_to_host())
     
     if verbose_2 :
         cuda.synchronize()
@@ -162,7 +179,10 @@ def main(ref_img, comp_imgs, options, params):
     if verbose :
         print('\nTotal ellapsed time : ', time.perf_counter() - t1)
         
-    return output
+    if debug_mode :
+        return output, debug_dict
+    else:
+        return output
 
 #%%
 
