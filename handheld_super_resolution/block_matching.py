@@ -5,14 +5,13 @@ Created on Mon Sep 12 11:31:38 2022
 @author: jamyl
 """
 import time
-import math
 
 import numpy as np
 from numba import cuda
 import torch
 import torch.nn.functional as F
 
-from .utils import getTime, clamp, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE
+from .utils import getTime, clamp, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
 from .utils_image import cuda_downsample
 
 
@@ -297,7 +296,7 @@ def upsample_alignments(referencePyramidLevel, alternatePyramidLevel, previousAl
     n_tiles_x_new = referencePyramidLevel.shape[1] // (tileSize // 2) - 1
 
     upsampledAlignments = cuda.device_array((n_tiles_y_new, n_tiles_x_new, 2), dtype=DEFAULT_NUMPY_FLOAT_TYPE)
-    threadsperblock = (16, 16)
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
     blockspergrid_x = int(np.ceil(n_tiles_x_new/threadsperblock[1]))
     blockspergrid_y = int(np.ceil(n_tiles_y_new/threadsperblock[0]))
     blockspergrid = (blockspergrid_x, blockspergrid_y)
@@ -447,7 +446,7 @@ def local_search(referencePyramidLevel, alternatePyramidLevel,
 
     h, w, _ = upsampledAlignments.shape
     
-    threadsperblock = (16, 16)
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
     blockspergrid_x = int(np.ceil(w/threadsperblock[1]))
     blockspergrid_y = int(np.ceil(h/threadsperblock[0]))
     blockspergrid = (blockspergrid_x, blockspergrid_y)

@@ -8,7 +8,7 @@ import time
 from math import cos, pi
 
 import numpy as np
-from numba import uint8, uint16, float32, float64, complex64, cuda
+from numba import float32, float64, complex64, cuda
 import torch as th
 import torch.fft
 
@@ -19,6 +19,8 @@ DEFAULT_NUMPY_FLOAT_TYPE = np.float32
 DEFAULT_TORCH_FLOAT_TYPE = th.float32
 DEFAULT_TORCH_COMPLEX_TYPE = th.complex64
 EPSILON = 1e-6
+
+DEFAULT_THREADS = 16
 
 
 def getTime(currentTime, labelName, printTime=True, spaceSize=50):
@@ -100,3 +102,31 @@ def crop(array, crop_str, axis):
     a = array.take(indices=range(crop_y_min, crop_y_max), axis=axis[0])
     a = a.take(indices=range(crop_x_min, crop_x_max), axis=axis[1])
     return a
+
+def divide(num, den):
+    """
+    Performs num = num/den
+
+    Parameters
+    ----------
+    num : device array[ny, nx, n_channels]
+        DESCRIPTION.
+    den : device array[ny, nx, n_channels]
+        DESCRIPTION.
+
+
+    """
+    n_channels = num.shape[-1]
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS, 1)
+    blockspergrid_x = int(np.ceil(num.shape[1]/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(num.shape[0]/threadsperblock[0]))
+    blockspergrid_z = n_channels
+    blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
+    
+    cuda_divide[blockspergrid, threadsperblock](num, den)
+
+@cuda.jit
+def cuda_divide(num, den):
+    x, y, c = cuda.grid(3)
+    if 0 <= x < num.shape[1] and 0 <= y < num.shape[0] and 0 <= c < num.shape[2]:
+        num[y, x, c] = num[y, x, c]/den[y, x, c]

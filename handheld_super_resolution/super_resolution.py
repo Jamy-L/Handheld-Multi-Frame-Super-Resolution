@@ -16,9 +16,9 @@ import exifread
 import rawpy
 
 
-from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, crop
+from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, crop, divide
 from .utils_image import compute_grey_images
-from .merge import merge, init_merge, division
+from .merge import merge, init_merge
 from .kernels import estimate_kernels
 from .block_matching import init_block_matching, align_image_block_matching
 from .optical_flow import ICA_optical_flow, init_ICA
@@ -151,6 +151,7 @@ def main(ref_img, comp_imgs, options, params):
         #___ Merging
         merge(cuda_img, cuda_final_alignment, cuda_kernels, cuda_robustness, num, den,
               options, params['merging'])
+        
         if verbose :
             cuda.synchronize()
             getTime(im_time, 'Image processed (Total)')
@@ -161,15 +162,10 @@ def main(ref_img, comp_imgs, options, params):
     if verbose_2 :
         cuda.synchronize()
         current_time = time.perf_counter()
+        
     # num is outwritten into num/den
-    n_channels = num.shape[-1]
-    threadsperblock = (16, 16, 1)
-    blockspergrid_x = int(np.ceil(num.shape[1]/threadsperblock[1]))
-    blockspergrid_y = int(np.ceil(num.shape[0]/threadsperblock[0]))
-    blockspergrid_z = n_channels
-    blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
-
-    division[blockspergrid, threadsperblock](num, den)
+    divide(num, den)
+    
     if verbose_2 :
         cuda.synchronize()
         current_time = getTime(

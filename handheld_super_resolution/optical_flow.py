@@ -7,8 +7,7 @@ Created on Sun Jul 31 00:00:36 2022
 
 import time
 
-from math import ceil, modf, exp
-import math
+from math import ceil, modf
 import numpy as np
 from numba import cuda
 from scipy.ndimage._filters import _gaussian_kernel1d
@@ -16,7 +15,7 @@ import torch.nn.functional as F
 import torch
 
 from .linalg import bilinear_interpolation
-from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE
+from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
 from .linalg import solve_2x2
     
 def init_ICA(ref_img, options, params):
@@ -253,7 +252,7 @@ def ICA_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, hes
         print(" -- Lucas-Kanade iteration {}".format(iter_index))
     
     
-    threadsperblock = (16, 16)
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
     
     blockspergrid_x = int(np.ceil(n_patch_y/threadsperblock[1]))
     blockspergrid_y = int(np.ceil(n_patch_x/threadsperblock[0]))
