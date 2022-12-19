@@ -451,8 +451,7 @@ def local_search(referencePyramidLevel, alternatePyramidLevel,
                                                       tileSize, searchRadius,
                                                       upsampledAlignments)
     elif distance == 'L2':
-        # TODO L2 here
-        cuda_L1_local_search[blockspergrid, threadsperblock](referencePyramidLevel, alternatePyramidLevel,
+        cuda_L2_local_search[blockspergrid, threadsperblock](referencePyramidLevel, alternatePyramidLevel,
                                                       tileSize, searchRadius,
                                                       upsampledAlignments)
     else:
@@ -473,6 +472,7 @@ def cuda_L1_local_search(referencePyramidLevel, alternatePyramidLevel,
     local_flow[0] = upsampledAlignments[tile_y, tile_x, 0]
     local_flow[1] = upsampledAlignments[tile_y, tile_x, 1]
 
+    # position of the pixel in the top left corner of the patch
     patch_pos_x = tile_x * tileSize//2
     patch_pos_y = tile_y * tileSize//2
     
@@ -484,7 +484,8 @@ def cuda_L1_local_search(referencePyramidLevel, alternatePyramidLevel,
             local_ref[i, j] = referencePyramidLevel[idy, idx]
         
     min_dist = +1/0 #init as infty
-    min_shift_x = min_shift_y = 0
+    min_shift_y = 0
+    min_shift_x = 0
     # window search
     for search_shift_y in range(-searchRadius, searchRadius + 1):
         for search_shift_x in range(-searchRadius, searchRadius + 1):
@@ -492,8 +493,8 @@ def cuda_L1_local_search(referencePyramidLevel, alternatePyramidLevel,
             dist = 0
             for i in range(tileSize):
                 for j in range(tileSize):
-                    new_idx = patch_pos_x + j + int(local_flow[0])
-                    new_idy = patch_pos_y + i + int(local_flow[1])
+                    new_idx = patch_pos_x + j + int(local_flow[0]) + search_shift_x
+                    new_idy = patch_pos_y + i + int(local_flow[1]) + search_shift_y
                     
                     if (0 <= new_idx < w and
                         0 <= new_idy < h):
@@ -511,202 +512,57 @@ def cuda_L1_local_search(referencePyramidLevel, alternatePyramidLevel,
     upsampledAlignments[tile_y, tile_x, 0] = local_flow[0] + min_shift_x
     upsampledAlignments[tile_y, tile_x, 1] = local_flow[1] + min_shift_y
     
-# @cuda.jit
-# def cuda_L2_local_search(referencePyramidLevel, alternatePyramidLevel,
-#                          tileSize, searchRadius, upsampledAlignments):
-#     n_patchs_y, n_patchs_x, _ = upsampledAlignments.shape
-#     h, w = alternatePyramidLevel.shape
-#     tile_x, tile_y = cuda.grid(2)
-#     if not(0 <= tile_y < n_patchs_y and
-#            0 <= tile_x < n_patchs_x):
-#         return
+@cuda.jit
+def cuda_L2_local_search(referencePyramidLevel, alternatePyramidLevel,
+                         tileSize, searchRadius, upsampledAlignments):
+    n_patchs_y, n_patchs_x, _ = upsampledAlignments.shape
+    h, w = alternatePyramidLevel.shape
+    tile_x, tile_y = cuda.grid(2)
+    if not(0 <= tile_y < n_patchs_y and
+           0 <= tile_x < n_patchs_x):
+        return
     
-#     local_flow = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
-#     local_flow[0] = upsampledAlignments[tile_y, tile_x, 0]
-#     local_flow[1] = upsampledAlignments[tile_y, tile_x, 1]
+    local_flow = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
+    local_flow[0] = upsampledAlignments[tile_y, tile_x, 0]
+    local_flow[1] = upsampledAlignments[tile_y, tile_x, 1]
 
-#     patch_pos_x = tile_x * tileSize//2
-#     patch_pos_y = tile_y * tileSize//2
+    # position of the pixel in the top left corner of the patch
+    patch_pos_x = tile_x * tileSize//2
+    patch_pos_y = tile_y * tileSize//2
     
-#     local_ref = cuda.local.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
-#     for i in range(tileSize):
-#         for j in range(tileSize):
-#             idx = patch_pos_x + j
-#             idy = patch_pos_y + i
-#             local_ref[i, j] = referencePyramidLevel[idy, idx]
+    local_ref = cuda.local.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
+    for i in range(tileSize):
+        for j in range(tileSize):
+            idx = patch_pos_x + j
+            idy = patch_pos_y + i
+            local_ref[i, j] = referencePyramidLevel[idy, idx]
         
-#     min_dist = +1/0 #init as infty
-#     min_shift_x = min_shift_y = 0
-#     # window search
-#     for search_shift_y in range(-searchRadius, searchRadius + 1):
-#         for search_shift_x in range(-searchRadius, searchRadius + 1):
-#             # computing dist
-#             dist = 0
-#             for i in range(tileSize):
-#                 for j in range(tileSize):
-#                     new_idx = patch_pos_x + j + int(local_flow[0])
-#                     new_idy = patch_pos_y + i + int(local_flow[1])
+    min_dist = +1/0 #init as infty
+    min_shift_y = 0
+    min_shift_x = 0
+    # window search
+    for search_shift_y in range(-searchRadius, searchRadius + 1):
+        for search_shift_x in range(-searchRadius, searchRadius + 1):
+            # computing dist
+            dist = 0
+            for i in range(tileSize):
+                for j in range(tileSize):
+                    new_idx = patch_pos_x + j + int(local_flow[0]) + search_shift_x
+                    new_idy = patch_pos_y + i + int(local_flow[1]) + search_shift_y
                     
-#                     if (0 <= new_idx < w and
-#                         0 <= new_idy < h):
-#                         diff = local_ref[i, j] - alternatePyramidLevel[new_idy, new_idx]
-#                         dist += diff*diff
-#                     else:
-#                         dist = +1/0
+                    if (0 <= new_idx < w and
+                        0 <= new_idy < h):
+                        diff = local_ref[i, j] - alternatePyramidLevel[new_idy, new_idx]
+                        dist += diff*diff
+                    else:
+                        dist = +1/0
                     
                     
-#             if dist < min_dist :
-#                 min_dist = dist
-#                 min_shift_y = search_shift_y
-#                 min_shift_x = search_shift_x
+            if dist < min_dist :
+                min_dist = dist
+                min_shift_y = search_shift_y
+                min_shift_x = search_shift_x
     
-#     upsampledAlignments[tile_y, tile_x, 0] = local_flow[0] + min_shift_x
-#     upsampledAlignments[tile_y, tile_x, 1] = local_flow[1] + min_shift_y
+    upsampledAlignments[tile_y, tile_x, 0] = local_flow[0] + min_shift_x
+    upsampledAlignments[tile_y, tile_x, 1] = local_flow[1] + min_shift_y
     
-# def get_patch_distance(referencePyramidLevel, alternatePyramidLevel,
-#                        tileSize, searchRadius,
-#                        upsampledAlignments, distance):
-    
-#     sR = 2*searchRadius + 1
-#     h, w, _ = upsampledAlignments.shape
-#     dst = cuda.device_array((h, w, sR, sR), DEFAULT_NUMPY_FLOAT_TYPE)
-#     threadsPerBlock = (tileSize, tileSize)
-#     blocks = (w, h, sR*sR)
-#     if distance == 'L1':
-#         cuda_computeL1Distance_[blocks, threadsPerBlock](referencePyramidLevel, alternatePyramidLevel,
-#                                                           tileSize, searchRadius,
-#                                                           upsampledAlignments, dst)
-#     elif distance == 'L2':
-#         cuda_computeL2Distance_[blocks, threadsPerBlock](referencePyramidLevel, alternatePyramidLevel,
-#                                                           tileSize, searchRadius,
-#                                                           upsampledAlignments, dst)
-#     else:
-#         raise ValueError('Unknown distance : {}'.format(distance))
-#     return dst
-
-# @cuda.jit
-# def cuda_computeL1Distance_(referencePyramidLevel, alternatePyramidLevel,
-#                             tileSize, searchRadius,
-#                             upsampledAlignments, dst):
-    
-#     tile_x, tile_y, z = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
-#     tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
-#     sR = 2*searchRadius+1
-#     sRx = int(z//sR)
-#     sRy = int(z%sR)
-    
-#     idx = int(tile_x * tileSize//2 + tx)
-#     idy = int(tile_y * tileSize//2 + ty)
-    
-#     local_flow = cuda.shared.array(2, DEFAULT_NUMPY_FLOAT_TYPE)
-#     if cuda.threadIdx.x == 0 and cuda.threadIdx.y <= 1:
-#         local_flow[cuda.threadIdx.y] = upsampledAlignments[tile_y, tile_x, cuda.threadIdx.y]
-#     cuda.syncthreads()
-    
-#     new_idx = int(idx + local_flow[0] + sRx - searchRadius)
-#     new_idy = int(idy + local_flow[1] + sRy - searchRadius)
-    
-#     # 32x32 is the max size. We may need less, but shared array size must
-#     # be known at compilation time. working with a flattened array makes reduction
-#     # easier
-#     d = cuda.shared.array((32*32), DEFAULT_CUDA_FLOAT_TYPE)
-    
-#     z = tx + ty*tileSize # flattened id
-#     if not (0 <= new_idx < referencePyramidLevel.shape[1] and
-#             0 <= new_idy < referencePyramidLevel.shape[0]) :
-#         local_diff = 1/0 # infty out of bound
-#     else :
-#         local_diff = referencePyramidLevel[idy, idx]-alternatePyramidLevel[new_idy, new_idx]
-        
-#     d[z] = abs(local_diff)
-    
-    
-#     # sum reduction
-#     N_reduction = int(math.log2(tileSize**2))
-    
-#     step = 1
-#     for i in range(N_reduction):
-#         cuda.syncthreads()
-#         if z%(2*step) == 0:
-#             d[z] += d[z + step]
-        
-#         step *= 2
-    
-#     cuda.syncthreads()
-#     if tx== 0 and ty==0:
-#         dst[tile_y, tile_x, sRy, sRx] = d[0]
-
-# @cuda.jit
-# def cuda_computeL2Distance_(referencePyramidLevel, alternatePyramidLevel,
-#                             tileSize, searchRadius,
-#                             upsampledAlignments, dst):
-#     tile_x, tile_y, z = cuda.blockIdx.x, cuda.blockIdx.y, cuda.blockIdx.z
-#     tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
-#     sR = 2*searchRadius+1
-#     sRx = int(z//sR)
-#     sRy = int(z%sR)
-    
-#     idx = int(tile_x * tileSize//2 + tx)
-#     idy = int(tile_y * tileSize//2 + ty)
-    
-#     local_flow = cuda.shared.array(2, DEFAULT_NUMPY_FLOAT_TYPE)
-#     if cuda.threadIdx.x == 0 and cuda.threadIdx.y <= 1:
-#         local_flow[cuda.threadIdx.y] = upsampledAlignments[tile_y, tile_x, cuda.threadIdx.y]
-#     cuda.syncthreads()
-    
-#     new_idx = int(idx + local_flow[0] + sRx - searchRadius)
-#     new_idy = int(idy + local_flow[1] + sRy - searchRadius)
-    
-    
-#     # 32x32 is the max size. We may need less, but shared array size must
-#     # be known at compilation time. working with a flattened array makes reduction
-#     # easier
-#     d = cuda.shared.array((32*32), DEFAULT_CUDA_FLOAT_TYPE)
-    
-#     z = tx + ty*tileSize # flattened id
-#     if not (0 <= new_idx < referencePyramidLevel.shape[1] and
-#             0 <= new_idy < referencePyramidLevel.shape[0]) :
-#         local_diff = 1/0 # infty out of bound
-#     else :
-#         local_diff = referencePyramidLevel[idy, idx] - alternatePyramidLevel[new_idy, new_idx]
-        
-#     d[z] = local_diff*local_diff
-    
-    
-#     # sum reduction
-#     N_reduction = int(math.log2(tileSize**2))
-    
-#     step = 1
-#     for i in range(N_reduction):
-#         cuda.syncthreads()
-#         if z%(2*step) == 0:
-#             d[z] += d[z + step]
-        
-#         step *= 2
-    
-#     cuda.syncthreads()
-#     if tx== 0 and ty==0:
-#         dst[tile_y, tile_x, sRy, sRx] = d[0]
-    
-# @cuda.jit
-# def cuda_minimize_distance(distances, alignment, searchRadius):
-#     tile_x, tile_y = cuda.blockIdx.x, cuda.blockIdx.y
-#     tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
-    
-#     # grouping glob memory call into a single big request
-#     local_dist = distances[tile_y, tile_x, ty, tx]
-    
-#     min_dist = cuda.shared.array(1, DEFAULT_CUDA_FLOAT_TYPE)
-#     if tx == 0 and ty ==0:
-#         min_dist[0] = 1/0 # infinity
-#     cuda.syncthreads()
-    
-#     cuda.atomic.min(min_dist, 0, local_dist)
-    
-#     cuda.syncthreads()
-    
-#     # there is technically a racing condition in the very rare case
-#     # where 2 patches have exactly the same distance.
-#     if local_dist == min_dist[0]:
-#         alignment[tile_y, tile_x, 1] += ty - searchRadius
-#         alignment[tile_y, tile_x, 0] += tx - searchRadius
