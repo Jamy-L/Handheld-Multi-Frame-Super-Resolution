@@ -57,7 +57,7 @@ params = get_params(PSNR = 35)
 
 # Overwritting default parameters
 params["scale"] = 1
-options = {'verbose' : 1}
+options = {'verbose' : 3}
 
 params['merging']['kernel'] = 'handheld'
 params['robustness']['on'] = True
