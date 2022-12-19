@@ -10,7 +10,7 @@ from math import exp
 import numpy as np
 from numba import cuda, uint8
 
-from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, clamp
+from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS, clamp
 
 def init_robustness(ref_img,options, params):
     """
@@ -156,7 +156,7 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
         if bayer_mode:
             guide_img = cuda.device_array(guide_imshape + (3,), DEFAULT_NUMPY_FLOAT_TYPE)
             
-            threadsperblock = (16, 16) # maximum, we may take less
+            threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
             blockspergrid_x = int(np.ceil(guide_imshape[1]/threadsperblock[1]))
             blockspergrid_y = int(np.ceil(guide_imshape[0]/threadsperblock[0]))
             blockspergrid = (blockspergrid_x, blockspergrid_y)
@@ -188,7 +188,7 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
                 current_time, ' - Local stats estimated')
         
         # computing d
-        threadsperblock = (16, 16) # maximum, we may take less
+        threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
         blockspergrid_x = int(np.ceil(guide_imshape[1]/threadsperblock[1]))
         blockspergrid_y = int(np.ceil(guide_imshape[0]/threadsperblock[0]))
 
@@ -207,7 +207,7 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
         # leveraging the noise model
         sigma = cuda.device_array(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
         
-        threadsperblock = (16, 16) # maximum, we may take less
+        threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
         blockspergrid_x = int(np.ceil(guide_imshape[1]/threadsperblock[1]))
         blockspergrid_y = int(np.ceil(guide_imshape[0]/threadsperblock[0]))
         blockspergrid = (blockspergrid_x, blockspergrid_y)
@@ -231,7 +231,7 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
             current_time = getTime(
                 current_time, ' - Flow irregularities registered')
         
-        threadsperblock = (16, 16) # maximum, we may take less
+        threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
         blockspergrid_x = int(np.ceil(R.shape[1]/threadsperblock[1]))
         blockspergrid_y = int(np.ceil(R.shape[0]/threadsperblock[0]))
         blockspergrid = (blockspergrid_x, blockspergrid_y)

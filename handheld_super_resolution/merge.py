@@ -12,7 +12,7 @@ import math
 import numpy as np
 from numba import uint8, cuda
 
-from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE
+from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS
 from .linalg import quad_mat_prod, invert_2x2, interpolate_cov
 
 def init_merge(ref_img, kernels, options, params):
@@ -38,7 +38,7 @@ def init_merge(ref_img, kernels, options, params):
 
 
     # dispatching threads. 1 thread for 1 output pixel
-    threadsperblock = (16, 16) # maximum, we may take less
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
     
     blockspergrid_x = int(np.ceil(output_size[1]/threadsperblock[1]))
     blockspergrid_y = int(np.ceil(output_size[0]/threadsperblock[0]))
@@ -262,7 +262,7 @@ def merge(comp_img, alignments, covs, r, num, den,
 
 
     # dispatching threads. 1 thread for 1 output pixel
-    threadsperblock = (16, 16) # maximum, we may take less
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
     
     blockspergrid_x = int(np.ceil(output_size[1]/threadsperblock[1]))
     blockspergrid_y = int(np.ceil(output_size[0]/threadsperblock[0]))
@@ -478,12 +478,6 @@ def accumulate(comp_img, alignments, covs, r,
     for chan in range(n_channels):
         num[output_pixel_idy, output_pixel_idx, chan] += val[chan] 
         den[output_pixel_idy, output_pixel_idx, chan] += acc[chan]
-        
-@cuda.jit
-def division(num, den):
-    x, y, c = cuda.grid(3)
-    if 0 <= x < num.shape[1] and 0 <= y < num.shape[0] and 0 <= c < num.shape[2]:
-        num[y, x, c] = num[y, x, c]/den[y, x, c]
     
     
     
