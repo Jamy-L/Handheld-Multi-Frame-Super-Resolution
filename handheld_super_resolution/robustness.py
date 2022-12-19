@@ -62,14 +62,10 @@ def init_robustness(ref_img,options, params):
         # Computing guide image
 
         if bayer_mode:
-            guide_ref_img = cuda.device_array(guide_imshape + (3,), DEFAULT_NUMPY_FLOAT_TYPE)
-            compute_guide_image[guide_imshape, (2, 2)](ref_img, guide_ref_img, CFA_pattern)
-            
-            ref_local_stats = cuda.device_array(guide_imshape + (2, 3), dtype=DEFAULT_NUMPY_FLOAT_TYPE) # mu, sigma for rgb
+            guide_ref_img = compute_guide_image(ref_img, guide_imshape, CFA_pattern)
         else:
             guide_ref_img = ref_img[:, :, None] # Adding 1 channel
-            
-            ref_local_stats = cuda.device_array(guide_imshape + (2, 1), dtype=DEFAULT_NUMPY_FLOAT_TYPE) # mu, sigma
+
     
         
         if VERBOSE > 2 :
@@ -77,11 +73,8 @@ def init_robustness(ref_img,options, params):
             current_time = getTime(
                 current_time, ' - Image decimated')
             
-        compute_local_stats[guide_imshape, (3, 3)](
-            guide_ref_img,
-            ref_local_stats)
+        ref_local_stats = compute_local_stats(guide_ref_img)
         
-    
         if VERBOSE > 2 :
             cuda.synchronize()
             current_time = getTime(
@@ -136,7 +129,6 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
           
     if r_on : 
         r = cuda.device_array(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
-        R = cuda.device_array(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
         
         if VERBOSE > 1:
             current_time = time.perf_counter()
@@ -154,22 +146,12 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
             
         # Computing guide image
         if bayer_mode:
-            guide_img = cuda.device_array(guide_imshape + (3,), DEFAULT_NUMPY_FLOAT_TYPE)
-            
-            threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
-            blockspergrid_x = int(np.ceil(guide_imshape[1]/threadsperblock[1]))
-            blockspergrid_y = int(np.ceil(guide_imshape[0]/threadsperblock[0]))
-            blockspergrid = (blockspergrid_x, blockspergrid_y)
-            
-            compute_guide_image[blockspergrid, threadsperblock](comp_img, guide_img, CFA_pattern)
-            
-            
+            guide_img = compute_guide_image(comp_img, guide_imshape, CFA_pattern)
             comp_local_stats = cuda.device_array(guide_imshape+(2, 3), dtype=DEFAULT_NUMPY_FLOAT_TYPE) # mu, sigma for rgb
         else:
             guide_img = comp_img[:, :, None] # addign 1 channel
             comp_local_stats = cuda.device_array(guide_imshape + (2, 1), dtype=DEFAULT_NUMPY_FLOAT_TYPE) # mu, sigma
             
-
 
         # Computing local stats (before applying optical flow)
         # 2 channels for mu, sigma
@@ -179,8 +161,7 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
             current_time = getTime(
                 current_time, ' - Image decimated to rgb')
             
-        compute_local_stats[guide_imshape, (3, 3)](guide_img,
-                                                 comp_local_stats)
+        comp_local_stats = compute_local_stats(guide_img)
         
         if VERBOSE > 2 :
             cuda.synchronize()
@@ -188,16 +169,8 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
                 current_time, ' - Local stats estimated')
         
         # computing d
-        threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
-        blockspergrid_x = int(np.ceil(guide_imshape[1]/threadsperblock[1]))
-        blockspergrid_y = int(np.ceil(guide_imshape[0]/threadsperblock[0]))
-
-        blockspergrid = (blockspergrid_x, blockspergrid_y)
-        
-        d = cuda.device_array(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
-        cuda_compute_patch_dist[blockspergrid, threadsperblock](
-            ref_local_stats, comp_local_stats, flows, tile_size, d)
-        
+        d = compute_patch_dist(ref_local_stats, comp_local_stats,
+                               flows, tile_size)
         
         if VERBOSE > 2 :
             cuda.synchronize()
@@ -205,16 +178,8 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
                 current_time, ' - Estimated color distances')
         
         # leveraging the noise model
-        sigma = cuda.device_array(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
-        
-        threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
-        blockspergrid_x = int(np.ceil(guide_imshape[1]/threadsperblock[1]))
-        blockspergrid_y = int(np.ceil(guide_imshape[0]/threadsperblock[0]))
-        blockspergrid = (blockspergrid_x, blockspergrid_y)
-            
-        cuda_apply_noise_model[blockspergrid, threadsperblock](
-            d, sigma, ref_local_stats, cuda_std_curve, cuda_diff_curve)
-        
+        d, sigma = apply_noise_model(d, ref_local_stats,
+                                     cuda_std_curve, cuda_diff_curve)
         
         if VERBOSE > 2 :
             cuda.synchronize()
@@ -231,19 +196,14 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
             current_time = getTime(
                 current_time, ' - Flow irregularities registered')
         
-        threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
-        blockspergrid_x = int(np.ceil(R.shape[1]/threadsperblock[1]))
-        blockspergrid_y = int(np.ceil(R.shape[0]/threadsperblock[0]))
-        blockspergrid = (blockspergrid_x, blockspergrid_y)
-        
-        cuda_compute_robustness[blockspergrid, threadsperblock](d, sigma, S, t, R)
+        R = robustness_treshold(d, sigma, S, t)
         
         if VERBOSE > 2:
             cuda.synchronize()
             current_time = getTime(
                 current_time, ' - Robustness Estimated')
         
-        compute_local_min[guide_imshape, (5, 5)](R, r)
+        r = local_min(R)
         
         if VERBOSE > 2:
             cuda.synchronize()
@@ -254,8 +214,20 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
         r = cuda.to_device(temp)
     return r
 
+def compute_guide_image(raw_img, guide_imshape, CFA):
+    guide_img = cuda.device_array(guide_imshape + (3,), DEFAULT_NUMPY_FLOAT_TYPE)
+    
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
+    blockspergrid_x = int(np.ceil(guide_imshape[1]/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(guide_imshape[0]/threadsperblock[0]))
+    blockspergrid = (blockspergrid_x, blockspergrid_y)
+            
+    cuda_compute_guide_image[blockspergrid, threadsperblock](raw_img, guide_img, CFA)
+    
+    return guide_img
+    
 @cuda.jit
-def compute_guide_image(raw_img, guide_img, CFA):
+def cuda_compute_guide_image(raw_img, guide_img, CFA):
     tx, ty = cuda.grid(2)
     
     if (0 <= ty < guide_img.shape[0] and
@@ -273,10 +245,8 @@ def compute_guide_image(raw_img, guide_img, CFA):
                     guide_img[ty, tx, c] = raw_img[2*ty + i, 2*tx + j]
                 
         guide_img[ty, tx, 1] = g/2
-    
-    
-@cuda.jit
-def compute_local_stats(guide_img, local_stats):
+
+def compute_local_stats(guide_img):
     """
     Computes the mean color and variance associated for each 3 by 3 patches
 
@@ -284,40 +254,61 @@ def compute_local_stats(guide_img, local_stats):
     ----------
     guide_img : device Array[guide_imshape_y, guide_imshape_x, channels]
         ref rgb image.
-
+        
+    Returns
+    -------
     ref_local_stats : device Array[guide_imshape_y, guide_imshape_x, 2, channels]
-        empty array that will contain mu and sigma² for the ref img
+        Array that contains mu and sigma² for the ref img
 
 
     """
-    guide_imshape_y, guide_imshape_x, channels = guide_img.shape
+    *guide_imshape, n_channels = guide_img.shape
+    if n_channels == 1:
+        local_stats = cuda.device_array(guide_imshape + [2, 1], DEFAULT_NUMPY_FLOAT_TYPE) # mu, sigma
+    elif n_channels == 3:
+        local_stats = cuda.device_array(guide_imshape + [2, 3], DEFAULT_NUMPY_FLOAT_TYPE) # mu, sigma for rgb
+    else: 
+        raise ValueError("Incoherent number of channel : {}".format(n_channels))
     
-    tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
-    idy, idx = cuda.blockIdx.x, cuda.blockIdx.y
-
-    # single threaded zeros init
-    if tx == 0 and ty ==0:
-        for chan in range(channels):
-            local_stats[idy, idx, 0, chan] = 0
-            local_stats[idy, idx, 1, chan] = 0
-
-
-    cuda.syncthreads()
-    thread_idy = clamp(idy + ty -1, 0, guide_imshape_y-1)
-    thread_idx = clamp(idx + tx -1, 0, guide_imshape_x-1)
-
-    for chan in range(channels):
-        thread_value = guide_img[thread_idy, thread_idx, chan]
-        cuda.atomic.add(local_stats, (idy, idx, 0, chan), thread_value)
-        cuda.atomic.add(local_stats, (idy, idx, 1, chan), thread_value**2)
-    cuda.syncthreads()
-    if ty == 0 and tx <= channels:
-        # normalizing
-        local_stats[idy, idx, 0, tx] /= 9 # one thread for each color channel = no racing condition
-        local_stats[idy, idx, 1, tx] = local_stats[idy, idx, 1, tx]/9 -  local_stats[idy, idx, 0, tx]**2
-        
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS, 1) # maximum, we may take less
+    blockspergrid_x = int(np.ceil(guide_imshape[1]/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(guide_imshape[0]/threadsperblock[0]))
+    blockspergrid = (blockspergrid_x, blockspergrid_y, n_channels)
+    
+    cuda_compute_local_stats[blockspergrid, threadsperblock](guide_img, local_stats)
+    
+    return local_stats
+    
+    
 @cuda.jit
-def cuda_compute_patch_dist(ref_local_stats, comp_local_stats, flow, tile_size, dist):
+def cuda_compute_local_stats(guide_img, local_stats):
+    guide_imshape_y, guide_imshape_x, n_channels = guide_img.shape
+    
+    idx, idy, channel = cuda.grid(3)
+    if not(0 <= idy < guide_imshape_y and
+           0 <= idx < guide_imshape_x):
+        return
+
+    local_stats_ = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
+    local_stats_[0] = 0; local_stats_[1] = 0
+
+    for i in range(-3, 4):
+        for j in range(-3, 4):
+            y = clamp(idy + i, 0, guide_imshape_y-1)
+            x = clamp(idx + j, 0, guide_imshape_x-1)
+
+            value = guide_img[y, x, channel]
+            local_stats_[0] += value
+            local_stats_[1] += value*value
+
+
+    # normalizing
+    channel_mean = local_stats_[0]/9
+    local_stats[idy, idx, 0, channel] = channel_mean
+    local_stats[idy, idx, 1, channel] = local_stats_[1]/9 - channel_mean*channel_mean
+        
+        
+def compute_patch_dist(ref_local_stats, comp_local_stats, flows, tile_size):
     """
     Computes the map of d^2 based on both maps of color mean
 
@@ -331,14 +322,29 @@ def cuda_compute_patch_dist(ref_local_stats, comp_local_stats, flow, tile_size, 
         patch-wise optical flows of the compared image
     tile_size : int
         tile size used for optical flow
-    dist : Device Array[guide_imshape_y, guide_imshape_x, 2, channels]
-        Empty array that will contain the distances
 
     Returns
     -------
-    None.
+    dist : Device Array[guide_imshape_y, guide_imshape_x, 2]
+        Array that contains the distances
 
     """
+    *guide_imshape, _, _ = ref_local_stats.shape
+
+    dist = cuda.device_array(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
+    
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
+    blockspergrid_x = int(np.ceil(guide_imshape[1]/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(guide_imshape[0]/threadsperblock[0]))
+    blockspergrid = (blockspergrid_x, blockspergrid_y)
+    
+    cuda_compute_patch_dist[blockspergrid, threadsperblock](
+        ref_local_stats, comp_local_stats, flows, tile_size, dist)
+
+    return dist
+
+@cuda.jit
+def cuda_compute_patch_dist(ref_local_stats, comp_local_stats, flow, tile_size, dist):
     idx, idy = cuda.grid(2)
     guide_imshape_y, guide_imshape_x, _, n_channels = ref_local_stats.shape
     
@@ -378,11 +384,8 @@ def cuda_compute_patch_dist(ref_local_stats, comp_local_stats, flow, tile_size, 
             
         else:
             dist[idy, idx] = +1/0 # + infinite distance will induce R = 0
-        
 
-        
-@cuda.jit
-def cuda_apply_noise_model(d, sigma, ref_local_stats, std_curve, diff_curve):
+def apply_noise_model(d, ref_local_stats, std_curve, diff_curve):
     """
     Applying noise model to update d^2 and sigma^2
 
@@ -390,8 +393,6 @@ def cuda_apply_noise_model(d, sigma, ref_local_stats, std_curve, diff_curve):
     ----------
     d : device Array[guide_imshape_y, guide_imshape_x]
         squarred color distance between ref and compared image
-    sigma : device Array[guide_imshape_y, guide_imshape_x]
-        Empty array that will contained the noise-corrected sigma value
     ref_local_stats : device Array[guide_imshape_y, guide_imshape_x, 2, channels]
         Local statistics of the ref image (required for fetching sigmas)
     std_curve : device Array
@@ -401,9 +402,27 @@ def cuda_apply_noise_model(d, sigma, ref_local_stats, std_curve, diff_curve):
 
     Returns
     -------
-    None.
+    d : device Array[guide_imshape_y, guide_imshape_x]
+        updated version of the distancde (no copy is done, the original d is modified)
+    sigma : device Array[guide_imshape_y, guide_imshape_x]
+        Array that will contained the noise-corrected sigma value
 
     """
+    *guide_imshape, _, _ = ref_local_stats.shape     
+    sigma = cuda.device_array(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
+        
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
+    blockspergrid_x = int(np.ceil(guide_imshape[1]/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(guide_imshape[0]/threadsperblock[0]))
+    blockspergrid = (blockspergrid_x, blockspergrid_y)
+    
+    cuda_apply_noise_model[blockspergrid, threadsperblock](d, sigma,
+                                                           ref_local_stats,
+                                                           std_curve, diff_curve)
+    return d, sigma
+
+@cuda.jit
+def cuda_apply_noise_model(d, sigma, ref_local_stats, std_curve, diff_curve):
     idx, idy = cuda.grid(2)
     if (0 <= idy < ref_local_stats.shape[0] and
         0 <= idx < ref_local_stats.shape[1]):
@@ -487,8 +506,21 @@ def compute_s(flows, M_th, s1, s2, S):
         else:
             S[patch_idy, patch_idx] = s2
 
+def robustness_treshold(d, sigma, S, t):
+    guide_imshape = d.shape 
+    R = cuda.device_array(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
+    
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
+    blockspergrid_x = int(np.ceil(R.shape[1]/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(R.shape[0]/threadsperblock[0]))
+    blockspergrid = (blockspergrid_x, blockspergrid_y)
+    
+    cuda_robustness_treshold[blockspergrid, threadsperblock](d, sigma, S, t, R)
+    
+    return R
+    
 @cuda.jit    
-def cuda_compute_robustness(d, sigma, S, t, R):
+def cuda_robustness_treshold(d, sigma, S, t, R):
     idx, idy = cuda.grid(2)
     n_patchs_y, n_patchs_x = S.shape
     guide_imshape_y, guide_imshape_x = d.shape
@@ -504,9 +536,8 @@ def cuda_compute_robustness(d, sigma, S, t, R):
         
         R[idy, idx] = clamp(S[patch_idy, patch_idx]*exp(-d[idy, idx]/sigma[idy, idx]) - t,
                             0, 1)
-    
-@cuda.jit
-def compute_local_min(R, r):
+
+def local_min(R):
     """
     For each pixel of R, the minimum in a 5 by 5 window is estimated in parallel
     and stored in r.
@@ -515,32 +546,43 @@ def compute_local_min(R, r):
     ----------
     R : Array[guide_imshape_y, guide_imshape_x]
         Robustness map for every image
-    r : Array[guide_imshape_y, guide_imshape_x]
-        locally minimised version of R
 
     Returns
     -------
-    None.
+    r : Array[guide_imshape_y, guide_imshape_x]
+        locally minimised version of R
 
     """
+    r = cuda.device_array(R.shape, DEFAULT_NUMPY_FLOAT_TYPE)
+    
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
+    blockspergrid_x = int(np.ceil(R.shape[1]/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(R.shape[0]/threadsperblock[0]))
+    blockspergrid = (blockspergrid_x, blockspergrid_y)
+    
+    cuda_compute_local_min[blockspergrid, threadsperblock](R, r)
+    
+    return r
+    
+@cuda.jit
+def cuda_compute_local_min(R, r):
     guide_imshape_y, guide_imshape_x = R.shape
     
-    
-    
-    pixel_idy, pixel_idx = cuda.blockIdx.x, cuda.blockIdx.y
-    tx, ty = cuda.threadIdx.x - 2, cuda.threadIdx.y - 2
+    idx, idy = cuda.grid(2)
+    if not(0 <= idy < guide_imshape_y and
+           0 <= idx < guide_imshape_x):
+        return
 
-    mini = cuda.shared.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-
-    if tx == 0 and ty == 0:
-        mini[0] = 1/0
-    cuda.syncthreads()
+    mini = +1/0
     
     #local min search
-    if 0 <= pixel_idx + tx < guide_imshape_x and 0 <= pixel_idy + ty < guide_imshape_y : #inbound
-        cuda.atomic.min(mini, 0, R[pixel_idy + ty, pixel_idx + tx])
+    for i in range(-5, 6):
+        y = clamp(idy + i, 0, guide_imshape_y)
+        for j in range(-5, 6):
+            x = clamp(idx + j, 0, guide_imshape_x)
+            mini = min(mini, R[y, x])
     
-    cuda.syncthreads()
-    if tx==0 and ty==0 :
-        r[pixel_idy, pixel_idx] = mini[0]
+
+
+    r[idy, idx] = mini
         
