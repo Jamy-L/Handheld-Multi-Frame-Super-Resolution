@@ -280,9 +280,15 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
     # But using shared memory is making things slower, using sum reduction too,
     # redesigning threads too...
     imsize_y, imsize_x = comp_img.shape
-    
+    n_patchs_y, n_patchs_x, _ = alignment.shape
     patch_idx, patch_idy = cuda.grid(2)
-    patch_pos = tile_size//2 * (patch_idx - 1)
+    
+    if not(0 <= patch_idy < n_patchs_y and
+           0 <= patch_idx < n_patchs_x):
+        return
+    
+    patch_pos_x = tile_size//2 * (patch_idx - 1)
+    patch_pos_y = tile_size//2 * (patch_idy - 1)
     
     
     A = cuda.local.array((2,2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
@@ -303,8 +309,8 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
                 
     for i in range(tile_size):
         for j in range(tile_size):
-            pixel_global_idx = patch_pos + j # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
-            pixel_global_idy = patch_pos + i
+            pixel_global_idx = patch_pos_x + j # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
+            pixel_global_idy = patch_pos_y + i
             
             local_gradx = gradx[pixel_global_idy, pixel_global_idx]
             local_grady = grady[pixel_global_idy, pixel_global_idx]
