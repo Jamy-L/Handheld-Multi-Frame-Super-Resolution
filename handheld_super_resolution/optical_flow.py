@@ -298,7 +298,7 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
     A[1, 1] = hessian[patch_idy, patch_idx, 1, 1]
     
     B = cuda.local.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
-    B[0] = 0; B[1] = 1
+    B[0] = 0; B[1] = 0
     
     local_alignment = cuda.local.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
     local_alignment[0] = alignment[patch_idy, patch_idx, 0]
