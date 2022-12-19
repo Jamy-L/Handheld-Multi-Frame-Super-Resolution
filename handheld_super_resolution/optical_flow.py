@@ -240,12 +240,6 @@ def ICA_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, hes
         The iteration index (for printing evolution when verbose >2,
                              and for clearing memory)
 
-    Returns
-    -------
-    new_alignment
-        Array[n_images, n_tiles_y, n_tiles_x, 2]
-            The adjusted tile alignment
-
     """
     verbose_2 = options['verbose'] > 2
     tile_size = params['tuning']['tileSize']
@@ -258,7 +252,14 @@ def ICA_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, hes
         current_time = time.perf_counter()
         print(" -- Lucas-Kanade iteration {}".format(iter_index))
     
-    ICA_get_new_flow[[(n_patch_y, n_patch_x), (tile_size, tile_size)]
+    
+    threadsperblock = (16, 16)
+    
+    blockspergrid_x = int(np.ceil(n_patch_y/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(n_patch_x/threadsperblock[0]))
+    blockspergrid = (blockspergrid_x, blockspergrid_y)
+    
+    ICA_get_new_flow[[blockspergrid, threadsperblock]
         ](ref_img, comp_img, gradsx, gradsy, alignment, hessian, tile_size)   
 
     if verbose_2:
@@ -275,78 +276,89 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
     A is precomputed, but B is evaluated each time. 
 
     """
+    # TODO This runs in 8ms for a 12Mp raw frame ... This is too long.
+    # But using shared memory is making things slower, using sum reduction too,
+    # redesigning threads too...
     imsize_y, imsize_x = comp_img.shape
+    n_patchs_y, n_patchs_x, _ = alignment.shape
+    patch_idx, patch_idy = cuda.grid(2)
     
-    patch_idy, patch_idx = cuda.blockIdx.x, cuda.blockIdx.y
-    pixel_local_idx = cuda.threadIdx.x # Position relative to the patch
-    pixel_local_idy = cuda.threadIdx.y
+    if not(0 <= patch_idy < n_patchs_y and
+           0 <= patch_idx < n_patchs_x):
+        return
     
-    pixel_global_idx = tile_size//2 * (patch_idx - 1) + pixel_local_idx # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
-    pixel_global_idy = tile_size//2 * (patch_idy - 1) + pixel_local_idy
+    patch_pos_x = tile_size//2 * (patch_idx - 1)
+    patch_pos_y = tile_size//2 * (patch_idy - 1)
     
-    A = cuda.shared.array((2,2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
-    B = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
     
-    # parallel init
-    if cuda.threadIdx.x <= 1 and cuda.threadIdx.y <=1 : # copy hessian values
-        A[cuda.threadIdx.y, cuda.threadIdx.x] = hessian[patch_idy, patch_idx,
-                                                          cuda.threadIdx.y, cuda.threadIdx.x]
-    if cuda.threadIdx.y == 2 and cuda.threadIdx.x <= 1 :
-        B[cuda.threadIdx.x] = 0
-  
+    A = cuda.local.array((2,2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    A[0, 0] = hessian[patch_idy, patch_idx, 0, 0]
+    A[0, 1] = hessian[patch_idy, patch_idx, 0, 1]
+    A[1, 0] = hessian[patch_idy, patch_idx, 1, 0]
+    A[1, 1] = hessian[patch_idy, patch_idx, 1, 1]
     
-    inbound = (0 <= pixel_global_idx < imsize_x) and (0 <= pixel_global_idy < imsize_y)
+    B = cuda.local.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    B[0] = 0; B[1] = 0
+    
+    local_alignment = cuda.local.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    local_alignment[0] = alignment[patch_idy, patch_idx, 0]
+    local_alignment[1] = alignment[patch_idy, patch_idx, 1]
+    
+    buffer_val = cuda.local.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
+    pos = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE) # y, x
+                
+    for i in range(tile_size):
+        for j in range(tile_size):
+            pixel_global_idx = patch_pos_x + j # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
+            pixel_global_idy = patch_pos_y + i
+            
+            local_gradx = gradx[pixel_global_idy, pixel_global_idx]
+            local_grady = grady[pixel_global_idy, pixel_global_idx]
+    
 
-    if inbound :
-        # Warp I with W(x; p) to compute I(W(x; p))
-        new_idx = alignment[patch_idy, patch_idx, 0] + pixel_global_idx
-        new_idy = alignment[patch_idy, patch_idx, 1] + pixel_global_idy 
+            inbound = (0 <= pixel_global_idx < imsize_x) and (0 <= pixel_global_idy < imsize_y)
+    
+
+            if inbound :
+                # Warp I with W(x; p) to compute I(W(x; p))
+                new_idx = local_alignment[0] + pixel_global_idx
+                new_idy = local_alignment[1] + pixel_global_idy 
  
-    inbound = inbound and (0 <= new_idx < imsize_x -1) and (0 <= new_idy < imsize_y - 1) # -1 for bicubic interpolation
+            inbound &= (0 <= new_idx < imsize_x -1) and (0 <= new_idy < imsize_y - 1) # -1 for bicubic interpolation
     
-    if inbound:
-        # bicubic interpolation
-        buffer_val = cuda.local.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
-        pos = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE) # y, x
-        normalised_pos_x, floor_x = modf(new_idx) # https://www.rollpie.com/post/252
-        normalised_pos_y, floor_y = modf(new_idy) # separating floor and floating part
-        floor_x = int(floor_x)
-        floor_y = int(floor_y)
+            if inbound:
+                # bicubic interpolation
+                normalised_pos_x, floor_x = modf(new_idx) # https://www.rollpie.com/post/252
+                normalised_pos_y, floor_y = modf(new_idy) # separating floor and floating part
+                floor_x = int(floor_x)
+                floor_y = int(floor_y)
+                
+                ceil_x = floor_x + 1
+                ceil_y = floor_y + 1
+                pos[0] = normalised_pos_y
+                pos[1] = normalised_pos_x
+                
+                buffer_val[0, 0] = comp_img[floor_y, floor_x]
+                buffer_val[0, 1] = comp_img[floor_y, ceil_x]
+                buffer_val[1, 0] = comp_img[ceil_y, floor_x]
+                buffer_val[1, 1] = comp_img[ceil_y, ceil_x]
+                comp_val = bilinear_interpolation(buffer_val, pos)
+                gradt = comp_val- ref_img[pixel_global_idy, pixel_global_idx]
+            
+                # TODO This takes 8ms more per step and does not improve ... remove it ?
+                # exponentially decreasing window, of size tile_size_lk
+                # r_square = ((j - tile_size/2)**2 +
+                #             (i - tile_size/2)**2)
+                # sigma_square = (tile_size/2)**2
+                # w = exp(-r_square/(3*sigma_square))
+                
+                B[0] += -local_gradx*gradt
+                B[1] += -local_grady*gradt
         
-        ceil_x = floor_x + 1
-        ceil_y = floor_y + 1
-        pos[0] = normalised_pos_y
-        pos[1] = normalised_pos_x
-        
-        buffer_val[0, 0] = comp_img[floor_y, floor_x]
-        buffer_val[0, 1] = comp_img[floor_y, ceil_x]
-        buffer_val[1, 0] = comp_img[ceil_y, floor_x]
-        buffer_val[1, 1] = comp_img[ceil_y, ceil_x]
-        comp_val = bilinear_interpolation(buffer_val, pos)
-        gradt = comp_val- ref_img[pixel_global_idy, pixel_global_idx]
-               
-        # exponentially decreasing window, of size tile_size_lk
-        r_square = ((pixel_local_idx - tile_size/2)**2 +
-                    (pixel_local_idy - tile_size/2)**2)
-        sigma_square = (tile_size/2)**2
-        w = exp(-r_square/(3*sigma_square)) # TODO this is not improving LK so much... 3 seems to be a good coef though.
-        
-        local_gradx = gradx[pixel_global_idy, pixel_global_idx]
-        local_grady = grady[pixel_global_idy, pixel_global_idx]
-        
-        # Sum reduction slows down the whole thing. Atomic add seems to be faster
-        cuda.atomic.add(B, 0, -local_gradx*gradt*w)
-        cuda.atomic.add(B, 1, -local_grady*gradt*w)
-        
-
     
-    alignment_step = cuda.shared.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-    cuda.syncthreads()
+    alignment_step = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+    if abs(A[0, 0]*A[1, 1] - A[0, 1]*A[1, 0])> 1e-5: # system is solvable 
+        solve_2x2(A, B, alignment_step)
         
-    if cuda.threadIdx.x <= 1 and cuda.threadIdx.y == 0:
-        if abs(A[0, 0]*A[1, 1] - A[0, 1]*A[1, 0])> 1e-5: # system is solvable 
-            # No racing condition, one thread for one id
-            solve_2x2(A, B, alignment_step)
-            alignment[patch_idy, patch_idx, cuda.threadIdx.x] += alignment_step[cuda.threadIdx.x]
-
-    cuda.syncthreads()
+        alignment[patch_idy, patch_idx, 0] = local_alignment[0] + alignment_step[0]
+        alignment[patch_idy, patch_idx, 1] = local_alignment[1] + alignment_step[1]
