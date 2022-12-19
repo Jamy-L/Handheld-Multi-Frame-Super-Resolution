@@ -54,11 +54,10 @@ def init_robustness(ref_img,options, params):
                 print(" - Decimating images to RGB")
                 
         if params["mode"]=='bayer':
-            guide_imshape = int(imshape_y/2), int(imshape_x/2)
+            guide_imshape = imshape_y//2, imshape_x//2
         else:
             guide_imshape = imshape
 
-                
         # Computing guide image
 
         if bayer_mode:
@@ -196,7 +195,7 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
             current_time = getTime(
                 current_time, ' - Flow irregularities registered')
         
-        R = robustness_treshold(d, sigma, S, t)
+        R = robustness_threshold(d, sigma, S, t, tile_size, bayer_mode)
         
         if VERBOSE > 2:
             cuda.synchronize()
@@ -356,15 +355,15 @@ def cuda_compute_patch_dist(ref_local_stats, comp_local_stats, flow, tile_size, 
         ## Fetching flow
         local_flow = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE) 
         if n_channels == 1:
-            patch_idy = round(idy//(tile_size//2)) # guide scale is actually coarse scale
-            patch_idx = round(idx//(tile_size//2))
+            patch_idy = round(idy//(tile_size//2)) + 1 # guide scale is actually coarse scale
+            patch_idx = round(idx//(tile_size//2)) + 1 # + 1 because of BM padding
             # guide image is coarse image : the flow stays the same
             local_flow[0] = flow[patch_idy, patch_idx, 0]
             local_flow[1] = flow[patch_idy, patch_idx, 1]
             
         else:
-            patch_idy = round(2*idy//(tile_size//2)) # guide scale is 2 times sparser than coarse
-            patch_idx = round(2*idx//(tile_size//2))
+            patch_idy = round(2*idy//(tile_size//2)) + 1 # guide scale is 2 times sparser than coarse
+            patch_idx = round(2*idx//(tile_size//2)) + 1
             
             # guide image is 2x smaller than coarse image : the flow must be divided by 2
             local_flow[0] = flow[patch_idy, patch_idx, 0]/2
@@ -506,7 +505,7 @@ def compute_s(flows, M_th, s1, s2, S):
         else:
             S[patch_idy, patch_idx] = s2
 
-def robustness_treshold(d, sigma, S, t):
+def robustness_threshold(d, sigma, S, t, tile_size, bayer_mode):
     guide_imshape = d.shape 
     R = cuda.device_array(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
     
@@ -515,23 +514,25 @@ def robustness_treshold(d, sigma, S, t):
     blockspergrid_y = int(np.ceil(R.shape[0]/threadsperblock[0]))
     blockspergrid = (blockspergrid_x, blockspergrid_y)
     
-    cuda_robustness_treshold[blockspergrid, threadsperblock](d, sigma, S, t, R)
+    cuda_robustness_threshold[blockspergrid, threadsperblock](d, sigma, S, t, tile_size, bayer_mode, R)
     
     return R
     
 @cuda.jit    
-def cuda_robustness_treshold(d, sigma, S, t, R):
+def cuda_robustness_threshold(d, sigma, S, t, tile_size, bayer_mode, R):
     idx, idy = cuda.grid(2)
     n_patchs_y, n_patchs_x = S.shape
     guide_imshape_y, guide_imshape_x = d.shape
     
     if (0 <= idy < R.shape[0] and
         0 <= idx < R.shape[1]):
-    
-        # fetching patch id (for S). I use a cross product to avoid
-        # adding unnecessary arguments to the function. Note that it works with 1 or 3 channels
-        patch_idy = round(idy * n_patchs_y / guide_imshape_y)
-        patch_idx = round(idx * n_patchs_x / guide_imshape_x)
+        
+        if bayer_mode : 
+            patch_idy = round(idy//(tile_size//2)) + 1
+            patch_idx = round(idx//(tile_size//2)) + 1
+        else:
+            patch_idy = round(2*idy//(tile_size//2)) + 1
+            patch_idx = round(2*idx//(tile_size//2)) + 1
     
         
         R[idy, idx] = clamp(S[patch_idy, patch_idx]*exp(-d[idy, idx]/sigma[idy, idx]) - t,

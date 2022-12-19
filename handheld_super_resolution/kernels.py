@@ -16,8 +16,6 @@ from .linalg import get_eighen_elmts_2x2
 from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, getTime
 from .utils_image import compute_grey_images
 
-import matplotlib.pyplot as plt
-
 
 def estimate_kernels(img, options, params):
     """ Returns the kernels covariance matrix for the "img" frame, sampled at the
@@ -226,8 +224,8 @@ def compute_rho(l1, l2, rho, k_detail, k_denoise, D_th, D_tr, k_stretch,
     else:
         nu_1 = 1
         nu_2 = 1
-    # nu_1 = (k_stretch*(A -1) + (2 - A))
-    # nu_2 = 1/(k_shrink*(A - 1) + (2 - A))
+    # nu_1 = 1/(k_shrink*(A - 1) + (2 - A))
+    # nu_2 = (k_stretch*(A -1) + (2 - A))
     
     rho[0] = k_detail*((1-D)*nu_1 + D*k_detail*k_denoise)
     rho[1] = k_detail*((1-D)*nu_2 + D*k_detail*k_denoise)

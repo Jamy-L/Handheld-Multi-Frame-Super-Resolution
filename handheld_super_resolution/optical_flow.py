@@ -7,7 +7,7 @@ Created on Sun Jul 31 00:00:36 2022
 
 import time
 
-from math import ceil, modf
+from math import ceil, modf, exp
 import numpy as np
 from numba import cuda
 from scipy.ndimage._filters import _gaussian_kernel1d
@@ -25,9 +25,13 @@ def init_ICA(ref_img, options, params):
     tile_size = params['tuning']['tileSize']
     
     imsize_y, imsize_x = ref_img.shape
-
-    n_patch_y = int(ceil(imsize_y/(tile_size//2))) + 1
-    n_patch_x = int(ceil(imsize_x/(tile_size//2))) + 1
+    
+    # image is padded during BM, we need to consider that to count patches
+    padded_imshape_x = tile_size*(int(ceil(imsize_x/tile_size)) + 1)
+    padded_imshape_y = tile_size*(int(ceil(imsize_y/tile_size)) + 1)
+    
+    n_patch_y = padded_imshape_y // (tile_size // 2) - 1
+    n_patch_x = padded_imshape_x // (tile_size // 2) - 1
 
     # Estimating gradients with separated Prewitt kernels
     kernely = np.array([[-1],
@@ -54,47 +58,27 @@ def init_ICA(ref_img, options, params):
         
         
         # 2 times gaussian 1d is faster than gaussian 2d
-        # TODO I have not checked if the gaussian blur was exactly the same as outputed byt gaussian_filter1d
-        
-        temp = F.conv2d(th_ref_img, th_gaussian_kernel[None, None, :, None]) # convolve y
-        temp = F.conv2d(temp, th_gaussian_kernel[None, None, None, :]) # convolve x
+        temp = F.conv2d(th_ref_img, th_gaussian_kernel[None, None, :, None], padding='same') # convolve y
+        temp = F.conv2d(temp, th_gaussian_kernel[None, None, None, :], padding='same') # convolve x
         
         
-        th_gradx = F.conv2d(temp, th_kernelx)[0, 0] # 1 batch, 1 channel
-        th_grady = F.conv2d(temp, th_kernely)[0, 0]
+        th_gradx = F.conv2d(temp, th_kernelx, padding='same')[0, 0] # 1 batch, 1 channel
+        th_grady = F.conv2d(temp, th_kernely, padding='same')[0, 0]
         
-        
-        # Old implementation (equivalent on CPU)
-        # temp = gaussian_filter1d(ref_img, sigma=sigma_blur, axis=-1)
-        # temp = gaussian_filter1d(temp, sigma=sigma_blur, axis=-2)
-                
-        
-        # gradx = cv2.filter2D(temp, -1, kernelx)
-        # grady = cv2.filter2D(temp, -1, kernely)
     else:
-        th_gradx = F.conv2d(th_ref_img, th_kernelx)[0, 0] # 1 batch, 1 channel
-        th_grady = F.conv2d(th_ref_img, th_kernely)[0, 0]
+        th_gradx = F.conv2d(th_ref_img, th_kernelx, padding='same')[0, 0] # 1 batch, 1 channel
+        th_grady = F.conv2d(th_ref_img, th_kernely, padding='same')[0, 0]
         
-        # gradx = cv2.filter2D(ref_img, -1, kernelx)
-        # grady = cv2.filter2D(ref_img, -1, kernely)
     
     # swapping grads back to numba
-    gradx = cuda.as_cuda_array(th_gradx)
-    grady = cuda.as_cuda_array(th_grady)
+    cuda_gradx = cuda.as_cuda_array(th_gradx)
+    cuda_grady = cuda.as_cuda_array(th_grady)
     
     if verbose_2:
         cuda.synchronize()
         current_time = getTime(
             current_time, ' -- Gradients estimated')
     
-    cuda_gradx = cuda.to_device(gradx)
-    cuda_grady = cuda.to_device(grady)
-    
-    if verbose_2: 
-        cuda.synchronize()
-        current_time = getTime(
-            current_time, ' -- Arrays moved to GPU')
-        
     hessian = cuda.device_array((n_patch_y, n_patch_x, 2, 2), DEFAULT_NUMPY_FLOAT_TYPE)
     compute_hessian[(n_patch_x, n_patch_y), (tile_size, tile_size)](
         cuda_gradx, cuda_grady, tile_size, hessian)
@@ -116,8 +100,8 @@ def compute_hessian(gradx, grady, tile_size, hessian):
     pixel_global_idx = tile_size//2 * (patch_idx - 1) + pixel_local_idx # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
     pixel_global_idy = tile_size//2 * (patch_idy - 1) + pixel_local_idy
     
-    inbound = (0 <= pixel_global_idy < imshape[0] and 0 <= pixel_global_idx < imshape[1])
-    
+    inbound = (0 <= pixel_global_idy < imshape[0] and 
+               0 <= pixel_global_idx < imshape[1])
     
     if pixel_local_idx < 2 and pixel_local_idy < 2:
         hessian[patch_idy, patch_idx, pixel_local_idy, pixel_local_idx] = 0 # zero init
@@ -177,7 +161,7 @@ def ICA_optical_flow(cuda_im_grey, cuda_ref_grey, cuda_gradx, cuda_grady, hessia
     """
     if debug : 
         debug_list = []
-        
+
     verbose, verbose_2 = options['verbose'] > 1, options['verbose'] > 2
     n_iter = params['tuning']['kanadeIter']
     
@@ -186,7 +170,7 @@ def ICA_optical_flow(cuda_im_grey, cuda_ref_grey, cuda_gradx, cuda_grady, hessia
     if verbose:
         cuda.synchronize()
         t1 = time.perf_counter()
-        print("\nEstimating Lucas-Kanade's optical flow")
+        print("\nEstimating ICA optical flow")
         
     cuda_alignment = cuda_pre_alignment
 
@@ -258,8 +242,10 @@ def ICA_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, hes
     blockspergrid_y = int(np.ceil(n_patch_x/threadsperblock[0]))
     blockspergrid = (blockspergrid_x, blockspergrid_y)
     
-    ICA_get_new_flow[[blockspergrid, threadsperblock]
-        ](ref_img, comp_img, gradsx, gradsy, alignment, hessian, tile_size)   
+    ICA_get_new_flow[blockspergrid, threadsperblock](
+        ref_img, comp_img,
+        gradsx, gradsy,
+        alignment, hessian, tile_size)   
 
     if verbose_2:
         cuda.synchronize()
@@ -275,7 +261,7 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
     A is precomputed, but B is evaluated each time. 
 
     """
-    # TODO This runs in 8ms for a 12Mp raw frame ... This is too long.
+    # TODO This runs in 15ms for a 12Mp raw frame ... This is too long.
     # But using shared memory is making things slower, using sum reduction too,
     # redesigning threads too...
     imsize_y, imsize_x = comp_img.shape
@@ -311,19 +297,19 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
             pixel_global_idx = patch_pos_x + j # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
             pixel_global_idy = patch_pos_y + i
             
-            local_gradx = gradx[pixel_global_idy, pixel_global_idx]
-            local_grady = grady[pixel_global_idy, pixel_global_idx]
-    
-
-            inbound = (0 <= pixel_global_idx < imsize_x) and (0 <= pixel_global_idy < imsize_y)
-    
-
+            inbound = (0 <= pixel_global_idx < imsize_x and 
+                       0 <= pixel_global_idy < imsize_y)
+            
             if inbound :
+                local_gradx = gradx[pixel_global_idy, pixel_global_idx]
+                local_grady = grady[pixel_global_idy, pixel_global_idx]
+
                 # Warp I with W(x; p) to compute I(W(x; p))
                 new_idx = local_alignment[0] + pixel_global_idx
                 new_idy = local_alignment[1] + pixel_global_idy 
  
-            inbound &= (0 <= new_idx < imsize_x -1) and (0 <= new_idy < imsize_y - 1) # -1 for bicubic interpolation
+            inbound &= (0 <= new_idx < imsize_x - 1 and
+                        0 <= new_idy < imsize_y - 1) # -1 for bicubic interpolation
     
             if inbound:
                 # bicubic interpolation
@@ -341,8 +327,10 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
                 buffer_val[0, 1] = comp_img[floor_y, ceil_x]
                 buffer_val[1, 0] = comp_img[ceil_y, floor_x]
                 buffer_val[1, 1] = comp_img[ceil_y, ceil_x]
+                
                 comp_val = bilinear_interpolation(buffer_val, pos)
-                gradt = comp_val- ref_img[pixel_global_idy, pixel_global_idx]
+                
+                gradt = comp_val - ref_img[pixel_global_idy, pixel_global_idx]
             
                 # TODO This takes 8ms more per step and does not improve ... remove it ?
                 # exponentially decreasing window, of size tile_size_lk
