@@ -57,10 +57,10 @@ params = get_params(PSNR = 35)
 
 # Overwritting default parameters
 params["scale"] = 1
-options = {'verbose' : 1}
+options = {'verbose' : 3}
 
 params['merging']['kernel'] = 'handheld'
-params['robustness']['on'] = True
+params['robustness']['on'] = False
 params['kanade']['tuning']['kanadeIter'] = 3
 params['debug'] = True
 burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
