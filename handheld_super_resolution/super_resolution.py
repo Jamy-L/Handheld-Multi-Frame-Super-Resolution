@@ -38,7 +38,8 @@ def main(ref_img, comp_imgs, options, params):
     
     debug_mode = params['debug']
     if debug_mode : 
-        debug_dict = {"robustness":[]}
+        debug_dict = {"robustness":[],
+                      "flow":[]}
 
     if verbose :
         cuda.synchronize()
@@ -62,7 +63,7 @@ def main(ref_img, comp_imgs, options, params):
         
     #___ Block Matching
     referencePyramid = init_block_matching(cuda_ref_grey, options, params['block matching'])
-
+        
     
     #___ ICA : compute grad and hessian
     ref_gradx, ref_grady, hessian = init_ICA(cuda_ref_grey, options, params['kanade'])
@@ -104,6 +105,7 @@ def main(ref_img, comp_imgs, options, params):
             current_time = getTime(
                 im_time, 'Arrays moved to GPU')
         
+        #___ Compute Grey Images
         if bayer_mode:
             cuda_im_grey = compute_grey_images(comp_imgs[im_id], grey_method)
             if verbose_3 :
@@ -123,6 +125,7 @@ def main(ref_img, comp_imgs, options, params):
         if verbose_2 :
             cuda.synchronize()
             current_time = getTime(current_time, 'Block Matching (Total)')
+        #___ ICA
         
         cuda_final_alignment = ICA_optical_flow(
             cuda_im_grey, cuda_ref_grey, ref_gradx, ref_grady, hessian, pre_alignment, options, params['kanade'])

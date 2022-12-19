@@ -87,7 +87,6 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
     """
 
     output_pixel_idx, output_pixel_idy = cuda.grid(2)
-
     output_size_y, output_size_x, _ = num.shape
     
     if not (0 <= output_pixel_idx < output_size_x and
@@ -104,10 +103,15 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
         acc = cuda.local.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         val = cuda.local.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
-
+    # Copying CFA locally. We will read that 9 times, so it's worth it
+    # TODO threads could cooperate to read that
+    local_CFA = cuda.local.array((2,2), uint8)
+    for i in range(2):
+        for j in range(2):
+            local_CFA[i,j] = uint8(CFA_pattern[i,j])
+    
     
     coarse_ref_sub_pos = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) # y, x
-
     coarse_ref_sub_pos[0] = output_pixel_idy / scale          
     coarse_ref_sub_pos[1] = output_pixel_idx / scale
     
@@ -165,11 +169,12 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
             cov_i[1, 1] = 1
                     
         
-    # iterating in 3x3 neighborhood
+    center_x = round(coarse_ref_sub_pos[1])
+    center_y = round(coarse_ref_sub_pos[0])
     for i in range(-1, 2):
         for j in range(-1, 2):
-            pixel_idx = round(coarse_ref_sub_pos[1]) + j
-            pixel_idy = round(coarse_ref_sub_pos[0]) + i
+            pixel_idx = center_x + j
+            pixel_idy = center_y + i
             
             # in bound condition
             if (0 <= pixel_idx < output_size_x and
@@ -177,29 +182,30 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
             
                 # checking if pixel is r, g or b
                 if bayer_mode : 
-                    channel = uint8(CFA_pattern[pixel_idy%2, pixel_idx%2])
+                    channel = local_CFA[pixel_idy%2, pixel_idx%2]
                 else:
                     channel = 0
                     
+                # By fetching the value now, we can compute the kernel weight 
+                # while it is called from global memory
                 c = ref_img[pixel_idy, pixel_idx]
-        
-        
-                # applying invert transformation and upscaling
-                fine_sub_pos_x = scale * pixel_idx
-                fine_sub_pos_y = scale * pixel_idy
-                dist_x = (fine_sub_pos_x - output_pixel_idx)
-                dist_y = (fine_sub_pos_y - output_pixel_idy)
-        
+            
+                # computing distance
+                dist_x = pixel_idx - coarse_ref_sub_pos[1]
+                dist_y = pixel_idy - coarse_ref_sub_pos[0]
+            
+                ### Computing w
                 if act : 
                     y = max(0, 2*(dist_x*dist_x + dist_y*dist_y))
                 else:
                     y = max(0, quad_mat_prod(cov_i, dist_x, dist_y))
                     # y can be slightly negative because of numerical precision.
                     # I clamp it to not explode the error with exp
-         
-            
-                w = math.exp(-0.5*y/(scale**2))
-    
+                if bayer_mode : 
+                    w = math.exp(-0.5*y)
+                else:
+                    w = math.exp(-0.5*4*y) # original kernel constants are designed for bayer distances, not greys, Hence x4
+                ############
                 val[channel] += c*w
                 acc[channel] += w
                     
@@ -245,15 +251,12 @@ def merge(comp_img, alignments, covs, r, num, den,
     CFA_pattern = cuda.to_device(params['exif']['CFA Pattern'])
     bayer_mode = params['mode'] == 'bayer'
     act = params['kernel'] == 'act'
-    
-    # TODO check the case bayer + decimate grey or gauss grey
     TILE_SIZE = params['tuning']['tileSize']
-    
-    
     N_TILES_Y, N_TILES_X, _ = alignments.shape
 
     if VERBOSE > 1:
         print('\nBeginning merge process')
+        cuda.synchronize()
         current_time = time.perf_counter()
 
     native_im_size = comp_img.shape
@@ -263,7 +266,6 @@ def merge(comp_img, alignments, covs, r, num, den,
 
     # dispatching threads. 1 thread for 1 output pixel
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
-    
     blockspergrid_x = int(np.ceil(output_size[1]/threadsperblock[1]))
     blockspergrid_y = int(np.ceil(output_size[0]/threadsperblock[0]))
     blockspergrid = (blockspergrid_x, blockspergrid_y)
@@ -271,13 +273,11 @@ def merge(comp_img, alignments, covs, r, num, den,
     accumulate[blockspergrid, threadsperblock](
         comp_img, alignments, covs, r,
         bayer_mode, act, SCALE, TILE_SIZE, CFA_pattern,
-        num, den,
-        )
-    cuda.synchronize()
+        num, den)
 
     if VERBOSE > 1:
-        current_time = getTime(
-            current_time, ' - Image merged on GPU side')
+        cuda.synchronize()
+        getTime(current_time, ' - Image merged on GPU side')
 
 
 @cuda.jit
@@ -293,15 +293,13 @@ def accumulate(comp_img, alignments, covs, r,
 
     Parameters
     ----------
-    ref_img : Array[imsize_y, imsize_x]
-        The reference image
-    comp_imgs : Array[n_images, imsize_y, imsize_x]
-        The compared images
-    alignements : Array[n_images, n_tiles_y, n_tiles_x, 2]
-        The alignemtn vectors for each tile of each image
-    covs : device array[n_images+1, imsize_y/2, imsize_x/2, 2, 2]
+    comp_imgs : Array[imsize_y, imsize_x]
+        The compared image
+    alignements : Array[n_tiles_y, n_tiles_x, 2]
+        The alignemnt vectors for each tile of the image
+    covs : device array[imsize_y/2, imsize_x/2, 2, 2]
         covariance matrices sampled at the center of each bayer quad.
-    r : Device_Array[n_images, imsize_y/2, imsize_x/2, 3]
+    r : Device_Array[imsize_y/2, imsize_x/2, 3]
             Robustness of the moving images
     bayer_mode : bool
         Whether the burst is raw or grey
@@ -341,26 +339,35 @@ def accumulate(comp_img, alignments, covs, r,
         acc = cuda.local.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         val = cuda.local.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
-
+    # Copying CFA locally. We will read that 9 times, so it's worth it
+    # TODO threads could cooperate to read that
+    local_CFA = cuda.local.array((2,2), uint8)
+    for i in range(2):
+        for j in range(2):
+            local_CFA[i,j] = uint8(CFA_pattern[i,j])
 
     
     coarse_ref_sub_pos = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) # y, x
     
     coarse_ref_sub_pos[0] = output_pixel_idy / scale          
     coarse_ref_sub_pos[1] = output_pixel_idx / scale
+
+    # fetch of the flow, as early as possible
+    local_optical_flow = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+    patch_idy = round(coarse_ref_sub_pos[0]//(tile_size//2)) + 1 # +1 because padding was made in block matching. The first patch is out of bounds
+    patch_idx = round(coarse_ref_sub_pos[1]//(tile_size//2)) + 1
+    local_optical_flow[0] = alignments[patch_idy, patch_idx, 0]
+    local_optical_flow[1] = alignments[patch_idy, patch_idx, 1]
     
     for chan in range(n_channels):
         acc[chan] = 0
         val[chan] = 0
     
-
     patch_center_pos = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE) # y, x
-    local_optical_flow = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-
 
 
     # fetching robustness
-    # The robustness of the center of the patch is picked through neirest neigbhoor
+    # The robustness of the center of the patch is picked through neirest neigbhoor interpolation
 
     if bayer_mode : 
         local_r = r[round((coarse_ref_sub_pos[0] - 0.5)/2),
@@ -369,13 +376,6 @@ def accumulate(comp_img, alignments, covs, r,
     else:
         local_r = r[int(coarse_ref_sub_pos[0]),
                     int(coarse_ref_sub_pos[1])]
-    
-    
-    # fetch of the flow
-    patch_idy = round(coarse_ref_sub_pos[0]//(tile_size//2))
-    patch_idx = round(coarse_ref_sub_pos[1]//(tile_size//2))
-    local_optical_flow[0] = alignments[patch_idy, patch_idx, 0]
-    local_optical_flow[1] = alignments[patch_idy, patch_idx, 1]
         
     patch_center_pos[1] = coarse_ref_sub_pos[1] + local_optical_flow[0]
     patch_center_pos[0] = coarse_ref_sub_pos[0] + local_optical_flow[1]
@@ -385,10 +385,6 @@ def accumulate(comp_img, alignments, covs, r,
     if not (0 <= patch_center_pos[1] < input_size_x and
             0 <= patch_center_pos[0] < input_size_y):
         return
-    
-
-
-
     
     # computing kernel
     if not act:
@@ -409,17 +405,17 @@ def accumulate(comp_img, alignments, covs, r,
         for i in range(0, 2):
             for j in range(0, 2):# TODO sides can get negative grey indexes. It leads to weird covs.
                 close_covs[0, 0, i, j] = covs[int(math.floor(grey_pos[0])),
-                                                int(math.floor(grey_pos[1])),
-                                                i, j]
+                                              int(math.floor(grey_pos[1])),
+                                              i, j]
                 close_covs[0, 1, i, j] = covs[int(math.floor(grey_pos[0])),
-                                                int(math.ceil(grey_pos[1])),
-                                                i, j]
-                close_covs[1, 0, i, j] = covs[ int(math.ceil(grey_pos[0])),
-                                                int(math.floor(grey_pos[1])),
-                                                i, j]
+                                              int(math.ceil(grey_pos[1])),
+                                              i, j]
+                close_covs[1, 0, i, j] = covs[int(math.ceil(grey_pos[0])),
+                                              int(math.floor(grey_pos[1])),
+                                              i, j]
                 close_covs[1, 1, i, j] = covs[int(math.ceil(grey_pos[0])),
-                                                int(math.ceil(grey_pos[1])),
-                                                i, j]
+                                              int(math.ceil(grey_pos[1])),
+                                              i, j]
 
         # interpolating covs at the desired spot
         interpolate_cov(close_covs, grey_pos, interpolated_cov)
@@ -432,11 +428,13 @@ def accumulate(comp_img, alignments, covs, r,
             cov_i[1, 0] = 0
             cov_i[1, 1] = 1
     
+    
+    center_x = round(patch_center_pos[1])
+    center_y = round(patch_center_pos[0])
     for i in range(-1, 2):
         for j in range(-1, 2):
-            
-            pixel_idx = round(patch_center_pos[1]) + j
-            pixel_idy = round(patch_center_pos[0]) + i
+            pixel_idx = center_x + j
+            pixel_idy = center_y + i
             
             # in bound condition
             if (0 <= pixel_idx < output_size_x and
@@ -444,22 +442,19 @@ def accumulate(comp_img, alignments, covs, r,
             
                 # checking if pixel is r, g or b
                 if bayer_mode : 
-                    channel = uint8(CFA_pattern[pixel_idy%2, pixel_idx%2])
+                    channel = local_CFA[pixel_idy%2, pixel_idx%2]
                 else:
                     channel = 0
                     
-                    
-
+                # By fetching the value now, we can compute the kernel weight 
+                # while it is called from global memory
                 c = comp_img[pixel_idy, pixel_idx]
             
+                # computing distance
+                dist_x = pixel_idx - patch_center_pos[1]
+                dist_y = pixel_idy - patch_center_pos[0]
             
-                # applying invert transformation and upscaling
-                fine_sub_pos_x = scale * (pixel_idx - local_optical_flow[0])
-                fine_sub_pos_y = scale * (pixel_idy - local_optical_flow[1])
-                dist_x = (fine_sub_pos_x - output_pixel_idx)
-                dist_y = (fine_sub_pos_y - output_pixel_idy)
-            
-            
+                ### Computing w
                 if act : 
                     y = max(0, 2*(dist_x*dist_x + dist_y*dist_y))
                 else:
@@ -467,11 +462,11 @@ def accumulate(comp_img, alignments, covs, r,
                     # y can be slightly negative because of numerical precision.
                     # I clamp it to not explode the error with exp
                 if bayer_mode : 
-                    w = math.exp(-0.5*y/scale**2)
+                    w = math.exp(-0.5*y)
                 else:
-                    w = math.exp(-0.5*4*y/scale**2) # original kernel constants are designed for bayer distances, not greys.
-        
-            
+                    w = math.exp(-0.5*4*y) # original kernel constants are designed for bayer distances, not greys, Hence x4
+                ############
+                    
                 val[channel] += c*w*local_r
                 acc[channel] += w*local_r
         
