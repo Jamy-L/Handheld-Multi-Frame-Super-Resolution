@@ -194,11 +194,15 @@ transformation_params = {'max_translation':3,
                           'max_ar_factor': 0,
                           'max_rotation': 0}
 
-params = {'block matching': {
-                'mode':'bayer',
+params = {'scale' : 1,
+          'mode' : 'bayer', # 'bayer' or grey if something else 
+          'grey method' : 'FFT',
+          'debug': False, # when True, a dict is returned with tensors.
+          'block matching': {
+                'mode':'grey',
                 'tuning': {
                     # WARNING: these parameters are defined fine-to-coarse!
-                    'factors': [1, 2, 2, 4],
+                    'factors': [1, 2, 4, 4],
                     'tileSizes': [16, 16, 16, 8],
                     'searchRadia': [1, 4, 4, 4],
                     'distances': ['L1', 'L2', 'L2', 'L2'],
@@ -207,19 +211,18 @@ params = {'block matching': {
                     }},
             'kanade' : {
                 'mode':'bayer',
-                'epsilon div' : 1e-6,
                 'tuning' : {
                     'tileSize' : 16,
-                    'tileSize Block Matching':16,
-                    'kanadeIter': 6, # 3 
+                    'sigma blur': 0,
+                    'kanadeIter': 3, # 3 
                     }},
             'robustness' : {
                 'exif':{'CFA Pattern':CFA},
                 'mode':'bayer',
-                'on':False,
+                'on':True,
                 'tuning' : {
                     'tileSize': 16,
-                    't' : 0,            # 0.12
+                    't' : 0.12,            # 0.12
                     's1' : 2,          #12
                     's2' : 12,              # 2
                     'Mt' : 0.8,         # 0.8
@@ -278,7 +281,7 @@ for im_id, filename in tqdm(enumerate(os.listdir(DATASET_PATH)), total=N_images)
     # mosaicnet is outputing a cropped image. We need to crop ground truth
     crop = int((ground_truth.shape[0] - mosaicnet_output.shape[0])/2)
     
-    handheld_output = main(dec_burst[0], dec_burst[1:], options, params)[0][:, :, :3].astype(np.float64)
+    handheld_output = main(dec_burst[0], dec_burst[1:], options, params).astype(np.float64)
     malvar_output = colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(dec_burst[0], pattern='BGGR')
     bilinear_output = colour_demosaicing.demosaicing_CFA_Bayer_bilinear(dec_burst[0], pattern='BGGR')
 

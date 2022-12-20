@@ -231,7 +231,7 @@ def process(burst_path, options, params, crop_str=None):
     ref_raw = raw.raw_image.copy()
     
     # checking parameters coherence
-    check_params_validity(params)
+    check_params_validity(params, ref_raw.shape)
     
     # Cropping the image if needed
     if crop_str is not None:
