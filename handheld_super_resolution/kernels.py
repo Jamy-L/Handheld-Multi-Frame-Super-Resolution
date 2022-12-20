@@ -167,27 +167,27 @@ def cuda_estimate_kernel(full_grads,
         l = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         e1 = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         e2 = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-        rho = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        k = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
         get_eighen_elmts_2x2(structure_tensor, l, e1, e2)
 
-        compute_rho(l[0], l[1], rho, k_detail, k_denoise, D_th, D_tr, k_stretch,
+        compute_k(l[0], l[1], k, k_detail, k_denoise, D_th, D_tr, k_stretch,
         k_shrink)
 
-        rho_1_sq = rho[0]*rho[0]
-        rho_2_sq = rho[1]*rho[1]
+        k_1_sq = k[0]*k[0]
+        k_2_sq = k[1]*k[1]
         
-        covs[pixel_idy, pixel_idx, 0, 0] = rho_1_sq*e1[0]*e1[0] + rho_2_sq*e2[0]*e2[0]
-        covs[pixel_idy, pixel_idx, 0, 1] = rho_1_sq*e1[0]*e1[1] + rho_2_sq*e2[0]*e2[1] 
-        covs[pixel_idy, pixel_idx, 1, 0] = rho_1_sq*e1[0]*e1[1] + rho_2_sq*e2[0]*e2[1]
-        covs[pixel_idy, pixel_idx, 1, 1] = rho_1_sq*e1[1]*e1[1] + rho_2_sq*e2[1]*e2[1]
+        covs[pixel_idy, pixel_idx, 0, 0] = k_1_sq*e1[0]*e1[0] + k_2_sq*e2[0]*e2[0]
+        covs[pixel_idy, pixel_idx, 0, 1] = k_1_sq*e1[0]*e1[1] + k_2_sq*e2[0]*e2[1] 
+        covs[pixel_idy, pixel_idx, 1, 0] = rh_1_sq*e1[0]*e1[1] + k_2_sq*e2[0]*e2[1]
+        covs[pixel_idy, pixel_idx, 1, 1] = k_1_sq*e1[1]*e1[1] + k_2_sq*e2[1]*e2[1]
 
     
 @cuda.jit(device=True)
-def compute_rho(l1, l2, rho, k_detail, k_denoise, D_th, D_tr, k_stretch,
+def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
                           k_shrink):
     """
-    Computes rho_1 and rho_2 based on lambda1, lambda2 and the constants.
+    Computes k_1 and k_2 based on lambda1, lambda2 and the constants.
 
     Parameters
     ----------
@@ -195,8 +195,8 @@ def compute_rho(l1, l2, rho, k_detail, k_denoise, D_th, D_tr, k_stretch,
         lambda1 (dominant eighen value)
     l2 : float
         lambda2
-    rho : Array[2]
-        empty vector where rho_1 and rho_2 will be stored
+    k : Array[2]
+        empty vector where k_1 and k_2 will be stored
     k_detail : TYPE
         DESCRIPTION.
     k_denoise : TYPE
@@ -219,15 +219,15 @@ def compute_rho(l1, l2, rho, k_detail, k_denoise, D_th, D_tr, k_stretch,
 
     # This is a very agressive way of driving anisotropy, but it works well so far.
     if A > 1.9:
-        nu_1 = 1/k_shrink
-        nu_2 = k_stretch
+        k1 = 1/k_shrink
+        k2 = k_stretch
     else:
-        nu_1 = 1
-        nu_2 = 1
+        k1 = 1
+        k2 = 1
     # nu_1 = 1/(k_shrink*(A - 1) + (2 - A))
     # nu_2 = (k_stretch*(A -1) + (2 - A))
     
-    rho[0] = k_detail*((1-D)*nu_1 + D*k_detail*k_denoise)
-    rho[1] = k_detail*((1-D)*nu_2 + D*k_detail*k_denoise)
+    k[0] = k_detail*((1-D)*k1 + D*k_detail*k_denoise)
+    k[1] = k_detail*((1-D)*k2 + D*k_detail*k_denoise)
 
 
