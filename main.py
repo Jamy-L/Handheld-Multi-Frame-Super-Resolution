@@ -59,7 +59,7 @@ params = get_params(PSNR = 35)
 params["scale"] = 1
 options = {'verbose' : 2}
 
-params['merging']['kernel'] = 'handhled'
+params['merging']['kernel'] = 'handheld'
 params['robustness']['on'] = True
 params['kanade']['tuning']['kanadeIter'] = 3
 params['debug'] = True

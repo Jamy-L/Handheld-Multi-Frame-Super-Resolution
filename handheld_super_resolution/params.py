@@ -38,7 +38,7 @@ def get_params(PSNR):
                     'tuning' : {
                         'kanadeIter': 3, # 3
                         # gaussian blur before computing grads. If 0, no blur is applied
-                        'sigma blur':0,
+                        'sigma blur':0.5,
                         }},
                 'robustness' : {
                     'on':True,
@@ -62,13 +62,40 @@ def get_params(PSNR):
                     }}
     return params
 
-def check_params_validity(params):
-    # TODO
+def check_params_validity(params, imshape):
     if params["grey method"] != "FFT":
         raise NotImplementedError("Grey level images should be obtained with FFT")
         
     assert params['scale'] >= 1
+    assert params['merging']['kernel'] in ['handheld', 'act']
+    assert params['mode'] in ["bayer", 'grey']
+    assert params['kanade']['tuning']['kanadeIter'] > 0
+    assert params['kanade']['tuning']['sigma blur'] >= 0
     
-    pass
+    assert len(imshape) == 2
+    
+    Ts = params['block matching']['tuning']['tileSizes'][0]
+    
+    # Checking if block matching is possible
+    padded_imshape_x = Ts*(int(np.ceil(imshape[1]/Ts)) + 1)
+    padded_imshape_y = Ts*(int(np.ceil(imshape[0]/Ts)) + 1)
+    
+    lvl_imshape_y, lvl_imshape_x = padded_imshape_y, padded_imshape_x
+    for lvl, (factor, ts) in enumerate(zip(params['block matching']['tuning']['factors'], params['block matching']['tuning']['tileSizes'])):
+        lvl_imshape_y, lvl_imshape_x = np.floor(lvl_imshape_y/factor), np.floor(lvl_imshape_x/factor)
+        
+        n_tiles_y = lvl_imshape_y/ts
+        n_tiles_x = lvl_imshape_x/ts
+        
+        if n_tiles_y < 1 or n_tiles_x < 1:
+            raise ValueError("Image of shape {} is incompatible with the given "\
+                             "block matching tile sizes and factors : at level {}, "\
+                             "coarse image of shape {} cannot be divided into "\
+                             "tiles of size {}.".format(
+                                 imshape, lvl,
+                                 (lvl_imshape_y, lvl_imshape_x),
+                                 ts))
+    
+
 
     
