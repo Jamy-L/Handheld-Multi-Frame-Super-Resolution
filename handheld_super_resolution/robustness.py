@@ -291,8 +291,8 @@ def cuda_compute_local_stats(guide_img, local_stats):
     local_stats_ = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
     local_stats_[0] = 0; local_stats_[1] = 0
 
-    for i in range(-3, 4):
-        for j in range(-3, 4):
+    for i in range(-1, 2):
+        for j in range(-1, 2):
             y = clamp(idy + i, 0, guide_imshape_y-1)
             x = clamp(idx + j, 0, guide_imshape_x-1)
 
@@ -443,7 +443,7 @@ def cuda_apply_noise_model(d, sigma, ref_local_stats, std_curve, diff_curve):
         # the formula is slightly different than in the article, because
         # d squared is updated instead of d.
         d[idy, idx] = d[idy, idx]**2/(d[idy, idx] + d_md**2)
-        sigma[idy, idx] = max(sigma_ms, sigma_md)
+        sigma[idy, idx] = max(sigma_ms, sigma_md*sigma_md) #sigma_ms is actually a sigma^2 but sigma_md (minte carlo) is a real std
     
 @cuda.jit
 def compute_s(flows, M_th, s1, s2, S):
@@ -521,20 +521,17 @@ def robustness_threshold(d, sigma, S, t, tile_size, bayer_mode):
 @cuda.jit    
 def cuda_robustness_threshold(d, sigma, S, t, tile_size, bayer_mode, R):
     idx, idy = cuda.grid(2)
-    n_patchs_y, n_patchs_x = S.shape
-    guide_imshape_y, guide_imshape_x = d.shape
-    
+
     if (0 <= idy < R.shape[0] and
         0 <= idx < R.shape[1]):
         
         if bayer_mode : 
-            patch_idy = round(idy//(tile_size//2)) + 1
-            patch_idx = round(idx//(tile_size//2)) + 1
-        else:
             patch_idy = round(2*idy//(tile_size//2)) + 1
             patch_idx = round(2*idx//(tile_size//2)) + 1
+        else:
+            patch_idy = round(idy//(tile_size//2)) + 1
+            patch_idx = round(idx//(tile_size//2)) + 1
     
-        
         R[idy, idx] = clamp(S[patch_idy, patch_idx]*exp(-d[idy, idx]/sigma[idy, idx]) - t,
                             0, 1)
 
@@ -577,13 +574,11 @@ def cuda_compute_local_min(R, r):
     mini = +1/0
     
     #local min search
-    for i in range(-5, 6):
+    for i in range(-2, 3):
         y = clamp(idy + i, 0, guide_imshape_y)
-        for j in range(-5, 6):
+        for j in range(-2, 3):
             x = clamp(idx + j, 0, guide_imshape_x)
             mini = min(mini, R[y, x])
     
-
-
     r[idy, idx] = mini
         

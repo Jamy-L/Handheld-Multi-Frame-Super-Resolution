@@ -56,15 +56,15 @@ crop_str = None
 params = get_params(PSNR = 35)
 
 # Overwritting default parameters
-params["scale"] = 2
+params["scale"] = 1
 options = {'verbose' : 2}
 
 params['merging']['kernel'] = 'handhled'
-params['robustness']['on'] = False
+params['robustness']['on'] = True
 params['kanade']['tuning']['kanadeIter'] = 3
 params['debug'] = True
-# burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
-burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
+burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
+# burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
 # burst_path = 'P:/0001/Samsung'
 
 params['kanade']['tuning']['sigma blur'] = 1
@@ -135,7 +135,7 @@ plt.imshow(postprocessed_output)
 
 colors = "RGB"
 bayer = params["merging"]['exif']['CFA Pattern']
-pattern = colors[bayer[0,0]] + colors[bayer[0,1]] +colors[bayer[1,0]]+colors[bayer[1,1]]
+pattern = colors[bayer[0,0]] + colors[bayer[0,1]] + colors[bayer[1,0]] + colors[bayer[1,1]]
 
 
 base = colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(ref_img, pattern=pattern)  # pattern is [[G,R], [B,G]] for the Samsung G8
