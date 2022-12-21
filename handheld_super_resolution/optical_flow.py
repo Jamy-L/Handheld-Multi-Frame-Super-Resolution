@@ -80,8 +80,15 @@ def init_ICA(ref_img, options, params):
             current_time, ' -- Gradients estimated')
     
     hessian = cuda.device_array((n_patch_y, n_patch_x, 2, 2), DEFAULT_NUMPY_FLOAT_TYPE)
-    compute_hessian[(n_patch_x, n_patch_y), (tile_size, tile_size)](
-        cuda_gradx, cuda_grady, tile_size, hessian)
+    
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
+    
+    blockspergrid_x = int(np.ceil(n_patch_y/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(n_patch_x/threadsperblock[0]))
+    blockspergrid = (blockspergrid_x, blockspergrid_y)
+    
+    compute_hessian[blockspergrid, threadsperblock](cuda_gradx, cuda_grady,
+                                                    tile_size, hessian)
     
     if verbose_2:
         cuda.synchronize()
@@ -93,29 +100,38 @@ def init_ICA(ref_img, options, params):
 @cuda.jit
 def compute_hessian(gradx, grady, tile_size, hessian):
     imshape = gradx.shape
-    patch_idx, patch_idy = cuda.blockIdx.x, cuda.blockIdx.y
-    pixel_local_idx = cuda.threadIdx.x # Position relative to the patch
-    pixel_local_idy = cuda.threadIdx.y
+    patch_idx, patch_idy = cuda.grid(2)
     
-    pixel_global_idx = tile_size//2 * (patch_idx - 1) + pixel_local_idx # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
-    pixel_global_idy = tile_size//2 * (patch_idy - 1) + pixel_local_idy
+    patch_pos_idx = tile_size//2 * (patch_idx - 1)# global position on the coarse grey grid. Because of extremity padding, it can be out of bound
+    patch_pos_idy = tile_size//2 * (patch_idy - 1)
     
-    inbound = (0 <= pixel_global_idy < imshape[0] and 
-               0 <= pixel_global_idx < imshape[1])
+    local_hessian = cuda.local.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
+    local_hessian[0, 0] = 0
+    local_hessian[0, 1] = 0
+    local_hessian[1, 0] = 0
+    local_hessian[1, 1] = 0
     
-    if pixel_local_idx < 2 and pixel_local_idy < 2:
-        hessian[patch_idy, patch_idx, pixel_local_idy, pixel_local_idx] = 0 # zero init
-    cuda.syncthreads()
+    for i in range(tile_size):
+        for j in range(tile_size):
+            pixel_global_idy = patch_pos_idy + i
+            pixel_global_idx = patch_pos_idx + j
+            
+            inbound = (0 <= pixel_global_idy < imshape[0] and 
+                       0 <= pixel_global_idx < imshape[1])
     
-    # TODO gaussian windowing ?
-    if inbound : 
-        local_gradx = gradx[pixel_global_idy, pixel_global_idx]
-        local_grady = grady[pixel_global_idy, pixel_global_idx]
-        
-        cuda.atomic.add(hessian, (patch_idy, patch_idx, 0, 0), local_gradx*local_gradx)
-        cuda.atomic.add(hessian, (patch_idy, patch_idx, 0, 1), local_gradx*local_grady)
-        cuda.atomic.add(hessian, (patch_idy, patch_idx, 1, 0), local_gradx*local_grady)
-        cuda.atomic.add(hessian, (patch_idy, patch_idx, 1, 1), local_grady*local_grady)
+            if inbound : 
+                local_gradx = gradx[pixel_global_idy, pixel_global_idx]
+                local_grady = grady[pixel_global_idy, pixel_global_idx]
+                
+                local_hessian[0, 0] += local_gradx*local_gradx
+                local_hessian[0, 1] += local_gradx*local_grady
+                local_hessian[1, 0] += local_gradx*local_grady
+                local_hessian[1, 1] += local_grady*local_grady
+                
+    hessian[patch_idy, patch_idx, 0, 0] = local_hessian[0, 0]
+    hessian[patch_idy, patch_idx, 0, 1] = local_hessian[0, 1]
+    hessian[patch_idy, patch_idx, 1, 0] = local_hessian[1, 0]
+    hessian[patch_idy, patch_idx, 1, 1] = local_hessian[1, 1]
 
 
 def ICA_optical_flow(cuda_im_grey, cuda_ref_grey, cuda_gradx, cuda_grady, hessian, cuda_pre_alignment, options, params, debug = False):
