@@ -179,7 +179,7 @@ def cuda_estimate_kernel(full_grads,
         
         covs[pixel_idy, pixel_idx, 0, 0] = k_1_sq*e1[0]*e1[0] + k_2_sq*e2[0]*e2[0]
         covs[pixel_idy, pixel_idx, 0, 1] = k_1_sq*e1[0]*e1[1] + k_2_sq*e2[0]*e2[1] 
-        covs[pixel_idy, pixel_idx, 1, 0] = rh_1_sq*e1[0]*e1[1] + k_2_sq*e2[0]*e2[1]
+        covs[pixel_idy, pixel_idx, 1, 0] = k_1_sq*e1[0]*e1[1] + k_2_sq*e2[0]*e2[1]
         covs[pixel_idy, pixel_idx, 1, 1] = k_1_sq*e1[1]*e1[1] + k_2_sq*e2[1]*e2[1]
 
     

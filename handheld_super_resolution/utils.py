@@ -59,16 +59,6 @@ def mse(im1, im2):
     return np.linalg.norm(im1 - im2) / np.prod(im1.shape)
 
 
-# TODO This is costy but numpy does not make it better ... Maybe saving a table beforehand and reading is better
-@cuda.jit(device = True)
-def hann(i, j, tile_size):
-    return (0.5 + 0.5*cos(2*pi*i/tile_size)) * (0.5 + 0.5*cos(2 * pi*j/tile_size))
-
-@cuda.jit(device = True)
-def hamming(i, j, tile_size):
-    return (0.54 + 0.46*cos(2*pi*i/tile_size)) * (0.54 + 0.46*cos(2*pi*j/tile_size))
-
-
 # for debugging and testing only, this is probably unoptimised
 def crop(array, crop_str, axis):
     """
