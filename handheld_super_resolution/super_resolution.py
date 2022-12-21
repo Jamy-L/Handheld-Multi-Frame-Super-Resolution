@@ -62,33 +62,68 @@ def main(ref_img, comp_imgs, options, params):
         cuda_ref_grey = cuda_ref_img
         
     #___ Block Matching
+    if verbose_2 :
+        cuda.synchronize()
+        current_time = time.perf_counter()
+        print('\nBeginning Block Matching initialisation')
+        
     referencePyramid = init_block_matching(cuda_ref_grey, options, params['block matching'])
+    
+    if verbose_2 :
+        cuda.synchronize()
+        current_time = getTime(current_time, 'Block Matching initialised (Total)')
         
     
-    #___ ICA : compute grad and hessian
+    #___ ICA : compute grad and hessian    
+    if verbose_2 :
+        cuda.synchronize()
+        current_time = time.perf_counter()
+        print('\nBeginning ICA initialisation')
+        
     ref_gradx, ref_grady, hessian = init_ICA(cuda_ref_grey, options, params['kanade'])
+    
+    if verbose_2 :
+        cuda.synchronize()
+        current_time = getTime(current_time, 'ICA initialised (Total)')
     
     
     #___ Local stats estimation
+    if verbose_2:
+        cuda.synchronize()
+        current_time = time.perf_counter()
+        print("\nEstimating ref image local stats")
+        
     ref_local_stats = init_robustness(cuda_ref_img,options, params['robustness'])
+    
+    if verbose_2 : 
+        current_time = getTime(
+            current_time, 'Local stats estimated (Total)')
 
         
     #___ Kernel estimation
     if verbose_2 : 
         current_time = time.perf_counter()
-        print('Estimating kernels')
+        print('\nEstimating kernels')
+        
     cuda_kernels = estimate_kernels(cuda_ref_img, options, params['merging'])
+    
     if verbose_2 : 
         current_time = getTime(
             current_time, 'Kernels estimated (Total)')
     
     
     #___ init merge
+    if verbose_2 : 
+        current_time = time.perf_counter()
+        print('\nAccumulating ref Img')
+        
     num, den = init_merge(cuda_ref_img, cuda_kernels, options, params["merging"])
     
+    if verbose_2 : 
+        getTime(current_time, 'Ref Img accumulated (Total)')
     if verbose :
         cuda.synchronize()
-        getTime(im_time, 'Image processed (Total)')
+        getTime(im_time, '\nImage processed (Total)')
     
 
     n_images = comp_imgs.shape[0]
@@ -125,39 +160,63 @@ def main(ref_img, comp_imgs, options, params):
         if verbose_2 :
             cuda.synchronize()
             current_time = getTime(current_time, 'Block Matching (Total)')
+            
+            
         #___ ICA
+        if verbose_2 :
+            cuda.synchronize()
+            current_time = time.perf_counter()
+            print('\nBeginning ICA alignment')
         
         cuda_final_alignment = ICA_optical_flow(
             cuda_im_grey, cuda_ref_grey, ref_gradx, ref_grady, hessian, pre_alignment, options, params['kanade'])
         
-        #___ Robustness
         if verbose_2 : 
             cuda.synchronize()
+            current_time = getTime(current_time, 'Image aligned using ICA (Total)')
+            
+            
+        #___ Robustness
+        if verbose_2 :
+            cuda.synchronize()
             current_time = time.perf_counter()
+            print('\nEstimating robustness')
             
         cuda_robustness = compute_robustness(cuda_img, ref_local_stats, cuda_final_alignment,
                                              options, params['robustness'])
         
         if verbose_2 :
             cuda.synchronize()
-            current_time = getTime(
-                current_time, 'Robustness estimated (Total)')
-            print('\nEstimating kernels')
+            current_time = getTime(current_time, 'Robustness estimated (Total)')
+
             
         #___ Kernel estimation
-        cuda_kernels = estimate_kernels(cuda_img, options, params['merging'])
         if verbose_2 :
             cuda.synchronize()
-            current_time = getTime(
-                current_time, 'Kernels estimated (Total)')
+            current_time = time.perf_counter()
+            print('\nEstimating kernels')
+            
+        cuda_kernels = estimate_kernels(cuda_img, options, params['merging'])
+        
+        if verbose_2 :
+            cuda.synchronize()
+            current_time = getTime(current_time, 'Kernels estimated (Total)')
+            
             
         #___ Merging
+        if verbose_2 : 
+            current_time = time.perf_counter()
+            print('\nAccumulating Image')
+            
         merge(cuda_img, cuda_final_alignment, cuda_kernels, cuda_robustness, num, den,
               options, params['merging'])
         
+        if verbose_2 :
+            cuda.synchronize()
+            current_time = getTime(current_time, 'Image accumulated (Total)')
         if verbose :
             cuda.synchronize()
-            getTime(im_time, 'Image processed (Total)')
+            getTime(im_time, '\nImage processed (Total)')
             
         if debug_mode : 
             debug_dict['robustness'].append(cuda_robustness.copy_to_host())
@@ -170,9 +229,9 @@ def main(ref_img, comp_imgs, options, params):
     divide(num, den)
     
     if verbose_2 :
+        print('\n------------------------')
         cuda.synchronize()
-        current_time = getTime(
-            current_time, 'Image normalized (Total)')
+        current_time = getTime(current_time, 'Image normalized (Total)')
         
     output = num.copy_to_host()
     if verbose :

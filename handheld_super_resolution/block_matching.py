@@ -71,7 +71,6 @@ def init_block_matching(ref_img, options, params):
 
     referencePyramid = hdrplusPyramid(th_ref_img_padded, factors)
     if verbose:
-        cuda.synchronize()
         currentTime = getTime(currentTime, ' --- Create ref pyramid')
     
     return referencePyramid
