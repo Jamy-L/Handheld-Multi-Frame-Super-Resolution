@@ -16,22 +16,17 @@ from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, D
 from .linalg import quad_mat_prod, invert_2x2, interpolate_cov
 
 def init_merge(ref_img, kernels, options, params):
-    VERBOSE = options['verbose']
-    SCALE = params['scale']
+    verbose = options['verbose']
+    scale = params['scale']
     
     CFA_pattern = cuda.to_device(params['exif']['CFA Pattern'])
     bayer_mode = params['mode'] == 'bayer'
     act = params['kernel'] == 'act'
-
-    if VERBOSE > 1:
-        cuda.synchronize()
-        print('Beginning merge process')
-        current_time = time.perf_counter()
         
 
     native_im_size = ref_img.shape
     # casting to integer to account for floating scale
-    output_size = (round(SCALE*native_im_size[0]), round(SCALE*native_im_size[1]))
+    output_size = (round(scale*native_im_size[0]), round(scale*native_im_size[1]))
 
     num = cuda.device_array(output_size+(3,), dtype = DEFAULT_NUMPY_FLOAT_TYPE)
     den = cuda.device_array(output_size+(3,), dtype = DEFAULT_NUMPY_FLOAT_TYPE)
@@ -45,18 +40,12 @@ def init_merge(ref_img, kernels, options, params):
     blockspergrid = (blockspergrid_x, blockspergrid_y)
     
     accumulate_ref[blockspergrid, threadsperblock](
-        ref_img, kernels, bayer_mode, act, SCALE, CFA_pattern,
+        ref_img, kernels, bayer_mode, act, scale, CFA_pattern,
         num, den)
-    
-    
-    if VERBOSE > 1:
-        cuda.synchronize()
-        current_time = getTime(
-            current_time, ' - Ref frame merged')
     
     return num, den
     
-@cuda.jit
+@cuda.jit(cache=True)
 def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
                    num, den):
     """
@@ -138,24 +127,22 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
             grey_pos[0] = coarse_ref_sub_pos[0] # grey grid is exactly the coarse grid
             grey_pos[1] = coarse_ref_sub_pos[1]
     
+    
+        floor_x = int(math.floor(grey_pos[1]))
+        floor_y = int(math.floor(grey_pos[0]))
+        
+        ceil_x = floor_x + 1
+        ceil_y = floor_y + 1
         for i in range(0, 2): # TODO Check undesirable effects on the imagse side
-            for j in range(0, 2):    
-                close_covs[0, 0, i, j] = covs[ 
-                                                int(math.floor(grey_pos[0])),
-                                                int(math.floor(grey_pos[1])),
-                                                i, j]
-                close_covs[0, 1, i, j] = covs[
-                                                int(math.floor(grey_pos[0])),
-                                                int(math.ceil(grey_pos[1])),
-                                                i, j]
-                close_covs[1, 0, i, j] = covs[
-                                                int(math.ceil(grey_pos[0])),
-                                                int(math.floor(grey_pos[1])),
-                                                i, j]
-                close_covs[1, 1, i, j] = covs[
-                                                int(math.ceil(grey_pos[0])),
-                                                int(math.ceil(grey_pos[1])),
-                                                i, j]
+            for j in range(0, 2):
+                close_covs[0, 0, i, j] = covs[floor_y, floor_x,
+                                              i, j]
+                close_covs[0, 1, i, j] = covs[floor_y, ceil_x,
+                                              i, j]
+                close_covs[1, 0, i, j] = covs[ceil_y, floor_x,
+                                              i, j]
+                close_covs[1, 1, i, j] = covs[ceil_y, ceil_x,
+                                              i, j]
 
         # interpolating covs
         interpolate_cov(close_covs, grey_pos, interpolated_cov)
@@ -206,6 +193,7 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
                 else:
                     w = math.exp(-0.5*4*y) # original kernel constants are designed for bayer distances, not greys, Hence x4
                 ############
+                
                 val[channel] += c*w
                 acc[channel] += w
                     
@@ -245,8 +233,8 @@ def merge(comp_img, alignments, covs, r, num, den,
         merged images
 
     """
-    VERBOSE = options['verbose']
-    SCALE = params['scale']
+    current_time, verbose_3 = time.perf_counter(), options['verbose'] >= 3
+    scale = params['scale']
     
     CFA_pattern = cuda.to_device(params['exif']['CFA Pattern'])
     bayer_mode = params['mode'] == 'bayer'
@@ -254,14 +242,9 @@ def merge(comp_img, alignments, covs, r, num, den,
     TILE_SIZE = params['tuning']['tileSize']
     N_TILES_Y, N_TILES_X, _ = alignments.shape
 
-    if VERBOSE > 1:
-        print('\nBeginning merge process')
-        cuda.synchronize()
-        current_time = time.perf_counter()
-
     native_im_size = comp_img.shape
     # casting to integer to account for floating scale
-    output_size = (round(SCALE*native_im_size[0]), round(SCALE*native_im_size[1]))
+    output_size = (round(scale*native_im_size[0]), round(scale*native_im_size[1]))
 
 
     # dispatching threads. 1 thread for 1 output pixel
@@ -272,15 +255,12 @@ def merge(comp_img, alignments, covs, r, num, den,
                     
     accumulate[blockspergrid, threadsperblock](
         comp_img, alignments, covs, r,
-        bayer_mode, act, SCALE, TILE_SIZE, CFA_pattern,
+        bayer_mode, act, scale, TILE_SIZE, CFA_pattern,
         num, den)
 
-    if VERBOSE > 1:
-        cuda.synchronize()
-        getTime(current_time, ' - Image merged on GPU side')
 
 
-@cuda.jit
+@cuda.jit(cache=True)
 def accumulate(comp_img, alignments, covs, r,
                bayer_mode, act, scale, tile_size, CFA_pattern,
                num, den):
@@ -402,19 +382,20 @@ def accumulate(comp_img, alignments, covs, r,
             grey_pos[0] = patch_center_pos[0] # grey grid is exactly the coarse grid
             grey_pos[1] = patch_center_pos[1]
         
-        for i in range(0, 2):
-            for j in range(0, 2):# TODO sides can get negative grey indexes. It leads to weird covs.
-                close_covs[0, 0, i, j] = covs[int(math.floor(grey_pos[0])),
-                                              int(math.floor(grey_pos[1])),
+        floor_x = int(math.floor(grey_pos[1]))
+        floor_y = int(math.floor(grey_pos[0]))
+        
+        ceil_x = floor_x + 1
+        ceil_y = floor_y + 1
+        for i in range(0, 2): # TODO Check undesirable effects on the imagse side
+            for j in range(0, 2):
+                close_covs[0, 0, i, j] = covs[floor_y, floor_x,
                                               i, j]
-                close_covs[0, 1, i, j] = covs[int(math.floor(grey_pos[0])),
-                                              int(math.ceil(grey_pos[1])),
+                close_covs[0, 1, i, j] = covs[floor_y, ceil_x,
                                               i, j]
-                close_covs[1, 0, i, j] = covs[int(math.ceil(grey_pos[0])),
-                                              int(math.floor(grey_pos[1])),
+                close_covs[1, 0, i, j] = covs[ceil_y, floor_x,
                                               i, j]
-                close_covs[1, 1, i, j] = covs[int(math.ceil(grey_pos[0])),
-                                              int(math.ceil(grey_pos[1])),
+                close_covs[1, 1, i, j] = covs[ceil_y, ceil_x,
                                               i, j]
 
         # interpolating covs at the desired spot

@@ -38,7 +38,7 @@ def init_robustness(ref_img,options, params):
     imshape = imshape_y, imshape_x = ref_img.shape
     
     bayer_mode = params['mode']=='bayer'
-    VERBOSE = options['verbose']
+    verbose_3 = options['verbose'] >= 3
     r_on = params['on']
     
     # TODO we may move the CFA to GPU as soon as it is read (in process() )
@@ -46,12 +46,9 @@ def init_robustness(ref_img,options, params):
     
 
     if r_on :         
-        if VERBOSE > 1:
-            cuda.synchronize()
+        if verbose_3:
+            print(" - Decimating images to RGB")
             current_time = time.perf_counter()
-            print("Estimating ref image local stats")
-            if VERBOSE > 2:
-                print(" - Decimating images to RGB")
                 
         if params["mode"]=='bayer':
             guide_imshape = imshape_y//2, imshape_x//2
@@ -65,19 +62,18 @@ def init_robustness(ref_img,options, params):
         else:
             guide_ref_img = ref_img[:, :, None] # Adding 1 channel
 
-    
         
-        if VERBOSE > 2 :
+        if verbose_3 :
             cuda.synchronize()
             current_time = getTime(
                 current_time, ' - Image decimated')
             
         ref_local_stats = compute_local_stats(guide_ref_img)
         
-        if VERBOSE > 2 :
+        if verbose_3 :
             cuda.synchronize()
-            current_time = getTime(
-                current_time, ' - Local stats estimated')
+            current_time = getTime(current_time, ' - Local stats estimated')
+            
         return ref_local_stats
     
     
@@ -108,7 +104,7 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
     imshape_y, imshape_x = comp_img.shape
 
     bayer_mode = params['mode']=='bayer'
-    VERBOSE = options['verbose']
+    current_time, verbose_3 = time.perf_counter(), options['verbose'] >= 3
     r_on = params['on']
     
     CFA_pattern = cuda.to_device(params['exif']['CFA Pattern'])
@@ -129,18 +125,13 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
     if r_on : 
         r = cuda.device_array(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
         
-        if VERBOSE > 1:
-            current_time = time.perf_counter()
-            print("Estimating Robustness")
-        
         # moving noise model to GPU
         cuda_std_curve = cuda.to_device(params['std_curve'])
         cuda_diff_curve = cuda.to_device(params['diff_curve'])
             
-        if VERBOSE > 2:
+        if verbose_3:
             cuda.synchronize()
-            current_time = getTime(
-                current_time, ' - Moved noise model to GPU')
+            current_time = getTime(current_time, ' - Moved noise model to GPU')
 
             
         # Computing guide image
@@ -155,14 +146,13 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
         # Computing local stats (before applying optical flow)
         # 2 channels for mu, sigma
         
-        if VERBOSE > 2 :
+        if verbose_3:
             cuda.synchronize()
-            current_time = getTime(
-                current_time, ' - Image decimated to rgb')
+            current_time = getTime(current_time, ' - Image decimated to rgb')
             
         comp_local_stats = compute_local_stats(guide_img)
         
-        if VERBOSE > 2 :
+        if verbose_3 :
             cuda.synchronize()
             current_time = getTime(
                 current_time, ' - Local stats estimated')
@@ -171,7 +161,7 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
         d = compute_patch_dist(ref_local_stats, comp_local_stats,
                                flows, tile_size)
         
-        if VERBOSE > 2 :
+        if verbose_3 :
             cuda.synchronize()
             current_time = getTime(
                 current_time, ' - Estimated color distances')
@@ -180,7 +170,7 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
         d, sigma = apply_noise_model(d, ref_local_stats,
                                      cuda_std_curve, cuda_diff_curve)
         
-        if VERBOSE > 2 :
+        if verbose_3 :
             cuda.synchronize()
             current_time = getTime(
                 current_time, ' - Applied noise model')
@@ -190,21 +180,21 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
         compute_s[S.shape, (3, 3)](flows, Mt, s1, s2, S)
         
         
-        if VERBOSE > 2 :
+        if verbose_3 :
             cuda.synchronize()
             current_time = getTime(
                 current_time, ' - Flow irregularities registered')
         
         R = robustness_threshold(d, sigma, S, t, tile_size, bayer_mode)
         
-        if VERBOSE > 2:
+        if verbose_3:
             cuda.synchronize()
             current_time = getTime(
                 current_time, ' - Robustness Estimated')
         
         r = local_min(R)
         
-        if VERBOSE > 2:
+        if verbose_3:
             cuda.synchronize()
             current_time = getTime(
                 current_time, ' - Robustness locally minimized')
