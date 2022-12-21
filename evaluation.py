@@ -256,7 +256,7 @@ def align_lk(dec_burst, params, pre_alignment):
     grey_method_lk = params['kanade']['grey method']
     options = {'verbose' : 2}
     
-    ref_grey = cuda.to_device(compute_grey_images(dec_burst[0], grey_method_lk))
+    ref_grey = compute_grey_images(dec_burst[0], grey_method_lk)
     ref_gradx, ref_grady, hessian = init_ICA(ref_grey, options, params['kanade'])
     
     flows = []
@@ -333,6 +333,7 @@ def evaluate_alignment(comp_alignment, gt_flow, label="", params=None):
         plt.xlabel('lk iteration')
         plt.ylabel("quadratic error on flow")
         plt.legend()
+        plt.grid()
     
         plt.figure("flow step")
         plt.plot([np.mean(np.linalg.norm(2*comp_alignment[i+1] - 2*comp_alignment[i], axis=3)) for i in range(comp_alignment.shape[0]-1)], label=label)
@@ -360,7 +361,7 @@ CFA = np.array([[2, 1], [1, 0]])
 
 params = get_params(PSNR=35)
 
-###### Change paramaters here
+###### Change parameters here
 
 params['block matching']['tuning']['factors'] = [1, 2, 2, 2] # a bit smaller because div 2k is not 4k
 params['block matching']['grey method'] = "FFT"
