@@ -370,6 +370,10 @@ params['kanade']['tuning']['kanadeIter'] = 6
 params['kanade']['tuning']['sigma blur'] = 1
 params['robustness']['on'] = False
 
+# TODO ????
+for i, ts in enumerate(params['block matching']['tuning']['tileSizes']):
+    params['block matching']['tuning']['tileSizes'][i] = 2*ts
+
 ################################
 params['robustness']['exif'] = {}
 params['merging']['exif'] = {}

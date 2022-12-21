@@ -26,20 +26,14 @@ If and only if they don't conflict with any patent terms,
 you can benefit from the following license terms attached to this file.
 """
 
-import math
-import time
-
 import numpy as np
-from scipy import signal
-from scipy.ndimage import gaussian_filter, gaussian_filter1d
 from scipy.ndimage._filters import _gaussian_kernel1d
-from numba import vectorize, guvectorize, uint8, uint16, float32, float64, cuda
+from numba import cuda
 import torch as th
 import torch.fft
 import torch.nn.functional as F
 
-import colour_demosaicing
-from .utils import getSigned, isTypeInt, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_COMPLEX_TYPE, DEFAULT_TORCH_FLOAT_TYPE
+from .utils import getSigned, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_COMPLEX_TYPE, DEFAULT_TORCH_FLOAT_TYPE
 
 def compute_grey_images(img, method):
     """
@@ -98,15 +92,7 @@ def compute_grey_images(img, method):
         return img_grey
         
     else:
-        raise NotImplemented('Computation of gray level on GPU is only supported for FFT')
-
-        
-    # elif method == "FFT":
-
-    #         # lowpass filtering
-    #         img_grey = fft_lowpass(img)
-
-            
+        raise NotImplementedError('Computation of gray level on GPU is only supported for FFT')
     # elif method == "demosaicing":
     #         img_dem = colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(img)
             
@@ -124,7 +110,7 @@ def fft_lowpass(img_grey):
     img_grey = torch.fft.fft2(img_grey)
     img_grey = torch.fft.fftshift(img_grey)
     
-    imsize = imsize_y, imsize_x = img_grey.shape
+    imsize_y, imsize_x = img_grey.shape
     img_grey[:imsize_y//4, :] = 0
     img_grey[:, :imsize_x//4] = 0
     img_grey[-imsize_y//4:, :] = 0
@@ -146,75 +132,7 @@ def cuda_decimate_to_grey(img, grey_img):
             for j in range(0, 2):
                 c += img[2*y + i, 2*x + j]
         grey_img[y, x] = c/4
-    
-
-@vectorize([uint8(float32), uint8(float64)], target='parallel')
-def convert8bit_(x):
-    return 0 if x <= 0 else (255 if x >= 1 else uint8(x * 255 + 0.5))
-
-@vectorize([uint8(float32), uint8(float64)], target='parallel')
-def convert16bit_(x):
-    return 0 if x <= 0 else ((2**16 - 1) if x >= 1 else uint16(x * (2**16 - 1) + 0.5))
-
-@vectorize([uint16(uint16, uint16, uint16, uint16)], target='parallel')
-def umean4_(a, b, c, d):
-    return np.right_shift(a + b + c + d + 2, 2)
-
-
-@vectorize([float32(float32, float32, float32, float32), float64(float64, float64, float64, float64)], target='parallel')
-def fmean4_(a, b, c, d):
-    return (a + b + c + d) * 0.25
-
-
-def downsample(image, kernel='gaussian', factor=2):
-    '''Apply a convolution by a kernel if required, then downsample an image.
-    Args:
-    	image: the input image (WARNING: single channel only!)
-    	kernel: None / str ('gaussian' / 'bayer') / 2d numpy array
-    	factor: downsampling factor
-    '''
-    # Special case
-    if factor == 1:
-    	return image
-
-    # Filter the image before downsampling it
-    if kernel is None:
-    	filteredImage = image
-    elif kernel == 'gaussian':
-    	# gaussian kernel std is proportional to downsampling factor
-    	 filteredImage = gaussian_filter(image, sigma=factor * 0.5, order=0, output=None, mode='reflect')
-        # std = factor*0.5
-        # lim = int(np.ceil(3*std))
         
-        # t = np.linspace(-lim, lim, 2*lim+1, dtype=DEFAULT_NUMPY_FLOAT_TYPE)/std
-        
-        # gauss = np.exp(-0.5*t*t)
-        # # TODO check syntax
-        # gauss /= np.sum(gauss) #normalizing
-        
-        # filteredImage = signal.convolve(image, gauss[:, None], mode="same", method = "fft")
-        # filteredImage = signal.convolve(filteredImage, gauss[None, :], mode="same", method = "fft")
-        
-        # filteredImage = gaussian_filter1d(image, axis = 0, sigma=factor * 0.5, order=0, output=None, mode='reflect', truncate=2.5)
-        # filteredImage = gaussian_filter1d(filteredImage, axis = 1, sigma=factor * 0.5, order=0, output=None, mode='reflect', truncate=2.5)
-    elif kernel == 'bayer':
-    	# Bayer means that a simple 2x2 aggregation is required
-    	if isTypeInt(image):
-    	    return umean4_(image[0::2, 0::2], image[1::2, 0::2], image[0::2, 1::2], image[1::2, 1::2])
-    	else:
-    	    return fmean4_(image[0::2, 0::2], image[1::2, 0::2], image[0::2, 1::2], image[1::2, 1::2])
-    else:
-    	# filter by convoluting with the input kernel
-    	filteredImage = signal.convolve2d(image, kernel, boundary='symm', mode='valid')
-
-    # Shape of the downsampled image
-    h2, w2 = np.floor(np.array(filteredImage.shape) / float(factor)).astype(np.int)
-
-    # Extract the pixels
-    if isTypeInt(image):
-    	return np.rint(filteredImage[:h2 * factor:factor, :w2 * factor:factor]).astype(image.dtype)
-    else:
-    	return filteredImage[:h2 * factor:factor, :w2 * factor:factor]
 
 def cuda_downsample(th_img, kernel='gaussian', factor=2):
     '''Apply a convolution by a kernel if required, then downsample an image.
@@ -242,7 +160,6 @@ def cuda_downsample(th_img, kernel='gaussian', factor=2):
         
 
         # 2 times gaussian 1d is faster than gaussian 2d
-        # TODO I have not checked if the gaussian blur was exactly the same as outputed byt gaussian_filter1d
     	 temp = F.conv2d(th_img, th_gaussian_kernel[None, None, :, None]) # convolve y
     	 th_filteredImage = F.conv2d(temp, th_gaussian_kernel[None, None, None, :]) # convolve x
     else:
@@ -252,206 +169,6 @@ def cuda_downsample(th_img, kernel='gaussian', factor=2):
     h2, w2 = np.floor(np.array(th_filteredImage.shape[2:]) / float(factor)).astype(np.int)
 
     return th_filteredImage[:, :, :h2 * factor:factor, :w2 * factor:factor]
-
-
-def getAlignedTiles(image, tileSize, motionVectors):
-    '''Replace tiles within an image based on estimated motion between
-    said image and a reference image image.'''
- 
-    # For convenience
-    # total number of image tiles overlapped by half in each spatial dimension: h*w
-    h, w = image.shape[0] // (tileSize // 2) - 1, image.shape[1] // (tileSize // 2) - 1
-    # total number of tiles that have estimated motion : hm*wm (<= h*w)
-    hm, wm, _ = motionVectors.shape
-    # Extract all the possible tiles of the image
-    imageTiles = getTiles(image, tileSize)
-    # Get the indices of the beginning of each tiles when moved
-    indIm = np.round((np.repeat((np.arange(hm) * tileSize // 2).reshape(hm, 1), wm, axis=1) + motionVectors[:, :, 0])).astype(np.int).clip(0, image.shape[0] - tileSize)
-    indJm = np.round((np.repeat((np.arange(wm) * tileSize // 2).reshape(1, wm), hm, axis=0) + motionVectors[:, :, 1])).astype(np.int).clip(0, image.shape[1] - tileSize)
-    indI = np.repeat((np.arange(h) * tileSize // 2).reshape(h, 1), w, axis=1)
-    indJ = np.repeat((np.arange(w) * tileSize // 2).reshape(1, w), h, axis=0)
-    indI[:indIm.shape[0], :indIm.shape[1]] = indIm  # tiles that have no motion vectors attached will remain identical
-    indJ[:indJm.shape[0], :indJm.shape[1]] = indJm
-
-    # Only keep the tiles we're interested in (step = tileSize // 2)
-    alignedTiles = imageTiles[indI.reshape(h * w), indJ.reshape(h * w)].reshape((h, w, tileSize, tileSize))
-
-    return alignedTiles
-
-
-@guvectorize(['void(float32[:, :, :, :], float32[:, :, :, :], float32[:, :, :], float32[:, :])'], '(m, n, t, t), (m, n, t, t), (h, w, d) -> (h, w)')
-def computeTilesDistanceL1_(refTiles, altTiles, offsets, res):
-    '''Compute the L1 distance between refTiles and extracted altTiles from the offsets'''
-    # Dimension
-    m, n, ts, _ = refTiles.shape
-    h, w, _ = offsets.shape
-
-    # Loop over the aligned tiles
-    for i in range(h):
-        for j in range(w):
-            # Offset values
-            offI = offsets[i, j, 0]
-            offJ = offsets[i, j, 1]
-            # Reference index
-            ri = i * (ts // 2)
-            rj = j * (ts // 2)
-            # Deduce the position of the corresponding tiles
-            di = ri + int(offI + (0.5 if offI >= 0 else -0.5))
-            dj = rj + int(offJ + (0.5 if offJ >= 0 else -0.5))
-            # Clip the position
-            di = 0 if di < 0 else (m - 1 if di > m - 1 else di)
-            dj = 0 if dj < 0 else (n - 1 if dj > n - 1 else dj)
-            # Compute the distance
-            dst = 0
-            for p in range(ts):
-                for q in range(ts):
-                    dst += math.fabs(refTiles[ri, rj, p, q] - altTiles[di, dj, p, q])
-            # Store the result
-            res[i, j] = dst
-
-
-@guvectorize(['void(float32[:, :, :], float32[:, :, :], float32[:, :, :], float32[:, :, :])'], '(n, w, w), (n, p, p), (n, t, t) -> (n, t, t)')
-def computeL1Distance_(win, ref, dum, res):
-    # Dummy array dum only here to know the output size. Won't be used.
-    # Get the shapes
-    hw, sW, sP, sT = win.shape[0], win.shape[1], ref.shape[1], win.shape[1] - ref.shape[1] + 1
-    # Loop over all the pixels of the image
-    for n in range(hw):
-        # Extract all the generic patches in the current searching windows
-        for i in range(sT):
-    	    for j in range(sT):
-    	        # Distance computation
-    	        sum = 0
-    	        for p in range(sP):
-    	            for q in range(sP):
-    	                sum += math.fabs(win[n, i + p, j + q] - ref[n, p, q])
-                # Store the distance
-    	        res[n, i, j] = sum
-
-
-
-@guvectorize(['void(float32[:, :, :], float32[:, :, :], float32[:, :, :], float32[:, :, :])'], '(n, w, w), (n, p, p), (n, t, t) -> (n, t, t)')
-def computeL2Distance__(win, ref, dum, res):
-    # Dummy array dum only here to know the output size. Won't be used.
-    # Get the shapes
-    hw, sW, sP, sT = win.shape[0], win.shape[1], ref.shape[1], win.shape[1] - ref.shape[1] + 1
-    # Loop over all the pixels of the image
-    for n in range(hw):
-        # Extract all the generic patches in the current searching windows
-        for i in range(sT):
-            for j in range(sT):
-                # Distance computation
-                sum = 0
-                for p in range(sP):
-                    for q in range(sP):
-                        temp = (win[n, i + p, j + q] - ref[n, p, q])
-                        sum += temp*temp
-                # Store the distance
-                res[n, i, j] = sum
-
-
-def computeDistance(refPatch, searchArea, distance='L2'):
-    '''Return the distance between the reference patch and all the ones contained in the searching area,
-    by using the L1 or L2 distance norm.'''
-    # For convenience
-    h, w, sP, sP2 = refPatch.shape
-    hs, ws, sW, sW2 = searchArea.shape
-    # Assert that inputs are consistants
-    assert((sP == sP2) and (hs == h) and (ws == w) and (sW == sW2))
-
-    # Reshape the input
-    win = searchArea.reshape(h * w, sW, sW)
-    ref = refPatch.reshape(h * w, sP, sP)
-    # Dummy input just to pass the output dimension to numba
-    dum = np.empty((h * w, sW - sP + 1, sW - sP + 1), dtype=ref.dtype)
-
-    # Compute the distance between the reference patch and all patches in the searching area
-    if distance == 'L1':
-        dst = computeL1Distance_(win, ref, dum)
-    elif distance == 'L2':
-        dst = computeL2Distance__(win, ref, dum)
-    else:
-        print('Unknown distance ' + distance + '. Abort.')
-        exit()
-
-    # Reshape the output
-    return dst.reshape(h * w, (sW - sP + 1)**2)
-
-
-@guvectorize(['void(float32[:, :], uint16[:], float32[:], float32[:])'], '(m, n), (m) -> (m), (m)')
-def subPixelMinimum_(arrDst, arrIdx, resI, resJ):
-    '''To compute the sub-pixel offset to the distance minimum (Section 3.3 of the IPOL article),
-    fit a bivariate quadratic function (2D polynomial)
-    to the 3x3 neighborhood around the pixel-level minimum, and find the minimum of the quadratic.
-    Args:
-    	arrDst: array of arrays of distances
-    		(rows: reference tile; columns: distances of all possible tiles within the search area)
-    	arrIdx: array of corresponding indices of the distance minima
-    '''
-    # Filters that are used to construct matrix A and vector b
-    # A and b are parameters of the quadratic approximation
-    fA11 = [ 0.250, -0.50,  0.250,  0.50, -1.,  0.50,  0.250, -0.50, 0.250]
-    fA22 = [ 0.250,  0.50,  0.250, -0.50, -1., -0.50,  0.250,  0.50, 0.250]
-    fA12 = [ 0.250,  0.00, -0.250,  0.00,  0.,  0.00, -0.250,  0.00, 0.250]
-    fb1  = [-0.125,  0.00,  0.125, -0.25,  0.,  0.25, -0.125,  0.00, 0.125]
-    fb2  = [-0.125, -0.25, -0.125,  0.00,  0.,  0.00,  0.125,  0.25, 0.125]
-
-    for m in range(len(arrIdx)):
-        ind = arrIdx[m]
-        
-        # Construct A and b
-        # by cross-correlating filters with the 3x3 neighborhoods
-        A11, A12, A22, b1, b2 = 0, 0, 0, 0, 0
-        for i in range(9):
-            d = arrDst[m, ind - 4 + i]
-            A11 += fA11[i] * d
-            A12 += fA12[i] * d
-            A22 += fA22[i] * d
-            b1  += fb1 [i] * d
-            b2  += fb2 [i] * d
-
-        # Make sure that A is positive semi-definite
-        A11 = max(0, A11)
-        A22 = max(0, A22)
-        if A11 * A22 - A12**2 < 0:
-            # Put all off-diagonal values of A to zero
-            A12 = 0
-
-        # Compute the determinant
-        det = A11 * A22 - A12**2
- 
-        # If null, return 0
-        if det == 0:
-            resI[m] = 0
-            resJ[m] = 0
-        else:
-            # Compute the offset vector
-            # it is the minimum of the quadratic mu = - A^(-1) b
-            osvI = -(A11 * b2 - A12 * b1) / det
-            osvJ = -(A22 * b1 - A12 * b2) / det
-            # Compute the norm of this vector
-            nrm = math.sqrt(osvI**2 + osvJ**2)
-            # Only keep it if it is less than 1 pixel away
-            resI[m] = osvI * (nrm < 1)
-            resJ[m] = osvJ * (nrm < 1)
-
-
-def subPixelMinimum(arrDst, arrIdx):
-    '''Compute sub-pixel distance minima
-    from 3x3 neighborhoods around the pixel-level minima.
-    (Section 3.3 of the IPOL article).
-    Args:
-    	arrDst: array of arrays of distances
-    		(rows: reference tile; columns: distances of all possible tiles within the search area)
-    	arrIdx: array of corresponding indices of the distance minima
-    '''
-    # Initialization
-    offsets = np.empty((len(arrIdx), 2), dtype=arrDst.dtype)
-    # Compute the minimum
-    offsets[:, 0], offsets[:, 1] = subPixelMinimum_(arrDst, arrIdx)
-    # Return the offsets
-    return offsets
-
 
 def computeRMSE(image1, image2):
     '''computes the Root Mean Square Error between two images'''
@@ -483,71 +200,3 @@ def computePSNR(image, noisyImage):
     else:
         print('WARNING: images have different sizes: {}, {}. Returning None'.format(image.shape, noisyImage.shape))
         return None
-
-
-## NOTE: this returns a (h,w,H,W) tile collections, each size (H,W)
-def getTiles(a, window, steps=None, axis=None):
-    '''
-    Create a windowed view over `n`-dimensional input that uses an
-    `m`-dimensional window, with `m <= n`
-    
-    Parameters
-    -------------
-    a : Array-like
-    	The array to create the view on
-    
-    window : tuple or int
-    	If int, the size of the window in `axis`, or in all dimensions if
-    	`axis == None`
-    
-    	If tuple, the shape of the desired window.  `window.size` must be:
-    		equal to `len(axis)` if `axis != None`, else
-    		equal to `len(a.shape)`, or
-    		1
-    
-    steps : tuple, int or None
-    	The offset between consecutive windows in desired dimension
-    	If None, offset is one in all dimensions
-    	If int, the offset for all windows over `axis`
-    	If tuple, the steps along each `axis`.
-    		`len(steps)` must me equal to `len(axis)`
-    
-    axis : tuple, int or None
-    	The axes over which to apply the window
-    	If None, apply over all dimensions
-    	if tuple or int, the dimensions over which to apply the window
-    
-    Returns
-    -------
-    
-    a_view : ndarray
-    	A windowed view on the input array `a`, or a generator over the windows
-    
-    '''
-    ashp = np.array(a.shape)
-
-    if axis is not None:
-        axs = np.array(axis, ndmin=1)
-        assert np.all(np.in1d(axs, np.arange(ashp.size))), "Axes out of range"
-    else:
-        axs = np.arange(ashp.size)
-
-    window = np.array(window, ndmin=1)
-    assert (window.size == axs.size) | (window.size == 1), "Window dims and axes don't match"
-    wshp = ashp.copy()
-    wshp[axs] = window
-    assert np.all(wshp <= ashp), "Window is bigger than input array in axes"
-    
-    stp = np.ones_like(ashp)
-    if steps:
-        steps = np.array(steps, ndmin=1)
-        assert np.all(steps > 0), "Only positive steps allowed"
-        assert (steps.size == axs.size) | (steps.size == 1), "Steps and axes don't match"
-        stp[axs] = steps
-
-    astr = np.array(a.strides)
-
-    shape = tuple((ashp - wshp) // stp + 1) + tuple(wshp)
-    strides = tuple(astr * stp) + tuple(astr)
-
-    return np.squeeze(np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides))
