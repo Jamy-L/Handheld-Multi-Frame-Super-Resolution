@@ -33,7 +33,7 @@ def init_ICA(ref_img, options, params):
     n_patch_y = padded_imshape_y // (tile_size // 2) - 1
     n_patch_x = padded_imshape_x // (tile_size // 2) - 1
 
-    # Estimating gradients with separated Prewitt kernels
+    # Estimating gradients with Prewitt kernels
     kernely = np.array([[-1],
                         [0],
                         [1]])
@@ -54,20 +54,20 @@ def init_ICA(ref_img, options, params):
         # Note that pytorch Convolve is actually a correlation, hence the ::-1 flip.
         # copy to avoid negative stride (not supported by torch)
         gaussian_kernel = _gaussian_kernel1d(sigma=sigma_blur, order=0, radius=int(4*sigma_blur+0.5))[::-1].copy()
-        th_gaussian_kernel = torch.as_tensor(gaussian_kernel, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+        th_gaussian_kernel = torch.as_tensor(gaussian_kernel, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
         
         
         # 2 times gaussian 1d is faster than gaussian 2d
-        temp = F.conv2d(th_ref_img, th_gaussian_kernel[None, None, :, None], padding='same') # convolve y
-        temp = F.conv2d(temp, th_gaussian_kernel[None, None, None, :], padding='same') # convolve x
+        temp = F.conv2d(th_ref_img, th_gaussian_kernel[:, None], padding='same') # convolve y
+        temp = F.conv2d(temp, th_gaussian_kernel[None, :], padding='same') # convolve x
         
         
-        th_gradx = F.conv2d(temp, th_kernelx, padding='same')[0, 0] # 1 batch, 1 channel
-        th_grady = F.conv2d(temp, th_kernely, padding='same')[0, 0]
+        th_gradx = F.conv2d(temp, th_kernelx, padding='same').squeeze() # 1 batch, 1 channel
+        th_grady = F.conv2d(temp, th_kernely, padding='same').squeeze()
         
     else:
-        th_gradx = F.conv2d(th_ref_img, th_kernelx, padding='same')[0, 0] # 1 batch, 1 channel
-        th_grady = F.conv2d(th_ref_img, th_kernely, padding='same')[0, 0]
+        th_gradx = F.conv2d(th_ref_img, th_kernelx, padding='same').squeeze() # 1 batch, 1 channel
+        th_grady = F.conv2d(th_ref_img, th_kernely, padding='same').squeeze()
         
     
     # swapping grads back to numba
@@ -83,8 +83,8 @@ def init_ICA(ref_img, options, params):
     
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
     
-    blockspergrid_x = int(np.ceil(n_patch_y/threadsperblock[1]))
-    blockspergrid_y = int(np.ceil(n_patch_x/threadsperblock[0]))
+    blockspergrid_x = int(np.ceil(n_patch_x/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(n_patch_y/threadsperblock[0]))
     blockspergrid = (blockspergrid_x, blockspergrid_y)
     
     compute_hessian[blockspergrid, threadsperblock](cuda_gradx, cuda_grady,
@@ -254,8 +254,8 @@ def ICA_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, hes
     
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
     
-    blockspergrid_x = int(np.ceil(n_patch_y/threadsperblock[1]))
-    blockspergrid_y = int(np.ceil(n_patch_x/threadsperblock[0]))
+    blockspergrid_x = int(np.ceil(n_patch_x/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(n_patch_y/threadsperblock[0]))
     blockspergrid = (blockspergrid_x, blockspergrid_y)
     
     ICA_get_new_flow[blockspergrid, threadsperblock](
@@ -290,7 +290,6 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
     
     patch_pos_x = tile_size//2 * (patch_idx - 1)
     patch_pos_y = tile_size//2 * (patch_idy - 1)
-    
     
     A = cuda.local.array((2,2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
     A[0, 0] = hessian[patch_idy, patch_idx, 0, 0]
@@ -360,7 +359,7 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
         
     
     alignment_step = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-    if abs(A[0, 0]*A[1, 1] - A[0, 1]*A[1, 0])> 1e-5: # system is solvable 
+    if abs(A[0, 0]*A[1, 1] - A[0, 1]*A[1, 0]) > 1e-5: # system is solvable 
         solve_2x2(A, B, alignment_step)
         
         alignment[patch_idy, patch_idx, 0] = local_alignment[0] + alignment_step[0]

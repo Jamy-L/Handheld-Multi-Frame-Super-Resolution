@@ -367,7 +367,7 @@ params['block matching']['tuning']['factors'] = [1, 2, 2, 2] # a bit smaller bec
 params['block matching']['grey method'] = "FFT"
 params['kanade']['grey method'] = "FFT"
 params['kanade']['tuning']['kanadeIter'] = 6
-params['kanade']['tuning']['sigma blur'] = 0
+params['kanade']['tuning']['sigma blur'] = 1
 params['robustness']['on'] = False
 
 ################################
