@@ -41,22 +41,24 @@ def main(ref_img, comp_imgs, options, params):
         debug_dict = {"robustness":[],
                       "flow":[]}
 
-    if verbose :
-        cuda.synchronize()
-        print("\nProcessing reference image ---------\n")
-        im_time = time.perf_counter()
-
     #___ Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
+    cuda.synchronize()
+    
+    if verbose :
+        print("\nProcessing reference image ---------\n")
+        t1 = time.perf_counter()
     
     
     #___ Raw to grey
     grey_method = params['grey method']
-    t1 = time.perf_counter()
     
     if bayer_mode :
+        # TODO Half of the ref execution time is lost here, as the function is
+        # called for the first time.
         cuda_ref_grey = compute_grey_images(cuda_ref_img, grey_method)
         if verbose_3 :
+            cuda.synchronize()
             getTime(t1, "- Ref grey image estimated by {}".format(grey_method))
     else:
         cuda_ref_grey = cuda_ref_img
@@ -95,35 +97,38 @@ def main(ref_img, comp_imgs, options, params):
         
     ref_local_stats = init_robustness(cuda_ref_img,options, params['robustness'])
     
-    if verbose_2 : 
-        current_time = getTime(
-            current_time, 'Local stats estimated (Total)')
+    if verbose_2 :
+        cuda.synchronize()
+        current_time = getTime(current_time, 'Local stats estimated (Total)')
 
         
     #___ Kernel estimation
     if verbose_2 : 
+        cuda.synchronize()
         current_time = time.perf_counter()
         print('\nEstimating kernels')
         
     cuda_kernels = estimate_kernels(cuda_ref_img, options, params['merging'])
     
     if verbose_2 : 
-        current_time = getTime(
-            current_time, 'Kernels estimated (Total)')
+        cuda.synchronize()
+        current_time = getTime(current_time, 'Kernels estimated (Total)')
     
     
     #___ init merge
-    if verbose_2 : 
+    if verbose_2 :
+        cuda.synchronize()
         current_time = time.perf_counter()
         print('\nAccumulating ref Img')
         
     num, den = init_merge(cuda_ref_img, cuda_kernels, options, params["merging"])
     
     if verbose_2 : 
+        cuda.synchronize()
         getTime(current_time, 'Ref Img accumulated (Total)')
     if verbose :
         cuda.synchronize()
-        getTime(im_time, '\nImage processed (Total)')
+        getTime(t1, '\nRef Img processed (Total)')
     
 
     n_images = comp_imgs.shape[0]
@@ -137,8 +142,7 @@ def main(ref_img, comp_imgs, options, params):
         cuda_img = cuda.to_device(comp_imgs[im_id])
         if verbose_3 : 
             cuda.synchronize()
-            current_time = getTime(
-                im_time, 'Arrays moved to GPU')
+            current_time = getTime(im_time, 'Arrays moved to GPU')
         
         #___ Compute Grey Images
         if bayer_mode:
