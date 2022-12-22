@@ -334,8 +334,8 @@ def accumulate(comp_img, alignments, covs, r,
 
     # fetch of the flow, as early as possible
     local_optical_flow = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-    patch_idy = round(coarse_ref_sub_pos[0]//(tile_size//2)) + 1 # +1 because padding was made in block matching. The first patch is out of bounds
-    patch_idx = round(coarse_ref_sub_pos[1]//(tile_size//2)) + 1
+    patch_idy = int(coarse_ref_sub_pos[0]//tile_size)
+    patch_idx = int(coarse_ref_sub_pos[1]//tile_size)
     local_optical_flow[0] = alignments[patch_idy, patch_idx, 0]
     local_optical_flow[1] = alignments[patch_idy, patch_idx, 1]
     
@@ -354,8 +354,8 @@ def accumulate(comp_img, alignments, covs, r,
                     round((coarse_ref_sub_pos[1] - 0.5)/2)]
 
     else:
-        local_r = r[int(coarse_ref_sub_pos[0]),
-                    int(coarse_ref_sub_pos[1])]
+        local_r = r[round(coarse_ref_sub_pos[0]),
+                    round(coarse_ref_sub_pos[1])]
         
     patch_center_pos[1] = coarse_ref_sub_pos[1] + local_optical_flow[0]
     patch_center_pos[0] = coarse_ref_sub_pos[0] + local_optical_flow[1]

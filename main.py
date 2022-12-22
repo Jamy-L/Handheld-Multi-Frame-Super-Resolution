@@ -59,7 +59,7 @@ crop_str = None
 params = get_params(PSNR = 35)
 
 # Overwritting default parameters
-params["scale"] = 1
+params["scale"] = 2
 options = {'verbose' : 1}
 
 params['merging']['kernel'] = 'handheld'
@@ -163,7 +163,7 @@ for r in debug_dict['robustness']:
 acc_r/= len(debug_dict['robustness'])
 
 plt.figure('acc r')
-plt.imshow(acc_r, cmap="gray", vmin=0, vmax=1)
+plt.imshow(acc_r, cmap="gray")
 plt.colorbar()
 plt.title('accumulated robustness')
 

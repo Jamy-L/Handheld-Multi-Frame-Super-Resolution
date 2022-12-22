@@ -43,13 +43,12 @@ def init_block_matching(ref_img, options, params):
     # if needed, pad images with zeros so that getTiles contains all image pixels
     paddingPatchesHeight = (tileSize - h % (tileSize)) * (h % (tileSize) != 0)
     paddingPatchesWidth = (tileSize - w % (tileSize)) * (w % (tileSize) != 0)
-    # additional zero padding to prevent artifacts on image edges due to overlapped patches in each spatial dimension
-    paddingOverlapHeight = paddingOverlapWidth = tileSize // 2
+
     # combine the two to get the total padding
-    paddingTop = paddingOverlapHeight
-    paddingBottom = paddingOverlapHeight + paddingPatchesHeight
-    paddingLeft = paddingOverlapWidth
-    paddingRight = paddingOverlapWidth + paddingPatchesWidth
+    paddingTop = 0
+    paddingBottom = paddingPatchesHeight
+    paddingLeft = 0
+    paddingRight = paddingPatchesWidth
     
 	# pad all images (by mirroring image edges)
 	# separate reference and alternate images
@@ -112,20 +111,19 @@ def align_image_block_matching(img, referencePyramid, options, params, debug=Fal
     # if needed, pad images with zeros so that getTiles contains all image pixels
     paddingPatchesHeight = (tileSize - h % (tileSize)) * (h % (tileSize) != 0)
     paddingPatchesWidth = (tileSize - w % (tileSize)) * (w % (tileSize) != 0)
-    # additional zero padding to prevent artifacts on image edges due to overlapped patches in each spatial dimension
-    paddingOverlapHeight = paddingOverlapWidth = tileSize // 2
+
     # combine the two to get the total padding
-    paddingTop = paddingOverlapHeight
-    paddingBottom = paddingOverlapHeight + paddingPatchesHeight
-    paddingLeft = paddingOverlapWidth
-    paddingRight = paddingOverlapWidth + paddingPatchesWidth
+    paddingTop = 0
+    paddingBottom = paddingPatchesHeight
+    paddingLeft = 0
+    paddingRight = paddingPatchesWidth
     
 	# pad all images (by mirroring image edges)
 	# separate reference and alternate images
     
     th_img = torch.as_tensor(img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
     
-    # img_padded = np.pad(img, ((paddingTop, paddingBottom), (paddingLeft, paddingRight)), 'symmetric')
+
     img_padded = F.pad(th_img, (paddingLeft, paddingRight, paddingTop, paddingBottom), 'circular')
     
 
@@ -249,8 +247,8 @@ def align_on_a_level(referencePyramidLevel, alternatePyramidLevel, options, upsa
     
     # This formula is checked : it is correct
     # Number of patches that can fit on this level
-    h = imshape[0] // (tileSize // 2) - 1
-    w = imshape[1] // (tileSize // 2) - 1
+    h = imshape[0] // tileSize
+    w = imshape[1] // tileSize
     
     # Upsample the previous alignements for initialization
     if previousAlignments is None:
@@ -291,8 +289,8 @@ def upsample_alignments(referencePyramidLevel, alternatePyramidLevel, previousAl
 
     # UpsampledAlignments.shape can be less than referencePyramidLevel.shape/tileSize
     # eg when previous alignments could not be computed over the whole image
-    n_tiles_y_new = referencePyramidLevel.shape[0] // (tileSize // 2) - 1
-    n_tiles_x_new = referencePyramidLevel.shape[1] // (tileSize // 2) - 1
+    n_tiles_y_new = referencePyramidLevel.shape[0] // tileSize
+    n_tiles_x_new = referencePyramidLevel.shape[1] // tileSize
 
     upsampledAlignments = cuda.device_array((n_tiles_y_new, n_tiles_x_new, 2), dtype=DEFAULT_NUMPY_FLOAT_TYPE)
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
@@ -335,8 +333,8 @@ def cuda_upsample_alignments(referencePyramidLevel, alternatePyramidLevel, upsam
     candidate_alignment_0_shift[1] = previousAlignments[prev_tile_y, prev_tile_x, 1] * upsamplingFactor
     
     # position of the top left pixel in the subtile
-    subtile_pos_y = subtile_y*tileSize//2
-    subtile_pos_x = subtile_x*tileSize//2
+    subtile_pos_y = subtile_y*tileSize
+    subtile_pos_x = subtile_x*tileSize
     
     # copying ref patch into local memory, because it needs to be read 3 times
     local_ref = cuda.local.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
@@ -477,8 +475,8 @@ def cuda_L1_local_search(referencePyramidLevel, alternatePyramidLevel,
     local_flow[1] = upsampledAlignments[tile_y, tile_x, 1]
 
     # position of the pixel in the top left corner of the patch
-    patch_pos_x = tile_x * tileSize//2
-    patch_pos_y = tile_y * tileSize//2
+    patch_pos_x = tile_x * tileSize
+    patch_pos_y = tile_y * tileSize
     
     local_ref = cuda.local.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
     for i in range(tileSize):
@@ -531,8 +529,8 @@ def cuda_L2_local_search(referencePyramidLevel, alternatePyramidLevel,
     local_flow[1] = upsampledAlignments[tile_y, tile_x, 1]
 
     # position of the pixel in the top left corner of the patch
-    patch_pos_x = tile_x * tileSize//2
-    patch_pos_y = tile_y * tileSize//2
+    patch_pos_x = tile_x * tileSize
+    patch_pos_y = tile_y * tileSize
     
     local_ref = cuda.local.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
     for i in range(tileSize):

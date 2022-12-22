@@ -363,7 +363,7 @@ params = get_params(PSNR=35)
 
 ###### Change parameters here
 
-params['block matching']['tuning']['factors'] = [1, 2, 2, 2] # a bit smaller because div 2k is not 4k
+params['block matching']['tuning']['factors'] = [1, 2, 2, 4] # a bit smaller because div 2k is not 4k
 params['block matching']['grey method'] = "FFT"
 params['kanade']['grey method'] = "FFT"
 params['kanade']['tuning']['kanadeIter'] = 6
