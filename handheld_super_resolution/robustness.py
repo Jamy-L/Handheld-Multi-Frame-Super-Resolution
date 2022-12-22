@@ -12,7 +12,7 @@ from numba import cuda, uint8
 
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS, clamp
 
-def init_robustness(ref_img,options, params):
+def init_robustness(ref_img, options, params):
     """
     Computes the local stats of the reference image
 
@@ -177,7 +177,7 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
         
         # applying flow discontinuity penalty
         S = cuda.device_array((n_patch_y, n_patch_x), DEFAULT_NUMPY_FLOAT_TYPE)
-        compute_s[S.shape, (3, 3)](flows, Mt, s1, s2, S)
+        S = compute_s(flows, Mt, s1, s2)
         
         
         if verbose_3 :
@@ -191,7 +191,8 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
             cuda.synchronize()
             current_time = getTime(
                 current_time, ' - Robustness Estimated')
-        
+        # TODO debug
+        # r = R
         r = local_min(R)
         
         if verbose_3:
@@ -219,21 +220,22 @@ def compute_guide_image(raw_img, guide_imshape, CFA):
 def cuda_compute_guide_image(raw_img, guide_img, CFA):
     tx, ty = cuda.grid(2)
     
-    if (0 <= ty < guide_img.shape[0] and
-        0 <= tx < guide_img.shape[1]):
+    if not (0 <= ty < guide_img.shape[0] and
+            0 <= tx < guide_img.shape[1]):
+        return
         
-        g = 0
-        
-        for i in range(2):
-            for j in range(2):
-                c = uint8(CFA[i, j])
-                
-                if c == 1: # green
-                    g +=  raw_img[2*ty + i, 2*tx + j]
-                else:
-                    guide_img[ty, tx, c] = raw_img[2*ty + i, 2*tx + j]
-                
-        guide_img[ty, tx, 1] = g/2
+    g = 0
+    
+    for i in range(2):
+        for j in range(2):
+            c = uint8(CFA[i, j])
+            
+            if c == 1: # green
+                g +=  raw_img[2*ty + i, 2*tx + j]
+            else:
+                guide_img[ty, tx, c] = raw_img[2*ty + i, 2*tx + j]
+            
+    guide_img[ty, tx, 1] = g/2
 
 def compute_local_stats(guide_img):
     """
@@ -337,42 +339,43 @@ def cuda_compute_patch_dist(ref_local_stats, comp_local_stats, flow, tile_size, 
     idx, idy = cuda.grid(2)
     guide_imshape_y, guide_imshape_x, _, n_channels = ref_local_stats.shape
     
-    if (0 <= idy < guide_imshape_y and
-        0 <= idx < guide_imshape_x):
+    if not (0 <= idy < guide_imshape_y and
+            0 <= idx < guide_imshape_x):
+        return
 
-        d = 0
-        
-        ## Fetching flow
-        local_flow = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE) 
-        if n_channels == 1:
-            patch_idy = round(idy//(tile_size//2)) + 1 # guide scale is actually coarse scale
-            patch_idx = round(idx//(tile_size//2)) + 1 # + 1 because of BM padding
-            # guide image is coarse image : the flow stays the same
-            local_flow[0] = flow[patch_idy, patch_idx, 0]
-            local_flow[1] = flow[patch_idy, patch_idx, 1]
-            
-        else:
-            patch_idy = round(2*idy//(tile_size//2)) + 1 # guide scale is 2 times sparser than coarse
-            patch_idx = round(2*idx//(tile_size//2)) + 1
-            
-            # guide image is 2x smaller than coarse image : the flow must be divided by 2
-            local_flow[0] = flow[patch_idy, patch_idx, 0]/2
-            local_flow[1] = flow[patch_idy, patch_idx, 1]/2
-        
-        new_idx = round(idx + local_flow[0])
-        new_idy = round(idy + local_flow[1])
+    d = 0
     
+    ## Fetching flow
+    local_flow = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE) 
+    if n_channels == 1:
+        patch_idy = int(idy//tile_size) # guide scale is actually coarse scale
+        patch_idx = int(idx//tile_size)
+        # guide image is coarse image : the flow stays the same
+        local_flow[0] = flow[patch_idy, patch_idx, 0]
+        local_flow[1] = flow[patch_idy, patch_idx, 1]
         
-        inbound = (0 <= new_idx < guide_imshape_x) and (0 <= new_idy < guide_imshape_y)
+    else:
+        patch_idy = int((2*idy + 0.5)//tile_size) # guide scale is 2 times sparser than coarse
+        patch_idx = int((2*idx + 0.5)//tile_size)
         
-        if inbound :
-            for channel in range(n_channels):
-                dif = ref_local_stats[idy, idx, 0, channel] - comp_local_stats[new_idy, new_idx, 0, channel]
-                d += dif * dif
-            dist[idy, idx] = d
-            
-        else:
-            dist[idy, idx] = +1/0 # + infinite distance will induce R = 0
+        # guide image is 2x smaller than coarse image : the flow must be divided by 2
+        local_flow[0] = flow[patch_idy, patch_idx, 0]/2
+        local_flow[1] = flow[patch_idy, patch_idx, 1]/2
+    
+    new_idx = round(idx + local_flow[0])
+    new_idy = round(idy + local_flow[1])
+
+    
+    inbound = (0 <= new_idx < guide_imshape_x) and (0 <= new_idy < guide_imshape_y)
+    
+    if inbound :
+        for channel in range(n_channels):
+            dif = ref_local_stats[idy, idx, 0, channel] - comp_local_stats[new_idy, new_idx, 0, channel]
+            d += dif * dif
+        dist[idy, idx] = d
+        
+    else:
+        dist[idy, idx] = +1/0 # + infinite distance will induce R = 0
 
 def apply_noise_model(d, ref_local_stats, std_curve, diff_curve):
     """
@@ -413,33 +416,33 @@ def apply_noise_model(d, ref_local_stats, std_curve, diff_curve):
 @cuda.jit
 def cuda_apply_noise_model(d, sigma, ref_local_stats, std_curve, diff_curve):
     idx, idy = cuda.grid(2)
-    if (0 <= idy < ref_local_stats.shape[0] and
-        0 <= idx < ref_local_stats.shape[1]):
+    if not(0 <= idy < ref_local_stats.shape[0] and
+           0 <= idx < ref_local_stats.shape[1]):
+        return
         
-        # sigma squarred is the sum of the 3 colour sigma squared
-        sigma_ms = (ref_local_stats[idy, idx, 1, 0] +
-                    ref_local_stats[idy, idx, 1, 1] +
-                    ref_local_stats[idy, idx, 1, 2])
+    # sigma squarred is the sum of the 3 colour sigma squared
+    sigma_ms = (ref_local_stats[idy, idx, 1, 0] +
+                ref_local_stats[idy, idx, 1, 1] +
+                ref_local_stats[idy, idx, 1, 2])
+
+    brightness = (ref_local_stats[idy, idx, 0, 0] +
+                  ref_local_stats[idy, idx, 0, 1] +
+                  ref_local_stats[idy, idx, 0, 2])/3
     
-        brightness = (ref_local_stats[idy, idx, 0, 0] +
-                      ref_local_stats[idy, idx, 0, 1] +
-                      ref_local_stats[idy, idx, 0, 2])/3
-        
-        id_noise = round(1000 *brightness) # id on the noise curve
-        d_md =  diff_curve[id_noise] * 2 # adjustment parameters
-        sigma_md = std_curve[id_noise] * 1.77
-        
-        # Wiener shrinkage
-        # the formula is slightly different than in the article, because
-        # d is a square distance here
-        d_sq = d[idy, idx]
-        shrink = d_sq/(d_sq + d_md*d_md)
-        d[idy, idx] = d_sq * shrink*shrink # dist *= shrink so dist^2 *= shrink^2
-        
-        sigma[idy, idx] = max(sigma_ms, sigma_md*sigma_md) #sigma_ms is actually a sigma^2 but sigma_md (monte carlo) is a real std
+    id_noise = round(1000 *brightness) # id on the noise curve
+    d_md =  diff_curve[id_noise] * 2 # adjustment parameters
+    sigma_md = std_curve[id_noise] * 1.77
     
-@cuda.jit
-def compute_s(flows, M_th, s1, s2, S):
+    # Wiener shrinkage
+    # the formula is slightly different than in the article, because
+    # d is a square distance here
+    d_sq = d[idy, idx]
+    shrink = d_sq/(d_sq + d_md*d_md)
+    d[idy, idx] = d_sq * shrink*shrink # dist *= shrink so dist^2 *= shrink^2
+    
+    sigma[idy, idx] = max(sigma_ms, sigma_md*sigma_md) #sigma_ms is actually a sigma^2 but sigma_md (monte carlo) is a real std
+
+def compute_s(flows, M_th, s1, s2):
     """ Computes s at every position based on flow irregularities
     
 
@@ -453,50 +456,71 @@ def compute_s(flows, M_th, s1, s2, S):
         DESCRIPTION.
     s2 : float
         DESCRIPTION.
-    S : device Array[guide_imshape_y, guide_imshape_x]
-        Map where s1 or s2 will be written at each position.
 
     Returns
     -------
-    None.
+    S : device Array[n_patchs_y, n_patchs_x]
+        Map where s1 or s2 will be written at each position.
 
     """
-    tx, ty = cuda.threadIdx.x - 1, cuda.threadIdx.y - 1 # 3 by 3 neigbhorhood
-    patch_idy, patch_idx = cuda.blockIdx.x, cuda.blockIdx.y
+    n_patch_y, n_patch_x, _ = flows.shape
+    S = cuda.device_array((n_patch_y, n_patch_x), DEFAULT_NUMPY_FLOAT_TYPE)
+    
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
+    blockspergrid_x = int(np.ceil(n_patch_x/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(n_patch_y/threadsperblock[0]))
+    blockspergrid = (blockspergrid_x, blockspergrid_y)
+    
+    cuda_compute_s[blockspergrid, threadsperblock](flows, M_th, s1, s2, S)
+    
+    return S
+    
+@cuda.jit
+def cuda_compute_s(flows, M_th, s1, s2, S):
+    patch_idx, patch_idy = cuda.grid(2)
     
     n_patch_y, n_patch_x, _ = flows.shape
     
+    if not (0 <= patch_idy < n_patch_y and
+            0 <= patch_idx < n_patch_x):
+        return
     
-    mini = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
-    maxi = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
+    mini = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
+    maxi = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
+    flow = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
     mini[0] = +1/0
     mini[1] = +1/0
     maxi[0] = -1/0
     maxi[1] = -1/0
     
-    y = patch_idy + ty
-    x = patch_idx + tx
+    for i in range(-1, 2):
+        for j in range(-1, 2):
+            y = patch_idy + i
+            x = patch_idx + j
     
-    inbound = (0 <= x < n_patch_x and 0 <= y < n_patch_y)
+            inbound = (0 <= x < n_patch_x and
+                       0 <= y < n_patch_y)
 
-    if inbound:
-        flow = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE) #local array, each threads manipulates a different flow
-        flow[0] = flows[y, x, 0]
-        flow[1] = flows[y, x, 1]
+            if inbound:
+                flow[0] = flows[y, x, 0]
+                flow[1] = flows[y, x, 1]
+                
+                #local max search
+                maxi[0] = max(maxi[0], flow[0])
+                maxi[1] = max(maxi[1], flow[1])
+                #local min search
+                mini[0] = min(mini[0], flow[0])
+                mini[1] = min(mini[1], flow[1])
         
-        #local max search
-        cuda.atomic.max(maxi, 0, flow[0])
-        cuda.atomic.max(maxi, 1, flow[1])
-        #local min search
-        cuda.atomic.min(mini, 0, flow[0])
-        cuda.atomic.min(mini, 1, flow[1])
-        
-    cuda.syncthreads()    
-    if tx == 0 and ty == 0:
-        if (maxi[0] - mini[0])**2 + (maxi[1] - mini[1])**2 > M_th**2:
-            S[patch_idy, patch_idx] = s1
-        else:
-            S[patch_idy, patch_idx] = s2
+
+    # if patch_idy==0 or patch_idy==n_patch_y -1 or patch_idx==0 or patch_idx==n_patch_x-1:
+    #     S[patch_idy, patch_idx] = 0
+    # else:
+    #     S[patch_idy, patch_idx] = 1
+    if (maxi[0] - mini[0])**2 + (maxi[1] - mini[1])**2 > M_th**2:
+        S[patch_idy, patch_idx] = s1
+    else:
+        S[patch_idy, patch_idx] = s2
 
 def robustness_threshold(d, sigma, S, t, tile_size, bayer_mode):
     guide_imshape = d.shape 
@@ -515,18 +539,20 @@ def robustness_threshold(d, sigma, S, t, tile_size, bayer_mode):
 def cuda_robustness_threshold(d, sigma, S, t, tile_size, bayer_mode, R):
     idx, idy = cuda.grid(2)
 
-    if (0 <= idy < R.shape[0] and
-        0 <= idx < R.shape[1]):
+    if not (0 <= idy < R.shape[0] and
+            0 <= idx < R.shape[1]):
+        return
         
-        if bayer_mode : 
-            patch_idy = round(2*idy//(tile_size//2)) + 1
-            patch_idx = round(2*idx//(tile_size//2)) + 1
-        else:
-            patch_idy = round(idy//(tile_size//2)) + 1
-            patch_idx = round(idx//(tile_size//2)) + 1
+    if bayer_mode : 
+        patch_idy = int((2*idy+0.5)//tile_size)
+        patch_idx = int((2*idx+0.5)//tile_size)
+    else:
+        patch_idy = int(idy//tile_size)
+        patch_idx = int(idx//tile_size)
     
-        R[idy, idx] = clamp(S[patch_idy, patch_idx]*exp(-d[idy, idx]/sigma[idy, idx]) - t,
-                            0, 1)
+    # R[idy, idx] = S[patch_idy, patch_idx]
+    R[idy, idx] = clamp(S[patch_idy, patch_idx]*exp(-d[idy, idx]/sigma[idy, idx]) - t,
+                        0, 1)
 
 def local_min(R):
     """

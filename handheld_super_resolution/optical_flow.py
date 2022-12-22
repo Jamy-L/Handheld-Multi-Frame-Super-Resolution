@@ -27,11 +27,9 @@ def init_ICA(ref_img, options, params):
     imsize_y, imsize_x = ref_img.shape
     
     # image is padded during BM, we need to consider that to count patches
-    padded_imshape_x = tile_size*(int(ceil(imsize_x/tile_size)) + 1)
-    padded_imshape_y = tile_size*(int(ceil(imsize_y/tile_size)) + 1)
     
-    n_patch_y = padded_imshape_y // (tile_size // 2) - 1
-    n_patch_x = padded_imshape_x // (tile_size // 2) - 1
+    n_patch_y = int(ceil(imsize_y/ tile_size))
+    n_patch_x = int(ceil(imsize_x/ tile_size))
 
     # Estimating gradients with Prewitt kernels
     kernely = np.array([[-1],
@@ -102,8 +100,8 @@ def compute_hessian(gradx, grady, tile_size, hessian):
     imshape = gradx.shape
     patch_idx, patch_idy = cuda.grid(2)
     
-    patch_pos_idx = tile_size//2 * (patch_idx - 1)# global position on the coarse grey grid. Because of extremity padding, it can be out of bound
-    patch_pos_idy = tile_size//2 * (patch_idy - 1)
+    patch_pos_idx = tile_size * patch_idx # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
+    patch_pos_idy = tile_size * patch_idy
     
     local_hessian = cuda.local.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
     local_hessian[0, 0] = 0
@@ -272,8 +270,8 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
            0 <= patch_idx < n_patchs_x):
         return
     
-    patch_pos_x = tile_size//2 * (patch_idx - 1)
-    patch_pos_y = tile_size//2 * (patch_idy - 1)
+    patch_pos_x = tile_size * patch_idx
+    patch_pos_y = tile_size * patch_idy
     
     A = cuda.local.array((2,2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
     A[0, 0] = hessian[patch_idy, patch_idx, 0, 0]
