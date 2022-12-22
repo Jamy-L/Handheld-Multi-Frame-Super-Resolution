@@ -236,11 +236,11 @@ def main(ref_img, comp_imgs, options, params):
         print('\n------------------------')
         cuda.synchronize()
         current_time = getTime(current_time, 'Image normalized (Total)')
-        
-    output = num.copy_to_host()
+    
     if verbose :
         print('\nTotal ellapsed time : ', time.perf_counter() - t1)
-        
+    
+    output = num.copy_to_host()
     if debug_mode :
         return output, debug_dict
     else:
@@ -265,7 +265,7 @@ def process(burst_path, options, params, crop_str=None):
         It must have an even shift in every direction, so that the CFA remains the same.
         The default is None.
         
-        Example : "[500:2500, 1000:2500]"
+        Example : crop_str="[500:2500, 1000:2500]"
 
     Returns
     -------

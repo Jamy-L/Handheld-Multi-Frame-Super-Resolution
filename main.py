@@ -11,9 +11,10 @@ import glob
 
 from tqdm import tqdm
 import numpy as np
-from math import modf
+from math import modf, sqrt
 import cv2
-import torch
+import torch as th
+import torch.nn.functional as F
 from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda, int32
 import exifread
 import rawpy
@@ -26,7 +27,9 @@ import colour_demosaicing
 from handheld_super_resolution import process, raw2rgb, get_params
 
 from plot_flow import flow2img
-from handheld_super_resolution.utils import crop
+from handheld_super_resolution.utils import crop, clamp
+from handheld_super_resolution.utils_image import compute_grey_images
+from handheld_super_resolution.linalg import get_eighen_elmts_2x2
 
 
 
@@ -61,17 +64,17 @@ options = {'verbose' : 1}
 
 params['merging']['kernel'] = 'handheld'
 params['robustness']['on'] = True
-params['kanade']['tuning']['kanadeIter'] = 3
 params['debug'] = True
-# burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
-burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
-# burst_path = 'P:/0001/Samsung'
+burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
+# burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
+# burst_path = 'P:/0050/Samsung'
 
 params['kanade']['tuning']['sigma blur'] = 1
 output_img, debug_dict = process(burst_path, options, params, crop_str)
 
 
 #%% extracting images locally for comparison 
+params['kanade']['tuning']['kanadeIter'] = 3
 raw_path_list = glob.glob(os.path.join(burst_path, '*.dng'))
 first_image_path = raw_path_list[0]
 
@@ -164,6 +167,134 @@ plt.imshow(acc_r, cmap="gray", vmin=0, vmax=1)
 plt.colorbar()
 plt.title('accumulated robustness')
 
+#%% Kernel elements visualisation
+
+img_grey = compute_grey_images(raw_ref_img.raw_image.copy()/1023, method="decimating")
+DEFAULT_CUDA_FLOAT_TYPE = float32
+DEFAULT_TORCH_FLOAT_TYPE = th.float32
+DEFAULT_NUMPY_FLOAT_TYPE = np.float32
+
+
+k_detail = params['merging']['tuning']['k_detail']
+k_denoise = params['merging']['tuning']['k_denoise']
+D_th = params['merging']['tuning']['D_th']
+D_tr = params['merging']['tuning']['D_tr']
+k_stretch = params['merging']['tuning']['k_stretch']
+k_shrink = params['merging']['tuning']['k_shrink']
+
+
+th_grey_img = th.as_tensor(img_grey, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
+grey_imshape = grey_imshape_y, grey_imshape_x = th_grey_img.shape[2:]
+
+
+grad_kernel1 = np.array([[[[-0.5, 0.5]]],
+                          
+                          [[[ 0.5, 0.5]]]])
+grad_kernel1 = th.as_tensor(grad_kernel1, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+
+grad_kernel2 = np.array([[[[0.5], 
+                            [0.5]]],
+                          
+                          [[[-0.5], 
+                            [0.5]]]])
+grad_kernel2 = th.as_tensor(grad_kernel2, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+
+
+tmp = F.conv2d(th_grey_img, grad_kernel1)
+th_full_grad = F.conv2d(tmp, grad_kernel2, groups=2)
+# The default padding mode reduces the shape of grey_img of 1 pixel in each
+# direction, as expected
+
+cuda_full_grads = cuda.as_cuda_array(th_full_grad.squeeze().transpose(0,1).transpose(1, 2))
+
+l = cuda.device_array(grey_imshape + (2,), DEFAULT_NUMPY_FLOAT_TYPE)
+A = cuda.device_array(grey_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
+D = cuda.device_array(grey_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
+
+@cuda.jit
+def cuda_estimate_kernel_elements(full_grads, l, A, D,
+                                  k_detail, k_denoise, D_th, D_tr):
+    pixel_idx, pixel_idy = cuda.grid(2)
+    
+    imshape_y, imshape_x, _ = l.shape
+    
+
+    
+    if (0 <= pixel_idy < imshape_y and 0 <= pixel_idx < imshape_x) :
+        structure_tensor = cuda.local.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
+        structure_tensor[0, 0] = 0
+        structure_tensor[0, 1] = 0
+        structure_tensor[1, 0] = 0
+        structure_tensor[1, 1] = 0
+        
+    
+        for i in range(0, 2):
+            for j in range(0, 2):
+                x = pixel_idx - 1 + j
+                y = pixel_idy - 1 + i
+                
+                if (0 <= y < full_grads.shape[0] and
+                    0 <= x < full_grads.shape[1]):
+                    
+                    full_grad_x = full_grads[y, x, 0]
+                    full_grad_y = full_grads[y, x, 1]
+    
+                    structure_tensor[0, 0] += full_grad_x * full_grad_x
+                    structure_tensor[1, 0] += full_grad_x * full_grad_y
+                    structure_tensor[0, 1] += full_grad_x * full_grad_y
+                    structure_tensor[1, 1] += full_grad_y * full_grad_y
+        
+        local_l = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        e1 = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+        e2 = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+
+        get_eighen_elmts_2x2(structure_tensor, local_l, e1, e2)
+        
+        l1 = local_l[0]
+        l2 = local_l[1]
+        
+        l[pixel_idy, pixel_idx, 0] = l1
+        l[pixel_idy, pixel_idx, 1] = l2
+        
+        
+        
+        A[pixel_idy, pixel_idx] = 1 + sqrt((l1 - l2)/(l1 + l2))
+
+        D[pixel_idy, pixel_idx] = clamp(1 - sqrt(l1)/D_tr + D_th, 0, 1)
+        
+threadsperblock = (16, 16)
+blockspergrid_x = int(np.ceil(grey_imshape_x/threadsperblock[1]))
+blockspergrid_y = int(np.ceil(grey_imshape_y/threadsperblock[0]))
+blockspergrid = (blockspergrid_x, blockspergrid_y)
+
+cuda_estimate_kernel_elements[blockspergrid, threadsperblock](cuda_full_grads, l, A, D,
+                              k_detail, k_denoise, D_th, D_tr)
+
+plt.figure('A')
+plt.imshow(A)
+plt.title('A')
+plt.colorbar()
+
+plt.figure('D')
+plt.imshow(D)
+plt.title('D')
+plt.colorbar()
+
+plt.figure('l1')
+plt.title('l1')
+plt.imshow(l[:,:,0])
+plt.colorbar()  
+
+plt.figure('gradx')
+plt.title('gradx')
+plt.imshow(cuda_full_grads[:,:,0])
+plt.colorbar() 
+
+plt.figure('grady')
+plt.title('grady')
+plt.imshow(cuda_full_grads[:,:,1])
+plt.colorbar()     
+
 
 #%% eighen vectors
 e1 = covs[0,:,:,:,0]
@@ -190,21 +321,6 @@ plt.quiver(e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
 
 
 #%%
-comp_grey_images = cfa_to_grayscale(comp_images)
-grey_al = alignment.copy()
-grey_al[:,:,:,-2:]*=0.5 # pure translation are downscaled from bayer to grey 
-
-upscaled_grey_al = upscale_alignement(grey_al, ref_grey_image.shape[:2], 16) 
-for image_index in range(comp_images.shape[0]):
-    warped = warp_flow(comp_grey_images[image_index], upscaled_grey_al[image_index], rgb = False)
-    plt.figure("image {}".format(image_index))
-    # plt.imsave('P:/images_test/image_{:02d}.png'.format(image_index),warped, cmap = 'gray')
-    plt.imshow(warped, cmap = 'gray')
-    plt.figure("EQ {}".format(image_index))
-    plt.imshow(np.log10((ref_grey_image - warped)**2),vmin = -6, vmax =0 , cmap="gray")
-    plt.colorbar()
-    
-    print("Im {}, EQM = {}".format(image_index, np.mean((ref_grey_image - warped)**2)))
 
 #%% plot flow
 maxrad = 10
@@ -224,23 +340,6 @@ flow_image = flow2img(Z, maxrad)
 plt.figure("wheel")
 plt.imshow(flow_image)
 
-#%% histograms
-
-plt.figure("R histogram")
-plt.hist(R.reshape(R.size), bins=25)
-
-plt.figure("r histogram")
-plt.hist(r.reshape(r.size), bins=25)
-
-X = np.linspace(0, 5, 100)
-Y1 = params['robustness']["tuning"]["s1"]*np.exp(-X) - params['robustness']["tuning"]["t"]
-Y2 = params['robustness']["tuning"]["s2"]*np.exp(-X) - params['robustness']["tuning"]["t"]
-plt.figure("robustness")
-plt.plot(X, np.clip(Y1, 0,1), label = "s1 (discontinuous alignment)")
-plt.plot(X, np.clip(Y2, 0,1), label = "s2 (continuous alignment)")
-plt.xlabel("(d/sigma)²")
-plt.ylabel("R")
-plt.legend()
 #%% kernels
 def plot_local_flow(pos, upscaled_flow):
     

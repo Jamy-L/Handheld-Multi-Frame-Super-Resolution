@@ -426,14 +426,17 @@ def cuda_apply_noise_model(d, sigma, ref_local_stats, std_curve, diff_curve):
                       ref_local_stats[idy, idx, 0, 2])/3
         
         id_noise = round(1000 *brightness) # id on the noise curve
-        d_md =  diff_curve[id_noise]
-        sigma_md = std_curve[id_noise]
+        d_md =  diff_curve[id_noise] * 2 # adjustment parameters
+        sigma_md = std_curve[id_noise] * 1.77
         
         # Wiener shrinkage
         # the formula is slightly different than in the article, because
-        # d squared is updated instead of d.
-        d[idy, idx] = d[idy, idx]**2/(d[idy, idx] + d_md**2)
-        sigma[idy, idx] = max(sigma_ms, sigma_md*sigma_md) #sigma_ms is actually a sigma^2 but sigma_md (minte carlo) is a real std
+        # d is a square distance here
+        d_sq = d[idy, idx]
+        shrink = d_sq/(d_sq + d_md*d_md)
+        d[idy, idx] = d_sq * shrink*shrink # dist *= shrink so dist^2 *= shrink^2
+        
+        sigma[idy, idx] = max(sigma_ms, sigma_md*sigma_md) #sigma_ms is actually a sigma^2 but sigma_md (monte carlo) is a real std
     
 @cuda.jit
 def compute_s(flows, M_th, s1, s2, S):

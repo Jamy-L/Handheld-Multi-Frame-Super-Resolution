@@ -13,7 +13,7 @@ import torch as th
 import torch.nn.functional as F
 
 from .linalg import get_eighen_elmts_2x2
-from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, getTime
+from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS, getTime
 from .utils_image import compute_grey_images
 
 
@@ -115,7 +115,7 @@ def estimate_kernels(img, options, params):
         
     covs = cuda.device_array(grey_imshape + (2,2), DEFAULT_NUMPY_FLOAT_TYPE)
 
-    threadsperblock = (16, 16)
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
     blockspergrid_x = int(np.ceil(grey_imshape_x/threadsperblock[1]))
     blockspergrid_y = int(np.ceil(grey_imshape_y/threadsperblock[0]))
     blockspergrid = (blockspergrid_x, blockspergrid_y)
