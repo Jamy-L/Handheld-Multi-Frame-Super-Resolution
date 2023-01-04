@@ -34,7 +34,7 @@ import torch as th
 import torch.fft
 import torch.nn.functional as F
 
-from .utils import getSigned, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_COMPLEX_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
+from .utils import getSigned, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_COMPLEX_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS, add
 
 def compute_grey_images(img, method):
     """
@@ -170,8 +170,7 @@ def cuda_frame_count_denoising(noisy, denoised, r_acc,
 def denoise_power(r_acc, sigma_max, r_max):
     r = min(r_acc, r_max)
     return sigma_max * (r_max - r)/r_max
-    
-    
+                
     
 def fft_lowpass(img_grey):
     img_grey = th.from_numpy(img_grey).to("cuda")

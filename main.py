@@ -9,7 +9,6 @@ import glob
 
 # import logging
 
-from tqdm import tqdm
 import numpy as np
 from math import modf, sqrt, exp
 import cv2
@@ -44,42 +43,33 @@ def cfa_to_grayscale(raw_img):
             raw_img[..., 1::2, 1::2])/4
 
 
-# logger = logging.getLogger()
-# logger.setLevel(logging.WARNING)
-
-# crop_str = "[1638:2600, 1912:2938]" # for friant
-# crop_str = "[1002:1686, 2406:3130]" # for rue4 (arrondissement)
-# crop_str = "[1002:1686, 2000:2700]" # for rue4 (truck plate)
-# crop_str = "[500:2500, 1000:2500]" # for samsung 0
-crop_str = None
-# crop_str = "[1500:2500, 2000:3000]" # for samsung 1
-
 #%%
-
-params = get_params(PSNR = 35)
-
-# Overwritting default parameters
-params["scale"] = 2
 options = {'verbose' : 1}
 
-params['merging']['kernel'] = 'handheld'
-params['robustness']['on'] = True
-params['accumulated robustness denoiser']['on'] = True
+# Overwritting SNR based parameters
+params={}
+params["scale"] = 3
+
+
+# params['merging']['kernel'] = 'handheld'
+# params['robustness']['on'] = True
+# params['accumulated robustness denoiser']['on'] = True
 params['debug'] = True
-burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
+# params['kanade']['tuning']['sigma blur'] = 1
+
+# burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
 # burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
-# burst_path = 'P:/0050/Samsung'
+burst_path = 'P:/0000/Samsung'
 
-params['kanade']['tuning']['sigma blur'] = 1
-output_img, debug_dict = process(burst_path, options, params, crop_str)
+output_img, debug_dict = process(burst_path, options, params)
 
-
+#%%
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 
 plt.figure("output")
 
-plt.imshow(output_img[3700:3950, 5300: 5550], interpolation = 'none')
+plt.imshow(output_img, interpolation = 'none')
 plt.xticks([])
 plt.yticks([])
 
@@ -95,8 +85,6 @@ exif_tags = open(first_image_path, 'rb')
 tags = exifread.process_file(exif_tags)
 
 ref_img = raw_ref_img.raw_image.copy()
-if crop_str is not None : 
-    ref_img = crop(ref_img, crop_str, axis=(0,1))
 
 xyz2cam = raw2rgb.get_xyz2cam_from_exif(first_image_path)
 
@@ -105,8 +93,6 @@ comp_images = rawpy.imread(
 for i in range(2,len(raw_path_list)):
     comp_images = np.append(comp_images, rawpy.imread(raw_path_list[i]
                                                       ).raw_image.copy()[None], axis=0)
-if crop_str is not None :
-    comp_images = crop(comp_images, crop_str, axis=(1,2))
 
 white_level = tags['Image Tag 0xC61D'].values[0] # there is only one white level
 
@@ -130,13 +116,13 @@ for i in range(2):
         comp_images[:, i::2, j::2] *= white_balance[channel]
 
 
-
 ref_img = np.clip(ref_img, 0.0, 1.0)
 comp_images = np.clip(comp_images, 0.0, 1.0)
 
+
 #%%
 colors = "RGB"
-bayer = params["merging"]['exif']['CFA Pattern']
+bayer = CFA
 pattern = colors[bayer[0,0]] + colors[bayer[0,1]] + colors[bayer[1,0]] + colors[bayer[1,1]]
 
 
@@ -145,9 +131,9 @@ base = colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(ref_img, pattern=patte
 
 plt.figure("original bicubic")
 # postprocessed_bicubic = cv2.resize(raw2rgb.postprocess(raw_ref_img, base, xyz2cam=xyz2cam), None, fx = params["merging"]['scale'], fy = params["merging"]['scale'], interpolation=cv2.INTER_CUBIC)
-postprocessed_bicubic = cv2.resize(raw2rgb.postprocess(raw_ref_img, base, xyz2cam=xyz2cam), None, fx = params["merging"]['scale'], fy = params["merging"]['scale'], interpolation=cv2.INTER_NEAREST)
+postprocessed_bicubic = cv2.resize(raw2rgb.postprocess(raw_ref_img, base, xyz2cam=xyz2cam), None, fx = params["scale"], fy = params["scale"], interpolation=cv2.INTER_NEAREST)
 # plt.imshow(postprocessed_bicubic[1500:2100, 1250:1570], interpolation = 'none')
-plt.imshow(postprocessed_bicubic[3700:3950, 5300: 5550], interpolation = 'none')
+plt.imshow(postprocessed_bicubic, interpolation = 'none')
 plt.xticks([])
 plt.yticks([])
 
@@ -157,18 +143,6 @@ plt.yticks([])
 
 # plt.figure('mosaicnet output')
 # plt.figure(mosaicnet_output)
-
-#%% Accumulate robustness 
-
-acc_r = np.zeros_like(debug_dict['robustness'][0])
-for r in debug_dict['robustness']:
-    acc_r += r
-acc_r/= len(debug_dict['robustness'])
-
-plt.figure('acc r')
-plt.imshow(acc_r, cmap="gray")
-plt.colorbar()
-plt.title('accumulated robustness')
 
 #%% Kernel elements visualisation
 
@@ -329,7 +303,7 @@ plt.quiver(e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
 maxrad = 10
 
 for image_index in range(comp_images.shape[0]):
-    flow_image = flow2img(upscaled_al[image_index], maxrad)
+    flow_image = flow2img([image_index], maxrad)
     plt.figure("flow {}".format(image_index))
     plt.imshow(flow_image)
 
@@ -345,7 +319,6 @@ plt.imshow(flow_image)
 
 #%% kernels
 def plot_local_flow(pos, upscaled_flow):
-    
     scale = 1
     plt.figure("flow in (x = {}, y = {})".format(pos[1],pos[0]))
     for image_id in range(upscaled_flow.shape[0]):
@@ -436,87 +409,18 @@ def plot_merge(covs, Dist, pos):
 # for im_id in range(R.shape[0]):
 #     plt.figure('r '+str(im_id))
 #     plt.imshow(r[im_id], vmax=1, vmin = 0, cmap = "gray", interpolation='none')
-    
-# for im_id in range(R.shape[0]):
-#     plt.figure('R '+str(im_id))
-#     plt.imshow(R[im_id], vmax=1, vmin = 0, cmap = 'gray', interpolation='none')
-#     plt.colorbar()
+
 
 r = debug_dict['robustness']
 
 plt.figure('accumulated r')
 r_acc = np.sum(r, axis = 0)
-plt.imshow(r_acc[3700//4:3950//4, 5300//4: 5550//4], cmap = "gray", interpolation='none')
+plt.imshow(r_acc, cmap = "gray", interpolation='none')
 clb=plt.colorbar()
 clb.ax.tick_params() 
 clb.ax.set_title('Accumulated\nrobustness',fontsize=15)
 plt.xticks([])
 plt.yticks([])
-#%%
-
-R_max = 8 # number of frames after which the local denoising is canceled
-sigma_max = 4
-window_size = 3
-scale = params['scale']
-
-# Local denoise
-@cuda.jit(device=True)
-def denoise_power(R_acc):
-    r = min(R_acc, R_max)
-    return sigma_max * (R_max - r)/R_max
-
-@cuda.jit
-def local_denoise(noisy, R_acc, denoised):
-    x, y, c = cuda.grid(3)
-    imshape_y, imshape_x, _ = noisy.shape
-    
-    if not (0 <= y < imshape_y and
-            0 <= x < imshape_x):
-        return
-    
-    t =(window_size - 1)//2
-    
-    y_grey = int(round((y-0.5)/(2*scale)))
-    x_grey = int(round((x-0.5)/(2*scale)))
-    R = R_acc[y_grey, x_grey]
-    sigma = denoise_power(R)
-    
-    num = 0
-    den = 0
-    for i in range(-t, t+1):
-        for j in range(-t, t+1):
-            x_ = x + j
-            y_ = y + i
-            if (0 <= y_ < imshape_y and
-                0 <= x_ < imshape_x):
-                if sigma == 0:
-                    w = (i==j==0)
-                else:
-                    w = exp(-(j*j + i*i)/(2*sigma*sigma))
-                num += w * noisy[y_, x_, c]
-                den += w
-                
-    denoised[y, x, c] = num/den
-                
-
-denoised_handheld = cuda.device_array(output_img.shape, np.float32)
-
-output_size = output_img.shape
-
-threadsperblock = (16, 16, 1)
-blockspergrid_x = int(np.ceil(output_size[1]/threadsperblock[1]))
-blockspergrid_y = int(np.ceil(output_size[0]/threadsperblock[0]))
-blockspergrid_z = int(np.ceil(output_size[2]/threadsperblock[2]))
-blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
-local_denoise[blockspergrid, threadsperblock](output_img, r_acc, denoised_handheld)
-
-denoised_postprocessed_output = raw2rgb.postprocess(raw_ref_img, denoised_handheld.copy_to_host(), xyz2cam=xyz2cam)
-plt.figure("denoised acc r")
-plt.imshow(denoised_postprocessed_output)
-            
-                
-
-
 
 #%% D curve
 

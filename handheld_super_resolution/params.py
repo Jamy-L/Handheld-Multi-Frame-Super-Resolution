@@ -8,6 +8,7 @@ PSNR.
 @author: jamyl
 """
 import numpy as np
+import warnings
 
 def get_params(PSNR):
     # TODO compute PSNR
@@ -21,18 +22,16 @@ def get_params(PSNR):
         
     
     params = {'scale' : 1,
-              'mode' : 'bayer', # 'bayer' or grey if something else 
+              'mode' : 'bayer', # 'bayer' or 'grey' 
               'grey method' : 'FFT',
-              'debug': False, # when True, a dict is returned with tensors.
+              'debug': False, # when True, a dict is returned with debug infos.
               'block matching': {
                     'tuning': {
                         # WARNING: these parameters are defined fine-to-coarse!
                         'factors': [1, 2, 4, 4],
-                        'tileSizes': [Ts, Ts, Ts, int(Ts/2)],
+                        'tileSizes': [Ts, Ts, Ts, Ts//2],
                         'searchRadia': [1, 4, 4, 4],
                         'distances': ['L1', 'L2', 'L2', 'L2'],
-                        # if you want to compute subpixel tile alignment at each pyramid level
-                        'subpixels': [False, True, True, True]
                         }},
                 'kanade' : {
                     'tuning' : {
@@ -43,14 +42,14 @@ def get_params(PSNR):
                 'robustness' : {
                     'on':True,
                     'tuning' : {
-                        't' : 0.12,         # 0.12
-                        's1' : 2,           # 12
-                        's2' : 12,#237,         # 2
-                        'Mt' : 0.8,         # 0.8
+                        't' : 0.12,       # 0.12
+                        's1' : 2,         # 2
+                        's2' : 12,        # 12
+                        'Mt' : 0.8,       # 0.8
                         }
                     },
                 'merging': {
-                    'kernel' : 'handheld', # 'act' for act kernel, handheld for handhel kernel
+                    'kernel' : 'handheld', # 'act' for act kernel, 'handheld' for handhel kernel
                     'tuning': {
                         'k_detail' : 0.25 + (0.33 - 0.25)*(30 - PSNR)/(30 - 6), # [0.25, ..., 0.33]
                         'k_denoise': 3 + (5 - 3)*(30 - PSNR)/(30 - 6),    # [3.0, ...,5.0]
@@ -63,7 +62,7 @@ def get_params(PSNR):
                 
                 'accumulated robustness denoiser' : {
                     'on' : True,
-                    'sigma max' : 1.5, # sigma of the gaussian blurr applied when only 1 frame is merged
+                    'sigma max' : 1.5, # std of the gaussian blur applied when only 1 frame is merged
                     'max frame count' : 8 # number of merged frames above which no blurr is applied
                     },
                 'post processing' : {
@@ -87,6 +86,13 @@ def check_params_validity(params, imshape):
         raise NotImplementedError("Grey level images should be obtained with FFT")
         
     assert params['scale'] >= 1
+    if params['scale'] > 3:
+        warnings.warn("Warning.... The required scale is superior to 3, but the algorighm can hardly go above.")
+    
+    if (not params['robustness']['on']) and params['accumulated robustness denoiser']['on']:
+        warnings.warn("Warning.... Robustness based denoising is enabled, "
+                      "but robustness is disabled. No further denoising will be done.")
+        
     assert params['merging']['kernel'] in ['handheld', 'act']
     assert params['mode'] in ["bayer", 'grey']
     assert params['kanade']['tuning']['kanadeIter'] > 0
@@ -97,8 +103,8 @@ def check_params_validity(params, imshape):
     Ts = params['block matching']['tuning']['tileSizes'][0]
     
     # Checking if block matching is possible
-    padded_imshape_x = Ts*(int(np.ceil(imshape[1]/Ts)) + 1)
-    padded_imshape_y = Ts*(int(np.ceil(imshape[0]/Ts)) + 1)
+    padded_imshape_x = Ts*(int(np.ceil(imshape[1]/Ts)))
+    padded_imshape_y = Ts*(int(np.ceil(imshape[0]/Ts)))
     
     lvl_imshape_y, lvl_imshape_x = padded_imshape_y, padded_imshape_x
     for lvl, (factor, ts) in enumerate(zip(params['block matching']['tuning']['factors'], params['block matching']['tuning']['tileSizes'])):
@@ -116,6 +122,14 @@ def check_params_validity(params, imshape):
                                  (lvl_imshape_y, lvl_imshape_x),
                                  ts))
     
-
+def merge_params(dominant, recessive):
+    """
+    Merges 2 sets of parameters, one being dominant (= overwrittes the recessive
+                                                     when a value a specified)
+    """
+    # https://www.geeksforgeeks.org/python-combine-dictionary-with-priority/
+    prio = {1:dominant, 2:recessive}
+    merged_params = {**prio[2], **prio[1]}
+    return merged_params
 
     

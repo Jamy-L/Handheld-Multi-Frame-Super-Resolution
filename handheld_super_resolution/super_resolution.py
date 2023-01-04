@@ -23,7 +23,7 @@ from .kernels import estimate_kernels
 from .block_matching import init_block_matching, align_image_block_matching
 from .optical_flow import ICA_optical_flow, init_ICA
 from .robustness import init_robustness, compute_robustness
-from .params import check_params_validity
+from .params import check_params_validity, get_params, merge_params
 
 NOISE_MODEL_PATH = Path(os.getcwd()) / 'data' 
         
@@ -252,9 +252,8 @@ def main(ref_img, comp_imgs, options, params):
         
     return num, debug_dict
 
-#%%
 
-def process(burst_path, options, params, crop_str=None):
+def process(burst_path, options, custom_params=None):
     """
     Process the burst
 
@@ -266,12 +265,6 @@ def process(burst_path, options, params, crop_str=None):
         
     params : Parameters
         See params.py for more details.
-    crop_str : str, optional
-        A crop that should be applied before processing the images.
-        It must have an even shift in every direction, so that the CFA remains the same.
-        The default is None.
-        
-        Example : crop_str="[500:2500, 1000:2500]"
 
     Returns
     -------
@@ -279,7 +272,10 @@ def process(burst_path, options, params, crop_str=None):
         The processed image
 
     """
-    currentTime, verbose = time.perf_counter(), options['verbose'] > 2
+    currentTime, verbose_1, verbose_2 = (time.perf_counter(),
+                                         options['verbose'] >= 1,
+                                         options['verbose'] >= 2)
+    params = {}
     
     ref_id = 0 #TODO Select ref id based on HDR+ method
     
@@ -301,22 +297,11 @@ def process(burst_path, options, params, crop_str=None):
     ref_raw = raw.raw_image.copy()
     xyz2cam = raw2rgb.get_xyz2cam_from_exif(raw_path_list[ref_id])
     
-    # checking parameters coherence
-    check_params_validity(params, ref_raw.shape)
     
-    # Cropping the image if needed
-    if crop_str is not None:
-        ref_raw = crop(ref_raw, crop_str, axis=(0, 1))
-        raw_comp = crop(raw_comp, crop_str, axis=(1, 2))
-    
-    
+    # reading exifs for white level, black leve and CFA
     with open(raw_path_list[ref_id], 'rb') as raw_file:
         tags = exifread.process_file(raw_file)
-    
-    if not 'exif' in params['merging'].keys(): 
-        params['merging']['exif'] = {}
-        if not 'exif' in params['robustness'].keys(): 
-            params['robustness']['exif'] = {}
+
         
     white_level = tags['Image Tag 0xC61D'].values[0] # there is only one white level
     
@@ -328,58 +313,21 @@ def process(burst_path, options, params, crop_str=None):
     CFA = tags['Image CFAPattern']
     CFA = np.array([x for x in CFA.values]).reshape(2,2)
     
-    params['merging']['exif']['CFA Pattern'] = CFA
-    params['robustness']['exif']['CFA Pattern'] = CFA
-    params['ISO'] = int(str(tags['Image ISOSpeedRatings']))
+    ISO = int(str(tags['Image ISOSpeedRatings']))
+    
     
     # Packing noise model related to picture ISO
-    if ('std_curve' not in params['robustness'].keys()) or \
-        ('diff_curve' not in params['robustness'].keys()):
-            
-        std_noise_model_label = 'noise_model_std_ISO_{}'.format(params['ISO'])
-        diff_noise_model_label = 'noise_model_diff_ISO_{}'.format(params['ISO'])
-        std_noise_model_path = (NOISE_MODEL_PATH / std_noise_model_label).with_suffix('.npy')
-        diff_noise_model_path = (NOISE_MODEL_PATH / diff_noise_model_label).with_suffix('.npy')
-        
-        params['robustness']['std_curve'] = np.load(std_noise_model_path)
-        params['robustness']['diff_curve'] = np.load(diff_noise_model_path)
+    std_noise_model_label = 'noise_model_std_ISO_{}'.format(ISO)
+    diff_noise_model_label = 'noise_model_diff_ISO_{}'.format(ISO)
+    std_noise_model_path = (NOISE_MODEL_PATH / std_noise_model_label).with_suffix('.npy')
+    diff_noise_model_path = (NOISE_MODEL_PATH / diff_noise_model_label).with_suffix('.npy')
+    
+    std_curve = np.load(std_noise_model_path)
+    diff_curve = np.load(diff_noise_model_path)
     
     
-    if verbose:
+    if verbose_2:
         currentTime = getTime(currentTime, ' -- Read raw files')
-    
-    if params['mode'] == "gray":
-        params['mode'] = "grey"
-        
-    # copying parameters values in sub-dictionaries
-    if 'scale' not in params["merging"].keys() :
-        params["merging"]["scale"] = params["scale"]
-    if 'scale' not in params['accumulated robustness denoiser'].keys() :
-        params['accumulated robustness denoiser']["scale"] = params["scale"]
-    if 'tileSize' not in params["kanade"]["tuning"].keys():
-        params["kanade"]["tuning"]['tileSize'] = params['block matching']['tuning']['tileSizes'][0]
-    if 'tileSize' not in params["robustness"]["tuning"].keys():
-        params["robustness"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
-    if 'tileSize' not in params["merging"]["tuning"].keys():
-        params["merging"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
-
-
-    if 'mode' not in params["kanade"].keys():
-        params["kanade"]["mode"] = params['mode']
-    if 'mode' not in params["robustness"].keys():
-        params["robustness"]["mode"] = params['mode']
-    if 'mode' not in params["merging"].keys():
-        params["merging"]["mode"] = params['mode']
-    if 'mode' not in params['accumulated robustness denoiser'].keys():
-        params['accumulated robustness denoiser']["mode"] = params['mode']
-        
-    params['kanade']['grey method'] = params['grey method']
-    
-    # systematically grey, so we can control internally how grey is obtained
-    params["block matching"]["mode"] = 'grey'
-    
-    # deactivating accumulation if robustness is disabled
-    params['accumulated robustness denoiser']['on'] &= params['robustness']['on']
 
 
     
@@ -409,7 +357,82 @@ def process(burst_path, options, params, crop_str=None):
                 raw_comp[:, i::2, j::2] = (raw_comp[:, i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
                 raw_comp[:, i::2, j::2] *= white_balance[channel] / white_balance[1]
         raw_comp = np.clip(raw_comp, 0., 1.)
+    
+    #___ Estimating ref image SNR
+    brightness = np.mean(ref_raw)
+    
+    id_noise = round(1000*brightness)
+    std = std_curve[id_noise]
+    
+    SNR = brightness/std
+    if verbose_1:
+        print(" ",10*"-")
+        print('|ISO : {}'.format(ISO))
+        print('|Image brightness : {:.2f}'.format(brightness))
+        print('|expected noise std : {:.2e}'.format(std))
+        print('|Estimated SNR : {:.2f}'.format(SNR))
+    
+    SNR_params = get_params(SNR)
+    
+    #__ Merging params dictionnaries
+    
+    # checking (just in case !)
+    check_params_validity(SNR_params, ref_raw.shape)
+    
+    if custom_params is not None :
+        params = merge_params(dominant=custom_params, recessive=SNR_params)
+        check_params_validity(params, ref_raw.shape)
+        
+    #__ adding metadatas to dict 
+    ## Writing exifs data into parameters
+    if not 'exif' in params['merging'].keys(): 
+        params['merging']['exif'] = {}
+    if not 'exif' in params['robustness'].keys(): 
+        params['robustness']['exif'] = {}
+        
+    params['merging']['exif']['CFA Pattern'] = CFA
+    params['robustness']['exif']['CFA Pattern'] = CFA
+    params['ISO'] = ISO
+    
+    params['robustness']['std_curve'] = std_curve
+    params['robustness']['diff_curve'] = diff_curve
+    
+    # copying parameters values in sub-dictionaries
+    if 'scale' not in params["merging"].keys() :
+        params["merging"]["scale"] = params["scale"]
+    if 'scale' not in params['accumulated robustness denoiser'].keys() :
+        params['accumulated robustness denoiser']["scale"] = params["scale"]
+    if 'tileSize' not in params["kanade"]["tuning"].keys():
+        params["kanade"]["tuning"]['tileSize'] = params['block matching']['tuning']['tileSizes'][0]
+    if 'tileSize' not in params["robustness"]["tuning"].keys():
+        params["robustness"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
+    if 'tileSize' not in params["merging"]["tuning"].keys():
+        params["merging"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
 
+
+    if 'mode' not in params["kanade"].keys():
+        params["kanade"]["mode"] = params['mode']
+    if 'mode' not in params["robustness"].keys():
+        params["robustness"]["mode"] = params['mode']
+    if 'mode' not in params["merging"].keys():
+        params["merging"]["mode"] = params['mode']
+    if 'mode' not in params['accumulated robustness denoiser'].keys():
+        params['accumulated robustness denoiser']["mode"] = params['mode']
+        
+    params['kanade']['grey method'] = params['grey method']
+    
+    # systematically grey, so we can control internally how grey is obtained
+    params["block matching"]["mode"] = 'grey'
+    
+    # deactivating robustness accumulation if robustness is disabled
+    params['accumulated robustness denoiser']['on'] &= params['robustness']['on']
+    
+    
+    
+        
+        
+    
+    
     #___ Running the handheld pipeline
     handheld_output, debug_dict = main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), options, params)
     
