@@ -106,6 +106,7 @@ def divide(num, den):
 
 
     """
+    assert num.shape == den.shape
     n_channels = num.shape[-1]
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS, 1)
     blockspergrid_x = int(np.ceil(num.shape[1]/threadsperblock[1]))
@@ -120,3 +121,35 @@ def cuda_divide(num, den):
     x, y, c = cuda.grid(3)
     if 0 <= x < num.shape[1] and 0 <= y < num.shape[0] and 0 <= c < num.shape[2]:
         num[y, x, c] = num[y, x, c]/den[y, x, c]
+        
+def add(A, B):
+    """
+    performs A += B for 2d arrays
+
+    Parameters
+    ----------
+    A : device_array[ny, nx]
+
+    B : device_array[ny, nx]
+        
+
+    Returns
+    -------
+    None.
+
+    """
+    assert A.shape == B.shape
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
+    blockspergrid_x = int(np.ceil(A.shape[1]/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(A.shape[0]/threadsperblock[0]))
+    blockspergrid = (blockspergrid_x, blockspergrid_y)
+    
+    cuda_add[blockspergrid, threadsperblock](A, B)
+
+@cuda.jit
+def cuda_add(A, B):
+    x, y = cuda.grid(2)
+    if 0 <= x < A.shape[1] and 0 <= y < A.shape[0]:
+        A[y, x] += B[y, x]
+    
+

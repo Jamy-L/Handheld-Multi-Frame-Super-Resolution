@@ -188,7 +188,7 @@ def unprocess_isp(jpg, log_max_shot=0.012):
 
 
 def postprocess(raw, img=None, do_color_correction=True, do_tonemapping=False, 
-                do_gamma=True, do_sharpening=True, xyz2cam=None):
+                do_gamma=True, do_sharpening=True, xyz2cam=None, sharpening_params=None):
     """
     Convert a raw image to jpg image.
     """
@@ -209,8 +209,14 @@ def postprocess(raw, img=None, do_color_correction=True, do_tonemapping=False,
         ## Sharpening
         if do_sharpening:
             ## TODO: polyblur instead
-            img = filters.unsharp_mask(img, radius=3, amount=1.5,
-                                       channel_axis=2, preserve_range=True)
+            if sharpening_params is not None:
+                img = filters.unsharp_mask(img, radius=sharpening_params['radius'],
+                                           amount=sharpening_params['ammount'],
+                                           channel_axis=2, preserve_range=True)
+            else:
+                img = filters.unsharp_mask(img, radius=3,
+                                           amount=1.5,
+                                           channel_axis=2, preserve_range=True)
         ## Tone mapping
         if do_tonemapping:
             img = apply_smoothstep(img)
