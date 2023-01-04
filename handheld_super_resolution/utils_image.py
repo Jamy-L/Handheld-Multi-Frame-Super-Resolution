@@ -26,6 +26,7 @@ If and only if they don't conflict with any patent terms,
 you can benefit from the following license terms attached to this file.
 """
 
+import math
 import numpy as np
 from scipy.ndimage._filters import _gaussian_kernel1d
 from numba import cuda
@@ -33,7 +34,7 @@ import torch as th
 import torch.fft
 import torch.nn.functional as F
 
-from .utils import getSigned, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_COMPLEX_TYPE, DEFAULT_TORCH_FLOAT_TYPE
+from .utils import getSigned, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_COMPLEX_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
 
 def compute_grey_images(img, method):
     """
@@ -83,7 +84,7 @@ def compute_grey_images(img, method):
         
         img_grey = cuda.device_array(grey_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
         
-        threadsperblock = (16, 16)
+        threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
         blockspergrid_x = int(np.ceil(grey_imshape_x/threadsperblock[1]))
         blockspergrid_y = int(np.ceil(grey_imshape_y/threadsperblock[0]))
         blockspergrid = (blockspergrid_x, blockspergrid_y)
@@ -105,6 +106,73 @@ def compute_grey_images(img, method):
     
     # return img_grey.astype(DEFAULT_NUMPY_FLOAT_TYPE)
 
+def frame_count_denoising(image, r_acc, params):
+    # TODO it may be useless to bother defining this function for grey images
+    denoised = cuda.device_array(image.shape, DEFAULT_NUMPY_FLOAT_TYPE)
+    
+    grey_mode = params['mode'] == 'grey'
+    scale = params['scale']
+    sigma_max = params['sigma max']
+    max_frame_count = params['max frame count']
+    
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS, 1)
+    blockspergrid_x = int(np.ceil(denoised.shape[1]/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(denoised.shape[0]/threadsperblock[0]))
+    blockspergrid_z = int(np.ceil(denoised.shape[2]/threadsperblock[2]))
+    blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
+    
+    cuda_frame_count_denoising[blockspergrid, threadsperblock](
+        image, denoised, r_acc,
+        scale, sigma_max, max_frame_count, grey_mode)
+    
+    return denoised
+
+@cuda.jit
+def cuda_frame_count_denoising(noisy, denoised, r_acc,
+                               scale, sigma_max, max_frame_count, grey_mode):
+    x, y, c = cuda.grid(3)
+    imshape_y, imshape_x, _ = noisy.shape
+    
+    if not (0 <= y < imshape_y and
+            0 <= x < imshape_x):
+        return
+    
+    if grey_mode:
+        y_grey = int(round(y/scale))
+        x_grey = int(round(x/scale))
+    else:
+        y_grey = int(round((y-0.5)/(2*scale)))
+        x_grey = int(round((x-0.5)/(2*scale)))
+        
+    r = r_acc[y_grey, x_grey]
+    sigma = denoise_power(r, sigma_max, max_frame_count)
+    
+    t = 3*sigma
+    
+    num = 0
+    den = 0
+    for i in range(-t, t+1):
+        for j in range(-t, t+1):
+            x_ = x + j
+            y_ = y + i
+            if (0 <= y_ < imshape_y and
+                0 <= x_ < imshape_x):
+                if sigma == 0:
+                    w = (i==j==0)
+                else:
+                    w = math.exp(-(j*j + i*i)/(2*sigma*sigma))
+                num += w * noisy[y_, x_, c]
+                den += w
+                
+    denoised[y, x, c] = num/den
+
+@cuda.jit(device=True)
+def denoise_power(r_acc, sigma_max, r_max):
+    r = min(r_acc, r_max)
+    return sigma_max * (r_max - r)/r_max
+    
+    
+    
 def fft_lowpass(img_grey):
     img_grey = th.from_numpy(img_grey).to("cuda")
     img_grey = torch.fft.fft2(img_grey)

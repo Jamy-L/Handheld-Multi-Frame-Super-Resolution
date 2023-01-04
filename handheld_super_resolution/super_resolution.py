@@ -15,9 +15,9 @@ from numba import cuda
 import exifread
 import rawpy
 
-
-from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, crop, divide
-from .utils_image import compute_grey_images
+from . import raw2rgb
+from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, crop, divide, add
+from .utils_image import compute_grey_images, frame_count_denoising
 from .merge import merge, init_merge
 from .kernels import estimate_kernels
 from .block_matching import init_block_matching, align_image_block_matching
@@ -37,9 +37,10 @@ def main(ref_img, comp_imgs, options, params):
     bayer_mode = params['mode']=='bayer'
     
     debug_mode = params['debug']
-    if debug_mode : 
-        debug_dict = {"robustness":[],
-                      "flow":[]}
+    debug_dict = {"robustness":[],
+                  "flow":[]}
+    
+    accumulate_r = params['accumulated robustness denoiser']['on']
 
     #___ Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
@@ -96,6 +97,10 @@ def main(ref_img, comp_imgs, options, params):
         print("\nEstimating ref image local stats")
         
     ref_local_stats = init_robustness(cuda_ref_img,options, params['robustness'])
+    
+    if accumulate_r:
+        accumulated_r = cuda.to_device(np.zeros(ref_local_stats.shape[:2]))
+    
     
     if verbose_2 :
         cuda.synchronize()
@@ -188,6 +193,8 @@ def main(ref_img, comp_imgs, options, params):
             
         cuda_robustness = compute_robustness(cuda_img, ref_local_stats, cuda_final_alignment,
                                              options, params['robustness'])
+        if accumulate_r:
+            add(accumulated_r, cuda_robustness)
         
         if verbose_2 :
             cuda.synchronize()
@@ -240,11 +247,10 @@ def main(ref_img, comp_imgs, options, params):
     if verbose :
         print('\nTotal ellapsed time : ', time.perf_counter() - t1)
     
-    output = num.copy_to_host()
-    if debug_mode :
-        return output, debug_dict
-    else:
-        return output
+    if accumulate_r :
+        debug_dict['accumulated robustness'] = accumulated_r
+        
+    return num, debug_dict
 
 #%%
 
@@ -289,9 +295,11 @@ def process(burst_path, options, params, crop_str=None):
                 
                 raw_comp.append(rawObject.raw_image.copy())  # copy otherwise image data is lost when the rawpy object is closed
     raw_comp = np.array(raw_comp)
+    
     # Reference image selection and metadata     
     raw = rawpy.imread(raw_path_list[ref_id])
     ref_raw = raw.raw_image.copy()
+    xyz2cam = raw2rgb.get_xyz2cam_from_exif(raw_path_list[ref_id])
     
     # checking parameters coherence
     check_params_validity(params, ref_raw.shape)
@@ -339,10 +347,15 @@ def process(burst_path, options, params, crop_str=None):
     
     if verbose:
         currentTime = getTime(currentTime, ' -- Read raw files')
+    
+    if params['mode'] == "gray":
+        params['mode'] = "grey"
         
     # copying parameters values in sub-dictionaries
     if 'scale' not in params["merging"].keys() :
         params["merging"]["scale"] = params["scale"]
+    if 'scale' not in params['accumulated robustness denoiser'].keys() :
+        params['accumulated robustness denoiser']["scale"] = params["scale"]
     if 'tileSize' not in params["kanade"]["tuning"].keys():
         params["kanade"]["tuning"]['tileSize'] = params['block matching']['tuning']['tileSizes'][0]
     if 'tileSize' not in params["robustness"]["tuning"].keys():
@@ -357,11 +370,16 @@ def process(burst_path, options, params, crop_str=None):
         params["robustness"]["mode"] = params['mode']
     if 'mode' not in params["merging"].keys():
         params["merging"]["mode"] = params['mode']
+    if 'mode' not in params['accumulated robustness denoiser'].keys():
+        params['accumulated robustness denoiser']["mode"] = params['mode']
         
     params['kanade']['grey method'] = params['grey method']
     
     # systematically grey, so we can control internally how grey is obtained
     params["block matching"]["mode"] = 'grey'
+    
+    # deactivating accumulation if robustness is disabled
+    params['accumulated robustness denoiser']['on'] &= params['robustness']['on']
 
 
     
@@ -392,4 +410,41 @@ def process(burst_path, options, params, crop_str=None):
                 raw_comp[:, i::2, j::2] *= white_balance[channel] / white_balance[1]
         raw_comp = np.clip(raw_comp, 0., 1.)
 
-    return main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), options, params)
+    #___ Running the handheld pipeline
+    handheld_output, debug_dict = main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), options, params)
+    
+    
+    
+    #___ Performing frame count aware denoise if enabled
+    frame_count_denoise = params['accumulated robustness denoiser']['on']
+    
+    if frame_count_denoise : 
+        handheld_output = frame_count_denoising(handheld_output, debug_dict['accumulated robustness'],
+                                                params['accumulated robustness denoiser'])
+        
+    
+
+    #___ post processing
+    params_pp = params['post processing']
+    post_processing_enabled = params_pp['on']
+    
+    if post_processing_enabled:
+        output_image = raw2rgb.postprocess(raw, handheld_output.copy_to_host(),
+                                           params_pp['do color correction'],
+                                           params_pp['do tonemapping'],
+                                           params_pp['do gamma'],
+                                           params_pp['do sharpening'],
+                                           xyz2cam,
+                                           params_pp['sharpening']
+                                           ) 
+    else:
+        output_image = handheld_output.copy_to_host()
+        
+    #__ return
+    
+    if params['debug']:
+        return output_image, debug_dict
+    else:
+        return output_image
+    
+    

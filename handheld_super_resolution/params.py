@@ -50,7 +50,7 @@ def get_params(PSNR):
                         }
                     },
                 'merging': {
-                    'kernel' : 'handheld', # 'act' for act kernel, other for handhel kernel
+                    'kernel' : 'handheld', # 'act' for act kernel, handheld for handhel kernel
                     'tuning': {
                         'k_detail' : 0.25 + (0.33 - 0.25)*(30 - PSNR)/(30 - 6), # [0.25, ..., 0.33]
                         'k_denoise': 3 + (5 - 3)*(30 - PSNR)/(30 - 6),    # [3.0, ...,5.0]
@@ -59,7 +59,27 @@ def get_params(PSNR):
                         'k_stretch' : 4,   # 4
                         'k_shrink' : 2,    # 2
                         }
-                    }}
+                    },
+                
+                'accumulated robustness denoiser' : {
+                    'on' : True,
+                    'sigma max' : 1.5, # sigma of the gaussian blurr applied when only 1 frame is merged
+                    'max frame count' : 8 # number of merged frames above which no blurr is applied
+                    },
+                'post processing' : {
+                    'on':True,
+                    'do color correction':True,
+                    'do tonemapping':True,
+                    'do gamma' : True,
+                    'do sharpening' : True,
+                    
+                    'sharpening':{
+                        'radius':3,
+                        'ammount':1.5
+                        }
+                    }
+                }
+
     return params
 
 def check_params_validity(params, imshape):
