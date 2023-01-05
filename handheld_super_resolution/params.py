@@ -127,9 +127,12 @@ def merge_params(dominant, recessive):
     Merges 2 sets of parameters, one being dominant (= overwrittes the recessive
                                                      when a value a specified)
     """
-    # https://www.geeksforgeeks.org/python-combine-dictionary-with-priority/
-    prio = {1:dominant, 2:recessive}
-    merged_params = {**prio[2], **prio[1]}
-    return merged_params
+    recessive_ = recessive.copy()
+    for dom_key in dominant.keys():
+        if (dom_key in recessive_.keys()) and type(dominant[dom_key]) is dict:
+            recessive_[dom_key] = merge_params(dominant[dom_key], recessive_[dom_key])
+        else:
+            recessive_[dom_key] = dominant[dom_key]
+    return recessive_
 
     

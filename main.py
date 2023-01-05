@@ -48,18 +48,18 @@ options = {'verbose' : 1}
 
 # Overwritting SNR based parameters
 params={}
-params["scale"] = 3
+params["scale"] = 1
 
 
-# params['merging']['kernel'] = 'handheld'
-# params['robustness']['on'] = True
-# params['accumulated robustness denoiser']['on'] = True
+params['merging'] = {'kernel': 'handheld'}
+params['robustness']  = {'on' : False}
+params['accumulated robustness denoiser']= {'on': True}
 params['debug'] = True
 # params['kanade']['tuning']['sigma blur'] = 1
 
 # burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
 # burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
-burst_path = 'P:/0000/Samsung'
+burst_path = 'P:/0050/Samsung'
 
 output_img, debug_dict = process(burst_path, options, params)
 
@@ -67,9 +67,9 @@ output_img, debug_dict = process(burst_path, options, params)
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 
-plt.figure("output")
+plt.figure("output iso")
 
-plt.imshow(output_img, interpolation = 'none')
+plt.imshow(output_img[1500:1612, 1280:1394], interpolation = 'none')
 plt.xticks([])
 plt.yticks([])
 
