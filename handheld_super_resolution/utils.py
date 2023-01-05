@@ -59,40 +59,6 @@ def mse(im1, im2):
     return np.linalg.norm(im1 - im2) / np.prod(im1.shape)
 
 
-# for debugging and testing only, this is probably unoptimised
-def crop(array, crop_str, axis):
-    """
-    
-
-    Parameters
-    ----------
-    array : TYPE
-        DESCRIPTION.
-    crop_str : str "[ymin:ymax, xmin:xmax]"
-        area to be cropped
-    axis : (y, x)
-        axis of y and x in the arrau
-        
-
-    Returns
-    -------
-    a : cropped array
-        DESCRIPTION.
-
-    """
-    crop_y, crop_x = crop_str[1:-1].replace(' ', '').split(",")
-    crop_y_min, crop_y_max= crop_y.split(':')
-    crop_x_min, crop_x_max= crop_x.split(':')
-    
-    crop_y_min = int(crop_y_min)
-    crop_y_max = int(crop_y_max)
-    crop_x_min = int(crop_x_min)
-    crop_x_max = int(crop_x_max)
-        
-    a = array.take(indices=range(crop_y_min, crop_y_max), axis=axis[0])
-    a = a.take(indices=range(crop_x_min, crop_x_max), axis=axis[1])
-    return a
-
 def divide(num, den):
     """
     Performs num = num/den

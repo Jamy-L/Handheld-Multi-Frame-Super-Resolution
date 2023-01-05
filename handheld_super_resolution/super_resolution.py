@@ -16,7 +16,7 @@ import exifread
 import rawpy
 
 from . import raw2rgb
-from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, crop, divide, add
+from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add
 from .utils_image import compute_grey_images, frame_count_denoising
 from .merge import merge, init_merge
 from .kernels import estimate_kernels
@@ -180,6 +180,9 @@ def main(ref_img, comp_imgs, options, params):
         cuda_final_alignment = ICA_optical_flow(
             cuda_im_grey, cuda_ref_grey, ref_gradx, ref_grady, hessian, pre_alignment, options, params['kanade'])
         
+        if debug_mode:
+            debug_dict["flow"].append(cuda_final_alignment.copy_to_host())
+            
         if verbose_2 : 
             cuda.synchronize()
             current_time = getTime(current_time, 'Image aligned using ICA (Total)')
