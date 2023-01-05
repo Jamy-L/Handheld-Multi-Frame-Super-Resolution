@@ -26,7 +26,7 @@ import colour_demosaicing
 from handheld_super_resolution import process, raw2rgb, get_params
 
 from plot_flow import flow2img
-from handheld_super_resolution.utils import crop, clamp
+from handheld_super_resolution.utils import clamp
 from handheld_super_resolution.utils_image import compute_grey_images
 from handheld_super_resolution.linalg import get_eighen_elmts_2x2
 
@@ -52,7 +52,7 @@ params["scale"] = 1
 
 
 params['merging'] = {'kernel': 'handheld'}
-params['robustness']  = {'on' : False}
+params['robustness']  = {'on' : True}
 params['accumulated robustness denoiser']= {'on': True}
 params['debug'] = True
 # params['kanade']['tuning']['sigma blur'] = 1
@@ -67,9 +67,9 @@ output_img, debug_dict = process(burst_path, options, params)
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 
-plt.figure("output iso")
+plt.figure("output")
 
-plt.imshow(output_img[1500:1612, 1280:1394], interpolation = 'none')
+plt.imshow(output_img, interpolation = 'none')
 plt.xticks([])
 plt.yticks([])
 
@@ -142,7 +142,10 @@ plt.yticks([])
 # mosaicnet_output = np.clip(mosaicnet_output, 0, 1).transpose(1,2,0).astype(np.float64).fliplr()
 
 # plt.figure('mosaicnet output')
-# plt.figure(mosaicnet_output)
+# plt.figure(mosaicnet_output)    
+    
+
+
 
 #%% Kernel elements visualisation
 
@@ -150,7 +153,7 @@ img_grey = compute_grey_images(raw_ref_img.raw_image.copy()/1023, method="decima
 DEFAULT_CUDA_FLOAT_TYPE = float32
 DEFAULT_TORCH_FLOAT_TYPE = th.float32
 DEFAULT_NUMPY_FLOAT_TYPE = np.float32
-
+params = get_params(35)
 
 k_detail = params['merging']['tuning']['k_detail']
 k_denoise = params['merging']['tuning']['k_denoise']
@@ -247,6 +250,8 @@ blockspergrid = (blockspergrid_x, blockspergrid_y)
 cuda_estimate_kernel_elements[blockspergrid, threadsperblock](cuda_full_grads, l, A, D,
                               k_detail, k_denoise, D_th, D_tr)
 
+A = A.copy_to_host()
+A[A<1.95] = 0
 plt.figure('A')
 plt.imshow(A)
 plt.title('A')

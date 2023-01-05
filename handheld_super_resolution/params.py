@@ -3,19 +3,18 @@
 Created on Wed Oct 12 14:22:54 2022
 
 This scripts aims to fetch the appropriate parameters, based on the estimated
-PSNR.
+SNR.
 
 @author: jamyl
 """
 import numpy as np
 import warnings
 
-def get_params(PSNR):
-    # TODO compute PSNR
-    PSNR = np.clip(PSNR, 6, 30)
-    if PSNR <= 14:
+def get_params(SNR):
+    SNR = np.clip(SNR, 6, 30)
+    if SNR <= 14:
         Ts = 64
-    elif PSNR <= 22:
+    elif SNR <= 22:
         Ts = 32
     else:
         Ts = 16
@@ -51,10 +50,10 @@ def get_params(PSNR):
                 'merging': {
                     'kernel' : 'handheld', # 'act' for act kernel, 'handheld' for handhel kernel
                     'tuning': {
-                        'k_detail' : 0.25 + (0.33 - 0.25)*(30 - PSNR)/(30 - 6), # [0.25, ..., 0.33]
-                        'k_denoise': 3 + (5 - 3)*(30 - PSNR)/(30 - 6),    # [3.0, ...,5.0]
-                        'D_th': 0.001 + (0.01 - 0.001)*(30 - PSNR)/(30 - 6),      # [0.001, ..., 0.010]
-                        'D_tr': 0.006 + (0.02*16 - 0.006)*(30 - PSNR)/(30 - 6),     # [0.006, ..., 0.020]
+                        'k_detail' : 0.25 + (0.33 - 0.25)*(30 - SNR)/(30 - 6), # [0.25, ..., 0.33]
+                        'k_denoise': 3 + (5 - 3)*(30 - SNR)/(30 - 6),    # [3.0, ...,5.0]
+                        'D_th': 0.001 + (0.01 - 0.001)*(30 - SNR)/(30 - 6),      # [0.001, ..., 0.010]
+                        'D_tr': 0.006 + (0.02*16 - 0.006)*(30 - SNR)/(30 - 6),     # [0.006, ..., 0.020]
                         'k_stretch' : 4,   # 4
                         'k_shrink' : 2,    # 2
                         }

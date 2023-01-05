@@ -218,10 +218,10 @@ def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
     
 
     # This is a very agressive way of driving anisotropy, but it works well so far.
-    if A > 1.9:
+    if A > 1.95:
         k1 = 1/k_shrink
         k2 = k_stretch
-    else:
+    else: # When A is Nan, we fall back to this condition
         k1 = 1
         k2 = 1
     # nu_1 = 1/(k_shrink*(A - 1) + (2 - A))
