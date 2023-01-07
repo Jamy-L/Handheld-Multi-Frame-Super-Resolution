@@ -19,8 +19,7 @@ import exifread
 import rawpy
 import matplotlib.pyplot as plt
 import colour_demosaicing
-# colour_demosaicing.demosaicing_CFA_Bayer_Menon2007
-# pip install colour-demosaicing
+# import demosaicnet
 
 # import demosaicnet
 from handheld_super_resolution import process, raw2rgb, get_params
@@ -52,14 +51,24 @@ params["scale"] = 1
 
 
 params['merging'] = {'kernel': 'handheld'}
-params['robustness']  = {'on' : True}
+params['post processing'] = {'on':True,
+                    'do sharpening' : True,
+                    'on':True,
+                    'do color correction':True,
+                    'do tonemapping':True,
+                    'do gamma' : True,
+        
+                    'sharpening' : {'radius':3,
+                                    'ammount':0.5}
+                    }
+params['robustness']  = {'on' : False}
 params['accumulated robustness denoiser']= {'on': True}
 params['debug'] = True
 # params['kanade']['tuning']['sigma blur'] = 1
 
-# burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
+burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
 # burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
-burst_path = 'P:/0050/Samsung'
+# burst_path = 'P:/0001/Samsung'
 
 output_img, debug_dict = process(burst_path, options, params)
 
@@ -110,22 +119,20 @@ for i in range(2):
     for j in range(2):
         channel = channel = CFA[i, j]
         ref_img[i::2, j::2] = (ref_img[i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
-        ref_img[i::2, j::2] *= white_balance[channel]
+        ref_img[i::2, j::2] *= white_balance[channel]/ white_balance[1]
         
         comp_images[:, i::2, j::2] = (comp_images[:, i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
-        comp_images[:, i::2, j::2] *= white_balance[channel]
+        comp_images[:, i::2, j::2] *= white_balance[channel]/ white_balance[1]
 
 
 ref_img = np.clip(ref_img, 0.0, 1.0)
 comp_images = np.clip(comp_images, 0.0, 1.0)
 
-
-#%%
 colors = "RGB"
 bayer = CFA
 pattern = colors[bayer[0,0]] + colors[bayer[0,1]] + colors[bayer[1,0]] + colors[bayer[1,1]]
 
-
+#%%
 # base = colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(ref_img, pattern=pattern)  # pattern is [[G,R], [B,G]] for the Samsung G8
 base = colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(ref_img, pattern=pattern)
 
@@ -137,12 +144,34 @@ plt.imshow(postprocessed_bicubic, interpolation = 'none')
 plt.xticks([])
 plt.yticks([])
 
-# demosaicnet_bayer = demosaicnet.BayerDemosaick()
-# mosaicnet_output = demosaicnet_bayer(torch.from_numpy(raw_ref_img.raw_image).flip(-1).unsqueeze(0)).squeeze(0).cpu().numpy()
-# mosaicnet_output = np.clip(mosaicnet_output, 0, 1).transpose(1,2,0).astype(np.float64).fliplr()
+#%% mosaicnet
 
-# plt.figure('mosaicnet output')
-# plt.figure(mosaicnet_output)    
+demosaicnet_bayer = demosaicnet.BayerDemosaick()
+shifted_image = ref_img[:, 1:-1]
+mosaicnet_image = np.zeros((shifted_image.shape[0], shifted_image.shape[1], 3))
+
+
+mosaicnet_pattern='GRBG'
+mosaicnet_channel = {'R':0, 'G':1, 'B':2}
+# epect GrGb
+for z in range(4):
+    i = z//2
+    j = z%2
+    channel = mosaicnet_pattern[z]
+    mosaicnet_image[i::2, j::2, mosaicnet_channel[channel]] += shifted_image[i::2, j::2]
+    
+# mosaicnet_image[:,:,1]/=2
+mosaic = mosaicnet_image.transpose((2,0,1)).astype(np.float32)
+
+with th.no_grad():
+    mosaicnet_output = demosaicnet_bayer(th.from_numpy(mosaic).unsqueeze(0)).squeeze(0).cpu().numpy()
+mosaicnet_output = np.clip(mosaicnet_output, 0, 1).transpose(1,2,0).astype(np.float32)
+    
+plt.figure('mosaicnet output')
+postprocessed_mosaicnet = cv2.resize(raw2rgb.postprocess(raw_ref_img, mosaicnet_output, xyz2cam=xyz2cam), None, fx = params["scale"], fy = params["scale"], interpolation=cv2.INTER_NEAREST)
+plt.imshow(postprocessed_mosaicnet[1972:2162, 2700:2875], interpolation = 'none')   
+plt.xticks([])
+plt.yticks([])
     
 
 

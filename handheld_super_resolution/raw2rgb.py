@@ -113,8 +113,8 @@ def apply_gains(image, red_gain, blue_gain, rgb_gain):
 
 def get_color_matrix(raw, xyz2cam=None):
     rgb2xyz = np.array([[0.4124564, 0.3575761, 0.1804375],
-                     [0.2126729, 0.7151522, 0.0721750],
-                     [0.0193339, 0.1191920, 0.9503041]])
+                        [0.2126729, 0.7151522, 0.0721750],
+                        [0.0193339, 0.1191920, 0.9503041]])
     # If xyz2cam is not given, take it from rawpy.
     if xyz2cam is None:
         xyz2cam = raw.rgb_xyz_matrix[:3]
@@ -187,7 +187,7 @@ def unprocess_isp(jpg, log_max_shot=0.012):
     return raw, metadata
 
 
-def postprocess(raw, img=None, do_color_correction=True, do_tonemapping=False, 
+def postprocess(raw, img=None, do_color_correction=True, do_tonemapping=True, 
                 do_gamma=True, do_sharpening=True, xyz2cam=None, sharpening_params=None):
     """
     Convert a raw image to jpg image.
@@ -215,7 +215,7 @@ def postprocess(raw, img=None, do_color_correction=True, do_tonemapping=False,
                                            channel_axis=2, preserve_range=True)
             else:
                 img = filters.unsharp_mask(img, radius=3,
-                                           amount=1.5,
+                                           amount=0.5,
                                            channel_axis=2, preserve_range=True)
         ## Tone mapping
         if do_tonemapping:
