@@ -12,7 +12,7 @@ import math
 import numpy as np
 from numba import uint8, cuda
 
-from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS
+from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, EPSILON_DIV, DEFAULT_THREADS
 from .linalg import quad_mat_prod, invert_2x2, interpolate_cov
 
 def init_merge(ref_img, kernels, options, params):
@@ -128,12 +128,13 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
             grey_pos[1] = coarse_ref_sub_pos[1]
     
     
-        floor_x = int(math.floor(grey_pos[1]))
-        floor_y = int(math.floor(grey_pos[0]))
+        # clipping the coordinates to stay in bound
+        floor_x = max(int(math.floor(grey_pos[1])), 0)
+        floor_y = max(int(math.floor(grey_pos[0])), 0)
         
-        ceil_x = floor_x + 1
-        ceil_y = floor_y + 1
-        for i in range(0, 2): # TODO Check undesirable effects on the imagse side
+        ceil_x = min(floor_x + 1, covs.shape[1]-1)
+        ceil_y = min(floor_y + 1, covs.shape[0]-1)
+        for i in range(0, 2):
             for j in range(0, 2):
                 close_covs[0, 0, i, j] = covs[floor_y, floor_x,
                                               i, j]
@@ -147,13 +148,14 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
         # interpolating covs
         interpolate_cov(close_covs, grey_pos, interpolated_cov)
         
-        if abs(interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0]) > 1e-6: # checking if cov is invertible
+        if abs(interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0]) > EPSILON_DIV: # checking if cov is invertible
             invert_2x2(interpolated_cov, cov_i)
+
         else: # if not invertible, identity matrix
-            cov_i[0, 0] = 1
+            cov_i[0, 0] = 1/(25)
             cov_i[0, 1] = 0
             cov_i[1, 0] = 0
-            cov_i[1, 1] = 1
+            cov_i[1, 1] = 1/25
                     
         
     center_x = round(coarse_ref_sub_pos[1])
@@ -382,12 +384,13 @@ def accumulate(comp_img, alignments, covs, r,
             grey_pos[0] = patch_center_pos[0] # grey grid is exactly the coarse grid
             grey_pos[1] = patch_center_pos[1]
         
-        floor_x = int(math.floor(grey_pos[1]))
-        floor_y = int(math.floor(grey_pos[0]))
+        # clipping the coordinates to stay in bound
+        floor_x = max(int(math.floor(grey_pos[1])), 0)
+        floor_y = max(int(math.floor(grey_pos[0])), 0)
         
-        ceil_x = floor_x + 1
-        ceil_y = floor_y + 1
-        for i in range(0, 2): # TODO Check undesirable effects on the imagse side
+        ceil_x = min(floor_x + 1, covs.shape[1]-1)
+        ceil_y = min(floor_y + 1, covs.shape[0]-1)
+        for i in range(0, 2):
             for j in range(0, 2):
                 close_covs[0, 0, i, j] = covs[floor_y, floor_x,
                                               i, j]
@@ -401,13 +404,14 @@ def accumulate(comp_img, alignments, covs, r,
         # interpolating covs at the desired spot
         interpolate_cov(close_covs, grey_pos, interpolated_cov)
 
-        if abs(interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0]) > 1e-6: # checking if cov is invertible
+        if abs(interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0]) > EPSILON_DIV: # checking if cov is invertible
             invert_2x2(interpolated_cov, cov_i)
-        else:
-            cov_i[0, 0] = 1
+
+        else: # if not invertible, identity matrix
+            cov_i[0, 0] = 1/25
             cov_i[0, 1] = 0
             cov_i[1, 0] = 0
-            cov_i[1, 1] = 1
+            cov_i[1, 1] = 1/25
     
     
     center_x = round(patch_center_pos[1])

@@ -174,15 +174,15 @@ def invert_2x2(M, M_i):
     """
     det_i = 1/(M[0,0]*M[1,1] - M[0,1]*M[1,0])
     if isinf(det_i):
-        M_i[0,0] = 1
+        M_i[0, 0] = 1
         M_i[0, 1] = 0
         M_i[1, 0] = 0
-        M_i [1, 1] = 1
+        M_i[1, 1] = 1
     else:
-        M_i[0,0] = M[1,1]*det_i
+        M_i[0, 0] = M[1,1]*det_i
         M_i[0, 1] = -M[0, 1]*det_i
         M_i[1, 0] = -M[1, 0]*det_i
-        M_i [1, 1] = M[0, 0]*det_i
+        M_i[1, 1] = M[0, 0]*det_i
     
 @cuda.jit(device=True)
 def quad_mat_prod(A, X1, X2):
@@ -227,7 +227,8 @@ def get_real_polyroots_2(a, b, c, roots):
             roots[1] = r1
     else:
         # Nan
-        return 0/0
+            roots[0] = 0/0
+            roots[1] = 0/0
 
 @cuda.jit(device=True)
 def get_eighen_val_2x2(M, l):
@@ -300,8 +301,7 @@ def interpolate_cov(covs, center_pos, interpolated_cov):
             interpolated_cov[i, j] = (covs[0,0,i,j]*(1 - reframed_posx)*(1 - reframed_posy) +
                                       covs[0,1,i,j]*(reframed_posx)*(1 - reframed_posy) + 
                                       covs[1,0,i,j]*(1 - reframed_posx)*(reframed_posy) + 
-                                      covs[1,1,i,j]*reframed_posx*reframed_posy )
-            # interpolated_cov[i, j]=covs[0,0,i,j]
+                                      covs[1,1,i,j]*reframed_posx*reframed_posy)
 
 @cuda.jit(device=True)
 def bilinear_interpolation(values, pos):
