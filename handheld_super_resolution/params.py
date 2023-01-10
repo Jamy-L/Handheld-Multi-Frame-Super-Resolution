@@ -52,8 +52,8 @@ def get_params(SNR):
                     'tuning': {
                         'k_detail' : 0.25 + (0.33 - 0.25)*(30 - SNR)/(30 - 6), # [0.25, ..., 0.33]
                         'k_denoise': 3 + (5 - 3)*(30 - SNR)/(30 - 6),    # [3.0, ...,5.0]
-                        'D_th': 0.001 + (0.01 - 0.001)*(30 - SNR)/(30 - 6),      # [0.001, ..., 0.010]
-                        'D_tr': 0.006 + (0.02*16 - 0.006)*(30 - SNR)/(30 - 6),     # [0.006, ..., 0.020]
+                        'D_th': 0.71 + (0.81 - 0.71)*(30 - SNR)/(30 - 6),      # [0.001, ..., 0.010]
+                        'D_tr': 1 + (1.24 - 1)*(30 - SNR)/(30 - 6),     # [0.006, ..., 0.020]
                         'k_stretch' : 4,   # 4
                         'k_shrink' : 2,    # 2
                         }
@@ -70,6 +70,7 @@ def get_params(SNR):
                     'do tonemapping':True,
                     'do gamma' : True,
                     'do sharpening' : True,
+                    'do devignette' : False,
                     
                     'sharpening':{
                         'radius':3,

@@ -19,9 +19,7 @@ import exifread
 import rawpy
 import matplotlib.pyplot as plt
 import colour_demosaicing
-# import demosaicnet
 
-# import demosaicnet
 from handheld_super_resolution import process, raw2rgb, get_params
 
 from plot_flow import flow2img
@@ -47,7 +45,7 @@ options = {'verbose' : 1}
 
 # Overwritting SNR based parameters
 params={}
-params["scale"] = 1
+params["scale"] = 2
 
 
 params['merging'] = {'kernel': 'handheld'}
@@ -57,18 +55,19 @@ params['post processing'] = {'on':True,
                     'do color correction':True,
                     'do tonemapping':True,
                     'do gamma' : True,
+                    'do devignette' : False,
         
                     'sharpening' : {'radius':3,
                                     'ammount':0.5}
                     }
-params['robustness']  = {'on' : False}
-params['accumulated robustness denoiser']= {'on': True}
+params['robustness']  = {'on' : True}
+params['accumulated robustness denoiser']= {'on': False}
 params['debug'] = True
 # params['kanade']['tuning']['sigma blur'] = 1
 
-burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
-# burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
-# burst_path = 'P:/0001/Samsung'
+# burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
+burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
+# burst_path = 'P:/0050/Samsung'
 
 output_img, debug_dict = process(burst_path, options, params)
 
@@ -76,7 +75,7 @@ output_img, debug_dict = process(burst_path, options, params)
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 
-plt.figure("output")
+plt.figure("output D neq 0")
 
 plt.imshow(output_img, interpolation = 'none')
 plt.xticks([])
@@ -133,18 +132,23 @@ bayer = CFA
 pattern = colors[bayer[0,0]] + colors[bayer[0,1]] + colors[bayer[1,0]] + colors[bayer[1,1]]
 
 #%%
+# menon2007, demosaicnet
+# bicubic+demosaicnet, VSR+demosaicnet
+
 # base = colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(ref_img, pattern=pattern)  # pattern is [[G,R], [B,G]] for the Samsung G8
 base = colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(ref_img, pattern=pattern)
 
 plt.figure("original bicubic")
 # postprocessed_bicubic = cv2.resize(raw2rgb.postprocess(raw_ref_img, base, xyz2cam=xyz2cam), None, fx = params["merging"]['scale'], fy = params["merging"]['scale'], interpolation=cv2.INTER_CUBIC)
-postprocessed_bicubic = cv2.resize(raw2rgb.postprocess(raw_ref_img, base, xyz2cam=xyz2cam), None, fx = params["scale"], fy = params["scale"], interpolation=cv2.INTER_NEAREST)
+postprocessed_bicubic = cv2.resize(raw2rgb.postprocess(raw_ref_img, base, do_tonemapping=True,
+                                                       xyz2cam=xyz2cam), None, fx = params["scale"], fy = params["scale"], interpolation=cv2.INTER_NEAREST)
 # plt.imshow(postprocessed_bicubic[1500:2100, 1250:1570], interpolation = 'none')
 plt.imshow(postprocessed_bicubic, interpolation = 'none')
 plt.xticks([])
 plt.yticks([])
 
 #%% mosaicnet
+import demosaicnet
 
 demosaicnet_bayer = demosaicnet.BayerDemosaick()
 shifted_image = ref_img[:, 1:-1]
@@ -160,16 +164,15 @@ for z in range(4):
     channel = mosaicnet_pattern[z]
     mosaicnet_image[i::2, j::2, mosaicnet_channel[channel]] += shifted_image[i::2, j::2]
     
-# mosaicnet_image[:,:,1]/=2
 mosaic = mosaicnet_image.transpose((2,0,1)).astype(np.float32)
 
 with th.no_grad():
     mosaicnet_output = demosaicnet_bayer(th.from_numpy(mosaic).unsqueeze(0)).squeeze(0).cpu().numpy()
 mosaicnet_output = np.clip(mosaicnet_output, 0, 1).transpose(1,2,0).astype(np.float32)
-    
+
 plt.figure('mosaicnet output')
 postprocessed_mosaicnet = cv2.resize(raw2rgb.postprocess(raw_ref_img, mosaicnet_output, xyz2cam=xyz2cam), None, fx = params["scale"], fy = params["scale"], interpolation=cv2.INTER_NEAREST)
-plt.imshow(postprocessed_mosaicnet[1972:2162, 2700:2875], interpolation = 'none')   
+plt.imshow(postprocessed_mosaicnet, interpolation = 'none')   
 plt.xticks([])
 plt.yticks([])
     
@@ -179,10 +182,30 @@ plt.yticks([])
 #%% Kernel elements visualisation
 
 img_grey = compute_grey_images(raw_ref_img.raw_image.copy()/1023, method="decimating")
+
+
+iso = int(str(tags['Image ISOSpeedRatings']))
+iso /= 100
+iso = max(1, iso)
+
+alpha = sum([x[0] for x in tags['Image Tag 0xC761'].values[::2]])/3
+beta = sum([x[0] for x in tags['Image Tag 0xC761'].values[1::2]])/3
+# alpha = 1.80710882e-4
+# beta = 3.1937599182128e-6
+
+
+img_grey = img_grey.copy_to_host()
+
+img_grey = 2/alpha * iso**2 * np.sqrt(alpha*img_grey/iso + 3/8 * alpha**2 + beta)
+
+img_grey = cuda.to_device(img_grey)
+
+
+
 DEFAULT_CUDA_FLOAT_TYPE = float32
 DEFAULT_TORCH_FLOAT_TYPE = th.float32
 DEFAULT_NUMPY_FLOAT_TYPE = np.float32
-params = get_params(35)
+params = get_params(30)
 
 k_detail = params['merging']['tuning']['k_detail']
 k_denoise = params['merging']['tuning']['k_denoise']
@@ -279,8 +302,39 @@ blockspergrid = (blockspergrid_x, blockspergrid_y)
 cuda_estimate_kernel_elements[blockspergrid, threadsperblock](cuda_full_grads, l, A, D,
                               k_detail, k_denoise, D_th, D_tr)
 
-A = A.copy_to_host()
-A[A<1.95] = 0
+#%%
+
+l1 = l[:,:,0].copy_to_host()
+plt.figure('l1')
+plt.title('l1')
+plt.imshow(l1, vmin= 0.5, vmax=3)
+plt.colorbar()
+#%%
+plt.figure('hist l1')
+plt.hist(l1.reshape(l1.size), range=(0, 5), bins=50)
+#%%
+D_tr = 1
+D_th = 0.71
+
+plt.figure('D')
+plt.title('D')
+plt.imshow(np.clip(1 - np.sqrt(l1)/D_tr + D_th, 0, 1))
+plt.colorbar()
+#%%
+
+D_tr = 1
+D_th = 0.71
+L = np.linspace(0, 1.5*(D_tr + D_tr*D_th)**2, 300)
+Y = np.clip(1-np.sqrt(L)/D_tr + D_th, 0, 1)
+plt.figure('D curve')
+plt.plot(L, Y)
+plt.xlabel('Lambda 1')
+plt.ylabel('D')
+
+
+
+
+#%%
 plt.figure('A')
 plt.imshow(A)
 plt.title('A')
@@ -291,10 +345,7 @@ plt.imshow(D)
 plt.title('D')
 plt.colorbar()
 
-plt.figure('l1')
-plt.title('l1')
-plt.imshow(l[:,:,0])
-plt.colorbar()  
+ 
 
 plt.figure('gradx')
 plt.title('gradx')
