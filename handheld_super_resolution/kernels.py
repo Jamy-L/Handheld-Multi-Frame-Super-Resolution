@@ -14,7 +14,7 @@ import torch.nn.functional as F
 
 from .linalg import get_eighen_elmts_2x2
 from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS, getTime
-from .utils_image import compute_grey_images
+from .utils_image import compute_grey_images, VST
 
 
 def estimate_kernels(img, options, params):
@@ -52,6 +52,10 @@ def estimate_kernels(img, options, params):
     k_stretch = params['tuning']['k_stretch']
     k_shrink = params['tuning']['k_shrink']
     
+    alpha = params['noise']['alpha']
+    beta = params['noise']['beta']
+    iso = params['noise']['ISO']/100
+    
     if VERBOSE>2:
         cuda.synchronize()
         t1 = time.perf_counter()
@@ -68,20 +72,15 @@ def estimate_kernels(img, options, params):
         
     grey_imshape_y, grey_imshape_x = grey_imshape = img_grey.shape
     
-    # computing grads
-    # gradsx = np.empty((grey_imshape_y, grey_imshape_x-1), DEFAULT_NUMPY_FLOAT_TYPE)
-    # gradsx = img_grey[:,1:] - img_grey[:,:-1]
-
+    # Performing Variance Stabilization Transform
     
-    # gradsy = np.empty((grey_imshape_y-1, grey_imshape_x), DEFAULT_NUMPY_FLOAT_TYPE)
-    # gradsy = img_grey[1:,:] - img_grey[:-1,:]
+    img_grey = VST(img_grey, alpha, iso, beta)
     
-    # full_grads = np.empty((grey_imshape_y-1, grey_imshape_x-1, 2), DEFAULT_NUMPY_FLOAT_TYPE) # x, y
-    # full_grads[:, :, 0] = (gradsx[:-1, :] + gradsx[1:, :])/4
-    # full_grads[:, :, 1] = (gradsy[:, :-1] + gradsy[:, 1:])/4
-    
-    # cuda_full_grads = cuda.to_device(full_grads)
-    
+    if VERBOSE>2:
+        cuda.synchronize()
+        t1 = getTime(t1, "- Variance Stabilized")
+        
+    # Computing grads
     th_grey_img = th.as_tensor(img_grey, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
     
     
@@ -105,10 +104,6 @@ def estimate_kernels(img, options, params):
     
     cuda_full_grads = cuda.as_cuda_array(th_full_grad.squeeze().transpose(0,1).transpose(1, 2))
     # shape [y, x, 2]
-    
-    # grad_kernel1 = th.Tensor([[-0.25, 0.25], [-0.25, 0.25]], dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
-    # grad_kernel2 = th.Tensor([[-0.25, -0.25], [0.25, 0.25]], dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
-    
     if VERBOSE>2:
         cuda.synchronize()
         t1 = getTime(t1, "- Gradients computed")
@@ -212,13 +207,13 @@ def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
 
 
     """
-    A = 1+sqrt((l1 - l2)/(l1 + l2))
+    A = 1 + sqrt((l1 - l2)/(l1 + l2))
 
     D = clamp(1 - sqrt(l1)/D_tr + D_th, 0, 1)
-    
+    # D = 0
 
     # This is a very agressive way of driving anisotropy, but it works well so far.
-    if A > 1.95:
+    if A > 1.9:
         k1 = 1/k_shrink
         k2 = k_stretch
     else: # When A is Nan, we fall back to this condition
@@ -227,7 +222,7 @@ def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
     # nu_1 = 1/(k_shrink*(A - 1) + (2 - A))
     # nu_2 = (k_stretch*(A -1) + (2 - A))
     
-    k[0] = k_detail*((1-D)*k1 + D*k_detail*k_denoise)
-    k[1] = k_detail*((1-D)*k2 + D*k_detail*k_denoise)
+    k[0] = k_detail*((1-D)*k1 + D*k_denoise)
+    k[1] = k_detail*((1-D)*k2 + D*k_denoise)
 
 

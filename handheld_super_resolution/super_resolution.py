@@ -387,6 +387,21 @@ def process(burst_path, options, custom_params=None):
         check_params_validity(params, ref_raw.shape)
         
     #__ adding metadatas to dict 
+    if not 'noise' in params['merging'].keys(): 
+        params['merging']['noise'] = {}
+
+    if params['mode'] == 'grey':
+        alpha = tags['Image Tag 0xC761'].values[0][0]
+        beta = tags['Image Tag 0xC761'].values[1][0]
+    else:
+        # Averaging RGB noise values
+        alpha = sum([x[0] for x in tags['Image Tag 0xC761'].values[::2]])/3
+        beta = sum([x[0] for x in tags['Image Tag 0xC761'].values[1::2]])/3
+        
+    params['merging']['noise']['alpha'] = alpha
+    params['merging']['noise']['beta'] = beta
+    params['merging']['noise']['ISO'] = ISO
+    
     ## Writing exifs data into parameters
     if not 'exif' in params['merging'].keys(): 
         params['merging']['exif'] = {}
@@ -441,7 +456,7 @@ def process(burst_path, options, custom_params=None):
     
     
     
-    #___ Performing frame count aware denoise if enabled
+    #___ Performing frame count aware denoising if enabled
     frame_count_denoise = params['accumulated robustness denoiser']['on']
     
     if frame_count_denoise : 
@@ -460,6 +475,7 @@ def process(burst_path, options, custom_params=None):
                                            params_pp['do tonemapping'],
                                            params_pp['do gamma'],
                                            params_pp['do sharpening'],
+                                           params_pp['do devignette'],
                                            xyz2cam,
                                            params_pp['sharpening']
                                            ) 

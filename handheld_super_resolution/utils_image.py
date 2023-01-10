@@ -94,17 +94,38 @@ def compute_grey_images(img, method):
         
     else:
         raise NotImplementedError('Computation of gray level on GPU is only supported for FFT')
-    # elif method == "demosaicing":
-    #         img_dem = colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(img)
-            
-    #         img_grey = np.mean(img_dem, axis=2)
 
-    # elif method == "gauss":
-    #     img_grey = downsample(img, kernel='bayer')
-    # else:
-    #     raise ValueError('unknown method : {}'.format(method))
+def VST(image, alpha, iso, beta):
+    assert len(image.shape) == 2
+    imshape_y, imshape_x = image.shape
     
-    # return img_grey.astype(DEFAULT_NUMPY_FLOAT_TYPE)
+    VST_image = cuda.device_array(image.shape, DEFAULT_NUMPY_FLOAT_TYPE)
+
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
+    blockspergrid_x = int(np.ceil(imshape_x/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(imshape_y/threadsperblock[0]))
+    blockspergrid = (blockspergrid_x, blockspergrid_y)
+    
+    cuda_VST[blockspergrid, threadsperblock](image, VST_image,
+                                             alpha, iso, beta)
+    
+    return VST_image
+
+@cuda.jit
+def cuda_VST(image, VST_image, alpha, iso, beta):
+    x, y = cuda.grid(2)
+    imshape_y,  imshape_x = image.shape
+    
+    if not (0 <= y < imshape_y and
+            0 <= x < imshape_x):
+        return
+    
+    VST = alpha*image[y, x]/iso + 3/8 * alpha**2 + beta
+    VST = max(0, VST)
+    
+    VST_image[y, x] = 2/alpha * iso**2 * math.sqrt(VST)
+    
+    
 
 def frame_count_denoising(image, r_acc, params):
     # TODO it may be useless to bother defining this function for grey images
