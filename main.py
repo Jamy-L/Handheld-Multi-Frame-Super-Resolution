@@ -58,15 +58,18 @@ params['post processing'] = {'on':True,
                     'do devignette' : False,
         
                     'sharpening' : {'radius':3,
-                                    'ammount':0.5}
+                                    'ammount': 1}
                     }
 params['robustness']  = {'on' : True}
-params['accumulated robustness denoiser']= {'on': False}
+params['accumulated robustness denoiser'] = {'on': True,
+                                             'type': 'median',
+                                             'sigma max' : 1.5, # std of the gaussian blur applied when only 1 frame is merged
+                                             'max frame count' : 8 # number of merged frames above which no blurr is applied
+                                             }
 params['debug'] = True
-# params['kanade']['tuning']['sigma blur'] = 1
 
-# burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
-burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
+burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'
+# burst_path = 'P:/inriadataset/inriadataset/pixel3a/rue4/raw'
 # burst_path = 'P:/0050/Samsung'
 
 output_img, debug_dict = process(burst_path, options, params)
@@ -75,7 +78,7 @@ output_img, debug_dict = process(burst_path, options, params)
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 
-plt.figure("output D neq 0")
+plt.figure("output iso")
 
 plt.imshow(output_img, interpolation = 'none')
 plt.xticks([])
@@ -138,12 +141,9 @@ pattern = colors[bayer[0,0]] + colors[bayer[0,1]] + colors[bayer[1,0]] + colors[
 # base = colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(ref_img, pattern=pattern)  # pattern is [[G,R], [B,G]] for the Samsung G8
 base = colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(ref_img, pattern=pattern)
 
-plt.figure("original bicubic")
-# postprocessed_bicubic = cv2.resize(raw2rgb.postprocess(raw_ref_img, base, xyz2cam=xyz2cam), None, fx = params["merging"]['scale'], fy = params["merging"]['scale'], interpolation=cv2.INTER_CUBIC)
-postprocessed_bicubic = cv2.resize(raw2rgb.postprocess(raw_ref_img, base, do_tonemapping=True,
-                                                       xyz2cam=xyz2cam), None, fx = params["scale"], fy = params["scale"], interpolation=cv2.INTER_NEAREST)
-# plt.imshow(postprocessed_bicubic[1500:2100, 1250:1570], interpolation = 'none')
-plt.imshow(postprocessed_bicubic, interpolation = 'none')
+plt.figure("Menon 2007")
+postprocessed_menon = raw2rgb.postprocess(raw_ref_img, base, do_tonemapping=True,xyz2cam=xyz2cam)
+plt.imshow(postprocessed_menon, interpolation = 'none')
 plt.xticks([])
 plt.yticks([])
 
@@ -170,14 +170,21 @@ with th.no_grad():
     mosaicnet_output = demosaicnet_bayer(th.from_numpy(mosaic).unsqueeze(0)).squeeze(0).cpu().numpy()
 mosaicnet_output = np.clip(mosaicnet_output, 0, 1).transpose(1,2,0).astype(np.float32)
 
-plt.figure('mosaicnet output')
-postprocessed_mosaicnet = cv2.resize(raw2rgb.postprocess(raw_ref_img, mosaicnet_output, xyz2cam=xyz2cam), None, fx = params["scale"], fy = params["scale"], interpolation=cv2.INTER_NEAREST)
-plt.imshow(postprocessed_mosaicnet, interpolation = 'none')   
-plt.xticks([])
-plt.yticks([])
+plt.figure('demosaicnet output')
+postprocessed_mosaicnet = raw2rgb.postprocess(raw_ref_img, mosaicnet_output, xyz2cam=xyz2cam, do_tonemapping=True)
+# plt.imshow(postprocessed_mosaicnet, interpolation = 'none')   
+# plt.xticks([])
+# plt.yticks([])
     
 
-
+#%% Upscale
+plt.figure('demosaicnet bicubic')
+postprocessed_bicubic = cv2.resize(postprocessed_mosaicnet, None, fx = params['scale'], fy = params['scale'], interpolation=cv2.INTER_CUBIC)
+plt.imshow(postprocessed_bicubic)
+#%%
+plt.figure('demosaicnet nearest')
+postprocessed_nearest = cv2.resize(postprocessed_mosaicnet, None, fx = params["scale"], fy = params["scale"], interpolation=cv2.INTER_NEAREST)
+plt.imshow(postprocessed_nearest)
 
 #%% Kernel elements visualisation
 
@@ -501,9 +508,9 @@ r = debug_dict['robustness']
 plt.figure('accumulated r')
 r_acc = np.sum(r, axis = 0)
 plt.imshow(r_acc, cmap = "gray", interpolation='none')
-clb=plt.colorbar()
-clb.ax.tick_params() 
-clb.ax.set_title('Accumulated\nrobustness',fontsize=15)
+# clb=plt.colorbar()
+# clb.ax.tick_params() 
+# clb.ax.set_title('Accumulated\nrobustness',fontsize=15)
 plt.xticks([])
 plt.yticks([])
 

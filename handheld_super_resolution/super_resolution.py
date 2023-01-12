@@ -17,7 +17,7 @@ import rawpy
 
 from . import raw2rgb
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add
-from .utils_image import compute_grey_images, frame_count_denoising
+from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame_count_denoising_median
 from .merge import merge, init_merge
 from .kernels import estimate_kernels
 from .block_matching import init_block_matching, align_image_block_matching
@@ -390,6 +390,9 @@ def process(burst_path, options, custom_params=None):
     if not 'noise' in params['merging'].keys(): 
         params['merging']['noise'] = {}
 
+    # TODO beta is often absent from exif data
+    # is the algorithm had to be run on a specific sensor,
+    # the precise values of alpha and beta could be used instead
     if params['mode'] == 'grey':
         alpha = tags['Image Tag 0xC761'].values[0][0]
         beta = tags['Image Tag 0xC761'].values[1][0]
@@ -460,16 +463,26 @@ def process(burst_path, options, custom_params=None):
     frame_count_denoise = params['accumulated robustness denoiser']['on']
     
     if frame_count_denoise : 
-        handheld_output = frame_count_denoising(handheld_output, debug_dict['accumulated robustness'],
-                                                params['accumulated robustness denoiser'])
+        median = params['accumulated robustness denoiser']['type'] == 'median'
+        if verbose_2:
+            print('-- Robustness aware bluring')
         
-    
+        if median:
+            handheld_output = frame_count_denoising_median(handheld_output, debug_dict['accumulated robustness'],
+                                                           params['accumulated robustness denoiser'])
+        else:
+            handheld_output = frame_count_denoising_gauss(handheld_output, debug_dict['accumulated robustness'],
+                                                           params['accumulated robustness denoiser'])
+
 
     #___ post processing
     params_pp = params['post processing']
     post_processing_enabled = params_pp['on']
     
     if post_processing_enabled:
+        if verbose_2:
+            print('-- Post processing image')
+            
         output_image = raw2rgb.postprocess(raw, handheld_output.copy_to_host(),
                                            params_pp['do color correction'],
                                            params_pp['do tonemapping'],

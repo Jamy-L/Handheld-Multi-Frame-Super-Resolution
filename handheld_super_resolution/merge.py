@@ -152,10 +152,10 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
             invert_2x2(interpolated_cov, cov_i)
 
         else: # if not invertible, identity matrix
-            cov_i[0, 0] = 1/(25)
+            cov_i[0, 0] = 1
             cov_i[0, 1] = 0
             cov_i[1, 0] = 0
-            cov_i[1, 1] = 1/25
+            cov_i[1, 1] = 1
                     
         
     center_x = round(coarse_ref_sub_pos[1])
@@ -408,10 +408,10 @@ def accumulate(comp_img, alignments, covs, r,
             invert_2x2(interpolated_cov, cov_i)
 
         else: # if not invertible, identity matrix
-            cov_i[0, 0] = 1/25
+            cov_i[0, 0] = 1
             cov_i[0, 1] = 0
             cov_i[1, 0] = 0
-            cov_i[1, 1] = 1/25
+            cov_i[1, 1] = 1
     
     
     center_x = round(patch_center_pos[1])
