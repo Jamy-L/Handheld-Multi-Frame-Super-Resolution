@@ -124,7 +124,6 @@ def estimate_kernels(img, options, params):
     
     return covs
 
-# TODO recode this, thread separation is not good
 @cuda.jit
 def cuda_estimate_kernel(full_grads,
                          k_detail, k_denoise, D_th, D_tr, k_stretch, k_shrink,
@@ -210,19 +209,16 @@ def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
     A = 1 + sqrt((l1 - l2)/(l1 + l2))
 
     D = clamp(1 - sqrt(l1)/D_tr + D_th, 0, 1)
-    # D = 0
 
     # This is a very agressive way of driving anisotropy, but it works well so far.
-    if A > 1.9:
+    if A > 1.95:
         k1 = 1/k_shrink
         k2 = k_stretch
     else: # When A is Nan, we fall back to this condition
         k1 = 1
         k2 = 1
-    # nu_1 = 1/(k_shrink*(A - 1) + (2 - A))
-    # nu_2 = (k_stretch*(A -1) + (2 - A))
     
-    k[0] = k_detail*((1-D)*k1 + D*k_denoise)
-    k[1] = k_detail*((1-D)*k2 + D*k_denoise)
+    k[0] = k_detail * ((1-D)*k1 + D*k_denoise)
+    k[1] = k_detail * ((1-D)*k2 + D*k_denoise)
 
 

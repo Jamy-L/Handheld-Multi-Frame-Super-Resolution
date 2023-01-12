@@ -50,7 +50,7 @@ def get_params(SNR):
                 'merging': {
                     'kernel' : 'handheld', # 'act' for act kernel, 'handheld' for handhel kernel
                     'tuning': {
-                        'k_detail' : 0.25 + (0.33 - 0.25)*(30 - SNR)/(30 - 6), # [0.25, ..., 0.33]
+                        'k_detail' : 0.2 + (0.33 - 0.2)*(30 - SNR)/(30 - 6), # [0.25, ..., 0.33]
                         'k_denoise': 3 + (5 - 3)*(30 - SNR)/(30 - 6),    # [3.0, ...,5.0]
                         'D_th': 0.71 + (0.81 - 0.71)*(30 - SNR)/(30 - 6),      # [0.001, ..., 0.010]
                         'D_tr': 1 + (1.24 - 1)*(30 - SNR)/(30 - 6),     # [0.006, ..., 0.020]
@@ -61,8 +61,10 @@ def get_params(SNR):
                 
                 'accumulated robustness denoiser' : {
                     'on' : True,
+                    'type':'median', #'median' or 'gaussian'
                     'sigma max' : 1.5, # std of the gaussian blur applied when only 1 frame is merged
-                    'max frame count' : 8 # number of merged frames above which no blurr is applied
+                    'max frame count' : 8, # number of merged frames above which no blurr is applied
+                    'radius max':3 # maximum radius of the median filter. Tt cannot be more than 14. for memory purpose
                     },
                 'post processing' : {
                     'on':True,
@@ -95,6 +97,8 @@ def check_params_validity(params, imshape):
         
     assert params['merging']['kernel'] in ['handheld', 'act']
     assert params['mode'] in ["bayer", 'grey']
+    if params['robustness']['on'] and params['accumulated robustness denoiser']['on']:
+        assert params['accumulated robustness denoiser']['type'] in ["median", 'gaussian']
     assert params['kanade']['tuning']['kanadeIter'] > 0
     assert params['kanade']['tuning']['sigma blur'] >= 0
     
