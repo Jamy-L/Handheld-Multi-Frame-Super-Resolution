@@ -2,27 +2,57 @@
 """
 Created on Mon Aug  1 18:38:07 2022
 
+This script contains : 
+    - The implementation of Alg. 4, the conventionnal accumulation
+    - The implementation of Alg. 11, where the reference image is merged
+
+
 @author: jamyl
 """
 
 
-import time
 import math
 
-import numpy as np
 from numba import uint8, cuda
 
-from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, EPSILON_DIV, DEFAULT_THREADS
+from .utils import DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, EPSILON_DIV, DEFAULT_THREADS
 from .utils_image import denoise_power_merge, denoise_range_merge
 from .linalg import quad_mat_prod, invert_2x2, interpolate_cov
 
 def merge_ref(ref_img, kernels, num, den, options, params, acc_rob=None):
-    verbose = options['verbose']
+    """
+    Implementation of Alg. 11: AccumulationReference
+    Accumulates the reference frame into num and den, while considering
+    (if enabled) the accumulated robustness mask to enforce single frame SR if
+    necessary.
+
+    Parameters
+    ----------
+    ref_img : device Array[imshape_y, imshape_x]
+        Reference image J_1
+    kernels : device Array[imshape_y//2, imshape_x//2, 2, 2]
+        Covariance Matrices Omega_1
+    num : device Array[s*imshape_y, s*imshape_x]
+        Numerator of the accumulator
+    den : device Array[s*imshape_y, s*imshape_x]
+        Denominator of the accumulator
+    options : dict
+        verbose options.
+    params : dict
+        parameters (containing the zoom s).
+    acc_rob : [imshape_y//2, imshape_x//2], optional
+        accumulated robustness mask. The default is None.
+
+    Returns
+    -------
+    None.
+
+    """
     scale = params['scale']
     
     CFA_pattern = cuda.to_device(params['exif']['CFA Pattern'])
     bayer_mode = params['mode'] == 'bayer'
-    act = params['kernel'] == 'act'
+    iso_kernel = params['kernel'] == 'iso'
     
     robustness_denoise = params['accumulated robustness denoiser']['on']
     # numba is strict on types and dimension : let's use a consistent object
@@ -43,17 +73,17 @@ def merge_ref(ref_img, kernels, num, den, options, params, acc_rob=None):
     # dispatching threads. 1 thread for 1 output pixel
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
     
-    blockspergrid_x = int(np.ceil(output_shape_x/threadsperblock[1]))
-    blockspergrid_y = int(np.ceil(output_shape_y/threadsperblock[0]))
+    blockspergrid_x = math.ceil(output_shape_x/threadsperblock[1])
+    blockspergrid_y = math.ceil(output_shape_y/threadsperblock[0])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
     
     accumulate_ref[blockspergrid, threadsperblock](
-        ref_img, kernels, bayer_mode, act, scale, CFA_pattern,
+        ref_img, kernels, bayer_mode, iso_kernel, scale, CFA_pattern,
         num, den, acc_rob, robustness_denoise, max_frame_count, rad_max, max_multiplier)
     
     
 @cuda.jit
-def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
+def accumulate_ref(ref_img, covs, bayer_mode, iso_kernel, scale, CFA_pattern,
                    num, den, acc_rob,
                    robustness_denoise, max_frame_count, rad_max, max_multiplier):
     """
@@ -68,8 +98,8 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
         covariance matrices sampled at the center of each grey pixel.
     bayer_mode : bool
         Whether the burst is raw or grey
-    act : bool
-        Whether ACT kernels should be used, or handhled's kernels.
+    iso_kernel : bool
+        Whether isotropic kernels should be used, or handhled's kernels.
     scale : float
         scaling factor
     CFA_pattern : Array[2, 2]
@@ -119,7 +149,7 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
     
     # computing kernel
     # TODO this is rather slow and could probably be sped up
-    if not act:
+    if not iso_kernel:
         interpolated_cov = cuda.local.array((2, 2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
         cov_i = cuda.local.array((2, 2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
         
@@ -137,8 +167,8 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
     
     
         # clipping the coordinates to stay in bound
-        floor_x = max(int(math.floor(grey_pos[1])), 0)
-        floor_y = max(int(math.floor(grey_pos[0])), 0)
+        floor_x = int(max(math.floor(grey_pos[1]), 0))
+        floor_y = int(max(math.floor(grey_pos[0]), 0))
         
         ceil_x = min(floor_x + 1, covs.shape[1]-1)
         ceil_y = min(floor_y + 1, covs.shape[0]-1)
@@ -206,7 +236,7 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
                 dist_y = pixel_idy - coarse_ref_sub_pos[0]
             
                 ### Computing w
-                if act : 
+                if iso_kernel : 
                     y = max(0, 2*(dist_x*dist_x + dist_y*dist_y))
                 else:
                     y = max(0, quad_mat_prod(cov_i, dist_x, dist_y))
@@ -243,22 +273,27 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
 def merge(comp_img, alignments, covs, r, num, den,
           options, params):
     """
-    Merges all the images, based on the alignments previously estimated.
+    Implementation of Alg. 4: Accumulation
+    Accumulates comp_img (J_n, n>1) into num and den, based on the alignment
+    V_n, the covariance matrices Omega_n and the robustness mask estimated before.
     The size of the merge_result is adjustable with params['scale']
 
 
     Parameters
     ----------
-    ref_img : Array[imsize_y, imsize_x]
-        The reference image
-    comp_imgs : Array [n_images, imsize_y, imsize_x]
-        The compared images
-    alignments : device Array[n_images, n_tiles_y, n_tiles_x, 2]
-        The final estimation of the tiles' alignment (patchwise)
-    covs : device array[n_images+1, imsize_y/2, imsize_x/2, 2, 2]
-        covariance matrices sampled at the center of each bayer quad.
-    r : Device_Array[n_images, imsize_y/2, imsize_x/2, 3]
-            Robustness of the moving images
+    comp_imgs : device Array [imsize_y, imsize_x]
+        The non-reference image to merge (J_n)
+    alignments : device Array[n_tiles_y, n_tiles_x, 2]
+        The final estimation of the tiles' alignment V_n(p)
+    covs : device array[imsize_y//2, imsize_x//2, 2, 2]
+        covariance matrices Omega_n
+    r : Device_Array[imsize_y//2, imsize_x//2]
+        Robustness mask r_n
+    num : device Array[s*imshape_y, s*imshape_x]
+        Numerator of the accumulator
+    den : device Array[s*imshape_y, s*imshape_x]
+        Denominator of the accumulator
+        
     options : Dict
         Options to pass
     params : Dict
@@ -266,18 +301,15 @@ def merge(comp_img, alignments, covs, r, num, den,
 
     Returns
     -------
-    merge_result : Array[scale * imsize_y, scale * imsize_x, 3]
-        merged images
+    None
 
     """
-    current_time, verbose_3 = time.perf_counter(), options['verbose'] >= 3
     scale = params['scale']
     
     CFA_pattern = cuda.to_device(params['exif']['CFA Pattern'])
     bayer_mode = params['mode'] == 'bayer'
-    act = params['kernel'] == 'act'
-    TILE_SIZE = params['tuning']['tileSize']
-    N_TILES_Y, N_TILES_X, _ = alignments.shape
+    iso_kernel = params['kernel'] == 'iso'
+    tile_size = params['tuning']['tileSize']
 
     native_im_size = comp_img.shape
     # casting to integer to account for floating scale
@@ -286,25 +318,22 @@ def merge(comp_img, alignments, covs, r, num, den,
 
     # dispatching threads. 1 thread for 1 output pixel
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
-    blockspergrid_x = int(np.ceil(output_size[1]/threadsperblock[1]))
-    blockspergrid_y = int(np.ceil(output_size[0]/threadsperblock[0]))
+    blockspergrid_x = math.ceil(output_size[1]/threadsperblock[1])
+    blockspergrid_y = math.ceil(output_size[0]/threadsperblock[0])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
                     
     accumulate[blockspergrid, threadsperblock](
         comp_img, alignments, covs, r,
-        bayer_mode, act, scale, TILE_SIZE, CFA_pattern,
+        bayer_mode, iso_kernel, scale, tile_size, CFA_pattern,
         num, den)
 
 
 
-@cuda.jit(cache=True)
+@cuda.jit
 def accumulate(comp_img, alignments, covs, r,
-               bayer_mode, act, scale, tile_size, CFA_pattern,
+               bayer_mode, iso_kernel, scale, tile_size, CFA_pattern,
                num, den):
     """
-    Cuda kernel, each block represents an output pixel. Each block contains
-    a 3 by 3 neighborhood for each moving image. A single threads takes
-    care of one of these pixels, for all the moving images.
 
 
 
@@ -320,8 +349,8 @@ def accumulate(comp_img, alignments, covs, r,
             Robustness of the moving images
     bayer_mode : bool
         Whether the burst is raw or grey
-    act : bool
-        Whether ACT kernels should be used, or handhled's kernels.
+    iso_kernel : bool
+        Whether isotropic kernels should be used, or handhled's kernels.
     scale : float
         scaling factor
     tile_size : int
@@ -404,7 +433,7 @@ def accumulate(comp_img, alignments, covs, r,
         return
     
     # computing kernel
-    if not act:
+    if not iso_kernel:
         interpolated_cov = cuda.local.array((2, 2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
         cov_i = cuda.local.array((2, 2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
         # fetching the 4 closest covs
@@ -420,8 +449,8 @@ def accumulate(comp_img, alignments, covs, r,
             grey_pos[1] = patch_center_pos[1]
         
         # clipping the coordinates to stay in bound
-        floor_x = max(int(math.floor(grey_pos[1])), 0)
-        floor_y = max(int(math.floor(grey_pos[0])), 0)
+        floor_x = int(max(math.floor(grey_pos[1]), 0))
+        floor_y = int(max(math.floor(grey_pos[0]), 0))
         
         ceil_x = min(floor_x + 1, covs.shape[1]-1)
         ceil_y = min(floor_y + 1, covs.shape[0]-1)
@@ -475,7 +504,7 @@ def accumulate(comp_img, alignments, covs, r,
                 dist_y = pixel_idy - patch_center_pos[0]
             
                 ### Computing w
-                if act : 
+                if iso_kernel : 
                     y = max(0, 2*(dist_x*dist_x + dist_y*dist_y))
                 else:
                     y = max(0, quad_mat_prod(cov_i, dist_x, dist_y))

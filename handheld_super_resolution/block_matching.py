@@ -2,9 +2,16 @@
 """
 Created on Mon Sep 12 11:31:38 2022
 
+This script contains all the operations corresponding to the function
+"MultiScaleBlockMatching" called in Alg. 2: Registration. The pyramid
+representations are created and patches are aligned with the block matching
+method. 
+
+
 @author: jamyl
 """
 import time
+import math
 
 import numpy as np
 from numba import cuda
@@ -23,7 +30,7 @@ def init_block_matching(ref_img, options, params):
     Parameters
     ----------
     ref_img : device Array[imshape_y, imshape_x]
-        Reference image
+        Reference image J_1
     options : dict
         options.
     params : dict
@@ -78,16 +85,16 @@ def init_block_matching(ref_img, options, params):
 def align_image_block_matching(img, referencePyramid, options, params, debug=False):
     """
     Align the reference image with the img : returns a patchwise flow such that
-    for ptaches py, px :
+    for patches py, px :
         img[py, px] ~= ref_img[py + alignments[py, px, 1], 
                                px + alignments[py, px, 0]]
 
     Parameters
     ----------
     img : device Array[imshape_y, imshape_x]
-        image to be compared
+        Image to be compared J_i (i>1)
     referencePyramid : list [device Array]
-        Pyramid representation of the ref image
+        Pyramid representation of the ref image J_1
     options : dict
         options.
     params : dict
@@ -98,7 +105,7 @@ def align_image_block_matching(img, referencePyramid, options, params, debug=Fal
     Returns
     -------
     alignments : device Array[n_patchs_y, n_patchs_x, 2]
-        The patch layout is explained in the hdr+ IPOl article
+        Patchwise flow : V_n(p) for each patch (p)
 
     """
     # Initialization.
@@ -264,7 +271,6 @@ def align_on_a_level(referencePyramidLevel, alternatePyramidLevel, options, upsa
             previousTileSize
         )
 
-    # TODO this needs to be modified, it is too slow
     if verbose:
         cuda.synchronize()
         currentTime = getTime(currentTime, ' ---- Upsample alignments')
@@ -294,8 +300,8 @@ def upsample_alignments(referencePyramidLevel, alternatePyramidLevel, previousAl
 
     upsampledAlignments = cuda.device_array((n_tiles_y_new, n_tiles_x_new, 2), dtype=DEFAULT_NUMPY_FLOAT_TYPE)
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
-    blockspergrid_x = int(np.ceil(n_tiles_x_new/threadsperblock[1]))
-    blockspergrid_y = int(np.ceil(n_tiles_y_new/threadsperblock[0]))
+    blockspergrid_x = math.ceil(n_tiles_x_new/threadsperblock[1])
+    blockspergrid_y = math.ceil(n_tiles_y_new/threadsperblock[0])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
     
     cuda_upsample_alignments[blockspergrid, threadsperblock](
@@ -444,8 +450,8 @@ def local_search(referencePyramidLevel, alternatePyramidLevel,
     h, w, _ = upsampledAlignments.shape
     
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
-    blockspergrid_x = int(np.ceil(w/threadsperblock[1]))
-    blockspergrid_y = int(np.ceil(h/threadsperblock[0]))
+    blockspergrid_x = math.ceil(w/threadsperblock[1])
+    blockspergrid_y = math.ceil(h/threadsperblock[0])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
 
     if distance == 'L1':

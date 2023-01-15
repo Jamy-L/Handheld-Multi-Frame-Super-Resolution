@@ -45,7 +45,7 @@ options = {'verbose' : 1}
 
 # Overwritting SNR based parameters
 params={}
-params["scale"] = 2
+params["scale"] = 1
 
 
 params['merging'] = {'kernel': 'handheld'}
@@ -60,12 +60,12 @@ params['post processing'] = {'on':True,
                                     'ammount': 1}
                     }
 params['robustness']  = {'on' : True}
-params['accumulated robustness denoiser'] = {'on': True,
-                                             'type': 'merge',
-                                             'sigma max' : 1.5, # std of the gaussian blur applied when only 1 frame is merged
-                                             'max frame count' : 8, # number of merged frames above which no blurr is applied
-                                             'radius max':4
-                                             }
+# params['accumulated robustness denoiser'] = {'on': True,
+#                                              'type': 'merge',
+#                                              'sigma max' : 1.5, # std of the gaussian blur applied when only 1 frame is merged
+#                                              'max frame count' : 8, # number of merged frames above which no blurr is applied
+#                                              'radius max':4
+#                                              }
 params['debug'] = True
 
 burst_path = 'P:/inriadataset/inriadataset/pixel4a/friant/raw/'

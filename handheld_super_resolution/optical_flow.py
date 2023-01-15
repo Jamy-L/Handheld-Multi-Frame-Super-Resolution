@@ -2,23 +2,49 @@
 """
 Created on Sun Jul 31 00:00:36 2022
 
+This script contains all the operations corresponding to the function
+"ICA" called in Alg. 2: Registration.
+
 @author: jamyl
 """
 
 import time
+import math
 
-from math import ceil, modf, exp
 import numpy as np
 from numba import cuda
 from scipy.ndimage._filters import _gaussian_kernel1d
-import torch.nn.functional as F
 import torch
+import torch.nn.functional as F
 
 from .linalg import bilinear_interpolation
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
 from .linalg import solve_2x2
     
 def init_ICA(ref_img, options, params):
+    """
+    Initializes the ICa algorithm by computing the gradients of the reference
+    image, and the hessian matrix.
+
+    Parameters
+    ----------
+    ref_img : device Array[imshape_y, imshape_x]
+        Reference image J_1
+    options : dict
+        verbose options.
+    params : dict
+        parameters.
+
+    Returns
+    -------
+    cuda_gradx : Device Array
+        horizontal gradients of the reference image
+    cuda_grady : Device Array
+        vertical gradients of the reference image
+    hessian : Device Array
+        hessian matrix defined for each patch of the reference image.
+
+    """
     current_time, verbose_3 = time.perf_counter(),  options['verbose'] >= 3
 
     sigma_blur = params['tuning']['sigma blur']
@@ -28,8 +54,8 @@ def init_ICA(ref_img, options, params):
     
     # image is padded during BM, we need to consider that to count patches
     
-    n_patch_y = int(ceil(imsize_y/ tile_size))
-    n_patch_x = int(ceil(imsize_x/ tile_size))
+    n_patch_y = math.ceil(imsize_y/ tile_size)
+    n_patch_x = math.ceil(imsize_x/ tile_size)
 
     # Estimating gradients with Prewitt kernels
     kernely = np.array([[-1],
@@ -81,8 +107,8 @@ def init_ICA(ref_img, options, params):
     
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
     
-    blockspergrid_x = int(np.ceil(n_patch_x/threadsperblock[1]))
-    blockspergrid_y = int(np.ceil(n_patch_y/threadsperblock[0]))
+    blockspergrid_x = math.ceil(n_patch_x/threadsperblock[1])
+    blockspergrid_y = math.ceil(n_patch_y/threadsperblock[0])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
     
     compute_hessian[blockspergrid, threadsperblock](cuda_gradx, cuda_grady,
@@ -132,21 +158,30 @@ def compute_hessian(gradx, grady, tile_size, hessian):
     hessian[patch_idy, patch_idx, 1, 1] = local_hessian[1, 1]
 
 
-def ICA_optical_flow(cuda_im_grey, cuda_ref_grey, cuda_gradx, cuda_grady, hessian, cuda_pre_alignment, options, params, debug = False):
+def ICA_optical_flow(cuda_im_grey, cuda_ref_grey,
+                     cuda_gradx, cuda_grady,
+                     hessian, cuda_pre_alignment,
+                     options, params, debug = False):
     """ Computes optical flow between the ref_img and all images of comp_imgs 
-    based on the ICA method (http://www.ipol.im/pub/art/2016/153/
+    based on the ICA method http://www.ipol.im/pub/art/2016/153/
     The optical flow follows a translation per patch model, such that :
     ref_img(X) ~= comp_img(X + flow(X))
     
 
     Parameters
     ----------
-    ref_img : device Array[imsize_y, imsize_x]
-        reference image on grey level
-    comp_img : device Array[imsize_y, imsize_x]
-        image to align on grey level
-    pre_alignment : device Array[n_tiles_y, n_tiles_x, 2]
-        optical flow for each tile of each image, outputed by bloc matching.
+    cuda_img_grey : device Array[imsize_y, imsize_x]
+        Image to align on grey level G_n
+    cuda_ref_grey : device Array[imsize_y, imsize_x]
+        Reference image on grey level G_1
+    cuda_gradx : device array[imsize_y, imsize_x]
+        Horizontal gradient of the reference image
+    cuda_grady : device array[imsize_y, imsize_x]
+        Vertical gradient of the reference image
+    hessian : device_array[n_tiles_y, n_tiles_x, 2, 2]
+        Hessian matrix of the reference image
+    cuda_pre_alignment : device Array[n_tiles_y, n_tiles_x, 2]
+        optical flow for each tile of each image, outputed by bloc matching : V_n
         pre_alignment[0] must be the horizontal flow oriented towards the right if positive.
         pre_alignment[1] must be the vertical flow oriented towards the bottom if positive.
     options : dict
@@ -169,17 +204,13 @@ def ICA_optical_flow(cuda_im_grey, cuda_ref_grey, cuda_gradx, cuda_grady, hessia
     Returns
     -------
     cuda_alignment : device_array[n_tiles_y, n_tiles_x, 2]
-        alignment vector for each tile of each image following the same convention
-        as "pre_alignment"
+        Updated alignment vectors V_n(p) for each tile of the image
 
     """
     if debug : 
         debug_list = []
 
-    t1, verbose_3 = time.perf_counter(), options['verbose'] >= 3
     n_iter = params['tuning']['kanadeIter']
-    
-    n_patch_y, n_patch_x, _ = cuda_pre_alignment.shape
         
     cuda_alignment = cuda_pre_alignment
     
@@ -225,7 +256,6 @@ def ICA_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, hes
     verbose_3 = options['verbose'] >= 3
     tile_size = params['tuning']['tileSize']
 
-    imsize_y, imsize_x = comp_img.shape
     n_patch_y, n_patch_x, _ = alignment.shape
     
     if verbose_3 :
@@ -236,8 +266,8 @@ def ICA_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, hes
     
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
     
-    blockspergrid_x = int(np.ceil(n_patch_x/threadsperblock[1]))
-    blockspergrid_y = int(np.ceil(n_patch_y/threadsperblock[0]))
+    blockspergrid_x = math.ceil(n_patch_x/threadsperblock[1])
+    blockspergrid_y = math.ceil(n_patch_y/threadsperblock[0])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
     
     ICA_get_new_flow[blockspergrid, threadsperblock](
@@ -259,9 +289,6 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
     A is precomputed, but B is evaluated each time. 
 
     """
-    # TODO This runs in 15ms for a 12Mp raw frame ... This is too long.
-    # But using shared memory is making things slower, using sum reduction too,
-    # redesigning threads too...
     imsize_y, imsize_x = comp_img.shape
     n_patchs_y, n_patchs_x, _ = alignment.shape
     patch_idx, patch_idy = cuda.grid(2)
@@ -280,7 +307,8 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
     A[1, 1] = hessian[patch_idy, patch_idx, 1, 1]
     
     B = cuda.local.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
-    B[0] = 0; B[1] = 0
+    B[0] = 0
+    B[1] = 0
     
     local_alignment = cuda.local.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
     local_alignment[0] = alignment[patch_idy, patch_idx, 0]
@@ -310,8 +338,8 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
     
             if inbound:
                 # bicubic interpolation
-                normalised_pos_x, floor_x = modf(new_idx) # https://www.rollpie.com/post/252
-                normalised_pos_y, floor_y = modf(new_idy) # separating floor and floating part
+                normalised_pos_x, floor_x = math.modf(new_idx) # https://www.rollpie.com/post/252
+                normalised_pos_y, floor_y = math.modf(new_idy) # separating floor and floating part
                 floor_x = int(floor_x)
                 floor_y = int(floor_y)
                 
@@ -328,13 +356,8 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
                 comp_val = bilinear_interpolation(buffer_val, pos)
                 
                 gradt = comp_val - ref_img[pixel_global_idy, pixel_global_idx]
-            
-                # TODO This takes 8ms more per step and does not improve ... remove it ?
-                # exponentially decreasing window, of size tile_size_lk
-                # r_square = ((j - tile_size/2)**2 +
-                #             (i - tile_size/2)**2)
-                # sigma_square = (tile_size/2)**2
-                # w = exp(-r_square/(3*sigma_square))
+                
+                
                 
                 B[0] += -local_gradx*gradt
                 B[1] += -local_grady*gradt

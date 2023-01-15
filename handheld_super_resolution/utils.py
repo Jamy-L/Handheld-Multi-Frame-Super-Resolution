@@ -5,7 +5,7 @@ Created on Fri Sep 30 16:22:15 2022
 @author: jamyl
 """
 import time
-from math import cos, pi
+import math
 
 import numpy as np
 from numba import float32, float64, complex64, cuda
@@ -75,8 +75,8 @@ def divide(num, den):
     assert num.shape == den.shape
     n_channels = num.shape[-1]
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS, 1)
-    blockspergrid_x = int(np.ceil(num.shape[1]/threadsperblock[1]))
-    blockspergrid_y = int(np.ceil(num.shape[0]/threadsperblock[0]))
+    blockspergrid_x = math.ceil(num.shape[1]/threadsperblock[1])
+    blockspergrid_y = math.ceil(num.shape[0]/threadsperblock[0])
     blockspergrid_z = n_channels
     blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
     
@@ -85,7 +85,9 @@ def divide(num, den):
 @cuda.jit
 def cuda_divide(num, den):
     x, y, c = cuda.grid(3)
-    if 0 <= x < num.shape[1] and 0 <= y < num.shape[0] and 0 <= c < num.shape[2]:
+    if (0 <= x < num.shape[1] and
+        0 <= y < num.shape[0] and
+        0 <= c < num.shape[2]):
         num[y, x, c] = num[y, x, c]/den[y, x, c]
         
 def add(A, B):
@@ -106,8 +108,8 @@ def add(A, B):
     """
     assert A.shape == B.shape
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
-    blockspergrid_x = int(np.ceil(A.shape[1]/threadsperblock[1]))
-    blockspergrid_y = int(np.ceil(A.shape[0]/threadsperblock[0]))
+    blockspergrid_x = math.ceil(A.shape[1]/threadsperblock[1])
+    blockspergrid_y = math.ceil(A.shape[0]/threadsperblock[0])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
     
     cuda_add[blockspergrid, threadsperblock](A, B)
