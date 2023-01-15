@@ -7,8 +7,8 @@ SNR.
 
 @author: jamyl
 """
-import numpy as np
 import warnings
+import numpy as np
 
 def get_params(SNR):
     SNR = np.clip(SNR, 6, 30)
@@ -20,8 +20,8 @@ def get_params(SNR):
         Ts = 16
         
     
-    params = {'scale' : 1,
-              'mode' : 'bayer', # 'bayer' or 'grey' 
+    params = {'scale' : 1, # upscaling factor ( >=1 )
+              'mode' : 'bayer', # 'bayer' or 'grey' (input image type)
               'grey method' : 'FFT',
               'debug': False, # when True, a dict is returned with debug infos.
               'block matching': {
@@ -48,7 +48,7 @@ def get_params(SNR):
                         }
                     },
                 'merging': {
-                    'kernel' : 'handheld', # 'act' for act kernel, 'handheld' for handhel kernel
+                    'kernel' : 'handheld', # 'iso' for isotropic kernel, 'handheld' for handhel kernel
                     'tuning': {
                         'k_detail' : 0.25 + (0.33 - 0.25)*(30 - SNR)/(30 - 6), # [0.25, ..., 0.33]
                         'k_denoise': 3 + (5 - 3)*(30 - SNR)/(30 - 6),    # [3.0, ...,5.0]
@@ -60,13 +60,15 @@ def get_params(SNR):
                     },
                 
                 'accumulated robustness denoiser' : {
-                    'median':{'on':False,
+                    'median':{'on':False, # post process median filter
                               'radius max':3,  # maximum radius of the median filter. Tt cannot be more than 14. for memory purpose
                               'max frame count': 8},
-                    'gauss':{'on':False,
+                    
+                    'gauss':{'on':False, # post process gaussian filter
                              'sigma max' : 1.5, # std of the gaussian blur applied when only 1 frame is merged
                              'max frame count' : 8}, # number of merged frames above which no blur is applied
-                    'merge':{'on':True,
+                    
+                    'merge':{'on':True, # filter for the ref frame accumulation
                              'rad max': 2,# max radius of the accumulation neighborhod
                              'max multiplier': 8, # Multiplier of the covariance for single frame SR
                              'max frame count' : 8} # # number of merged frames above which no blur is applied
@@ -96,11 +98,13 @@ def check_params_validity(params, imshape):
     if params['scale'] > 3:
         warnings.warn("Warning.... The required scale is superior to 3, but the algorighm can hardly go above.")
     
-    if (not params['robustness']['on']) and params['accumulated robustness denoiser']['on']:
+    if (not params['robustness']['on']) and (params['accumulated robustness denoiser']['median']['on'] or
+                                             params['accumulated robustness denoiser']['gauss']['on'] or
+                                             params['accumulated robustness denoiser']['merge']['on']):
         warnings.warn("Warning.... Robustness based denoising is enabled, "
                       "but robustness is disabled. No further denoising will be done.")
         
-    assert params['merging']['kernel'] in ['handheld', 'act']
+    assert params['merging']['kernel'] in ['handheld', 'iso']
     assert params['mode'] in ["bayer", 'grey']
     
     if (params['accumulated robustness denoiser']['median']['on'] and

@@ -27,6 +27,7 @@ you can benefit from the following license terms attached to this file.
 """
 
 import math
+
 import numpy as np
 from scipy.ndimage._filters import _gaussian_kernel1d
 from numba import cuda
@@ -34,18 +35,19 @@ import torch as th
 import torch.fft
 import torch.nn.functional as F
 
-from .utils import getSigned, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_TORCH_COMPLEX_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS, add
+from .utils import getSigned, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
 
 def compute_grey_images(img, method):
     """
-    img must already be on device
+    This function converts a raw image to a grey image, using the decimation or
+    the method of Alg. 3: ComputeGrayscaleImage
 
     Parameters
     ----------
-    img : TYPE
-        DESCRIPTION.
-    method : TYPE
-        DESCRIPTION.
+    img : device Array[:, :]
+        Raw image J to convert to gray level.
+    method : str
+        FFT or decimatin.
 
     Raises
     ------
@@ -54,11 +56,11 @@ def compute_grey_images(img, method):
 
     Returns
     -------
-    TYPE
-        DESCRIPTION.
+    img_gre : device Array[:, :]
+        Corresponding grey scale image G
 
     """
-    imsize = imsize_y, imsize_x = img.shape
+    imsize_y, imsize_x = img.shape
     if method == "FFT":
         torch_img_grey = th.as_tensor(img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
         torch_img_grey = torch.fft.fft2(torch_img_grey) 
@@ -68,7 +70,6 @@ def compute_grey_images(img, method):
         # Therefore, for DEFAULT_TORCH_FLOAT_TYPE = float32 we directly get complex64
         torch_img_grey = torch.fft.fftshift(torch_img_grey)
         
-        imsize = imsize_y, imsize_x = torch_img_grey.shape
         torch_img_grey[:imsize_y//4, :] = 0
         torch_img_grey[:, :imsize_x//4] = 0
         torch_img_grey[-imsize_y//4:, :] = 0
@@ -85,8 +86,8 @@ def compute_grey_images(img, method):
         img_grey = cuda.device_array(grey_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
         
         threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
-        blockspergrid_x = int(np.ceil(grey_imshape_x/threadsperblock[1]))
-        blockspergrid_y = int(np.ceil(grey_imshape_y/threadsperblock[0]))
+        blockspergrid_x = math.ceil(grey_imshape_x/threadsperblock[1])
+        blockspergrid_y = math.ceil(grey_imshape_y/threadsperblock[0])
         blockspergrid = (blockspergrid_x, blockspergrid_y)
         
         cuda_decimate_to_grey[blockspergrid, threadsperblock](img, img_grey)
@@ -95,24 +96,24 @@ def compute_grey_images(img, method):
     else:
         raise NotImplementedError('Computation of gray level on GPU is only supported for FFT')
 
-def VST(image, alpha, iso, beta):
+def GAT(image, alpha, iso, beta):
     assert len(image.shape) == 2
     imshape_y, imshape_x = image.shape
     
     VST_image = cuda.device_array(image.shape, DEFAULT_NUMPY_FLOAT_TYPE)
 
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
-    blockspergrid_x = int(np.ceil(imshape_x/threadsperblock[1]))
-    blockspergrid_y = int(np.ceil(imshape_y/threadsperblock[0]))
+    blockspergrid_x = math.ceil(imshape_x/threadsperblock[1])
+    blockspergrid_y = math.ceil(imshape_y/threadsperblock[0])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
     
-    cuda_VST[blockspergrid, threadsperblock](image, VST_image,
+    cuda_GAT[blockspergrid, threadsperblock](image, VST_image,
                                              alpha, iso, beta)
     
     return VST_image
 
 @cuda.jit
-def cuda_VST(image, VST_image, alpha, iso, beta):
+def cuda_GAT(image, VST_image, alpha, iso, beta):
     x, y = cuda.grid(2)
     imshape_y,  imshape_x = image.shape
     
@@ -120,10 +121,10 @@ def cuda_VST(image, VST_image, alpha, iso, beta):
             0 <= x < imshape_x):
         return
     
-    VST = alpha*image[y, x]/iso + 3/8 * alpha**2 + beta
+    VST = alpha*image[y, x]/iso + 3/8 * alpha*alpha + beta
     VST = max(0, VST)
     
-    VST_image[y, x] = 2/alpha * iso**2 * math.sqrt(VST)
+    VST_image[y, x] = 2/alpha * iso*iso * math.sqrt(VST)
     
     
 
@@ -137,9 +138,9 @@ def frame_count_denoising_gauss(image, r_acc, params):
     max_frame_count = params['max frame count']
     
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS, 1)
-    blockspergrid_x = int(np.ceil(denoised.shape[1]/threadsperblock[1]))
-    blockspergrid_y = int(np.ceil(denoised.shape[0]/threadsperblock[0]))
-    blockspergrid_z = int(np.ceil(denoised.shape[2]/threadsperblock[2]))
+    blockspergrid_x = math.ceil(denoised.shape[1]/threadsperblock[1])
+    blockspergrid_y = math.ceil(denoised.shape[0]/threadsperblock[0])
+    blockspergrid_z = math.ceil(denoised.shape[2]/threadsperblock[2])
     blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
     
     cuda_frame_count_denoising_gauss[blockspergrid, threadsperblock](
@@ -202,9 +203,9 @@ def frame_count_denoising_median(image, r_acc, params):
     max_frame_count = params['max frame count']
     
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS, 1)
-    blockspergrid_x = int(np.ceil(denoised.shape[1]/threadsperblock[1]))
-    blockspergrid_y = int(np.ceil(denoised.shape[0]/threadsperblock[0]))
-    blockspergrid_z = int(np.ceil(denoised.shape[2]/threadsperblock[2]))
+    blockspergrid_x = math.ceil(denoised.shape[1]/threadsperblock[1])
+    blockspergrid_y = math.ceil(denoised.shape[0]/threadsperblock[0])
+    blockspergrid_z = math.ceil(denoised.shape[2]/threadsperblock[2])
     blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
     
     cuda_frame_count_denoising_median[blockspergrid, threadsperblock](

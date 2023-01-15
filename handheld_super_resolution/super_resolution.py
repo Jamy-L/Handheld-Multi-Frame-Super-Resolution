@@ -2,6 +2,15 @@
 """
 Created on Fri Sep 30 16:56:22 2022
 
+This script contains : 
+    - The implementation of Alg. 1, the main the body of the method
+    - The implementation of Alg. 2, where the function necessary to
+        compute the optical flow are called
+    - All the operations necessary before its call, such as whitebalance,
+        exif reading, and manipulations of the user's parameters.
+    - The call to post-processing operations (if enabled)
+
+
 @author: jamyl
 """
 
@@ -30,6 +39,30 @@ NOISE_MODEL_PATH = Path(os.getcwd()) / 'data'
 
 
 def main(ref_img, comp_imgs, options, params):
+    """
+    This is the implementation of Alg. 1: HandheldBurstSuperResolution.
+    Some part of Alg. 2: Registration are also integrated for optimisation.
+
+    Parameters
+    ----------
+    ref_img : Array[imshape_y, imshape_x]
+        Reference frame J_1
+    comp_imgs : Array[N-1, imshape_y, imshape_x]
+        Remaining frames of the burst J_2, ..., J_N
+        
+    options : dict
+        verbose options.
+    params : dict
+        paramters.
+
+    Returns
+    -------
+    num : device Array[imshape_y*s, imshape_y*s, 3]
+        generated RGB image WITHOUT any post-processing.
+    debug_dict : dict
+        Contains (if debugging is enabled) some debugging infos.
+
+    """
     verbose = options['verbose'] >= 1
     verbose_2 = options['verbose'] >= 2
     verbose_3 = options['verbose'] >= 3
@@ -55,8 +88,6 @@ def main(ref_img, comp_imgs, options, params):
     grey_method = params['grey method']
     
     if bayer_mode :
-        # TODO Half of the ref execution time is lost here, as the function is
-        # called for the first time.
         cuda_ref_grey = compute_grey_images(cuda_ref_img, grey_method)
         if verbose_3 :
             cuda.synchronize()
@@ -70,7 +101,7 @@ def main(ref_img, comp_imgs, options, params):
         current_time = time.perf_counter()
         print('\nBeginning Block Matching initialisation')
         
-    referencePyramid = init_block_matching(cuda_ref_grey, options, params['block matching'])
+    reference_pyramid = init_block_matching(cuda_ref_grey, options, params['block matching'])
     
     if verbose_2 :
         cuda.synchronize()
@@ -147,7 +178,7 @@ def main(ref_img, comp_imgs, options, params):
             current_time = time.perf_counter()
             print('Beginning block matching')
         
-        pre_alignment = align_image_block_matching(cuda_im_grey, referencePyramid, options, params['block matching'])
+        pre_alignment = align_image_block_matching(cuda_im_grey, reference_pyramid, options, params['block matching'])
         
         if verbose_2 :
             cuda.synchronize()
@@ -267,7 +298,7 @@ def main(ref_img, comp_imgs, options, params):
 
 def process(burst_path, options, custom_params=None):
     """
-    Process the burst
+    Processes the burst
 
     Parameters
     ----------
@@ -295,7 +326,7 @@ def process(burst_path, options, custom_params=None):
     
     # Get the list of raw images in the burst path
     raw_path_list = glob.glob(os.path.join(burst_path, '*.dng'))
-    assert raw_path_list != [], 'At least one raw .dng file must be present in the burst folder.'
+    assert len(raw_path_list) != 0, 'At least one raw .dng file must be present in the burst folder.'
 	# Read the raw bayer data from the DNG files
     for index, raw_path in enumerate(raw_path_list):
         with rawpy.imread(raw_path) as rawObject:
@@ -323,7 +354,7 @@ def process(burst_path, options, custom_params=None):
     white_balance = raw.camera_whitebalance
     
     CFA = tags['Image CFAPattern']
-    CFA = np.array([x for x in CFA.values]).reshape(2,2)
+    CFA = np.array(list(CFA.values)).reshape(2,2)
     
     ISO = int(str(tags['Image ISOSpeedRatings']))
     
@@ -455,8 +486,15 @@ def process(burst_path, options, custom_params=None):
     params["block matching"]["mode"] = 'grey'
     
     # deactivating robustness accumulation if robustness is disabled
-    params['accumulated robustness denoiser']['on'] &= params['robustness']['on']
+    params['accumulated robustness denoiser']['median']['on'] &= params['robustness']['on']
+    params['accumulated robustness denoiser']['gauss']['on'] &= params['robustness']['on']
+    params['accumulated robustness denoiser']['merge']['on'] &= params['robustness']['on']
     
+    params['accumulated robustness denoiser']['on'] = \
+        (params['accumulated robustness denoiser']['gauss']['on'] or
+         params['accumulated robustness denoiser']['median']['on'] or
+         params['accumulated robustness denoiser']['merge']['on'])
+     
     # if robustness aware denoiser is in merge mode, copy in merge params
     if params['accumulated robustness denoiser']['merge']['on']:
         params['merging']['accumulated robustness denoiser'] = params['accumulated robustness denoiser']['merge']
