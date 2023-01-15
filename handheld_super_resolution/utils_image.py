@@ -265,6 +265,24 @@ def bubble_sort(X):
         for j in range(N-i-1):
             if X[j] > X[j+1]:
                 X[j], X[j+1] = X[j+1], X[j]
+                
+@cuda.jit(device=True)
+def denoise_power_merge(r_acc, power_max, max_frame_count):
+    if r_acc <= max_frame_count:
+        return power_max
+    else:
+        return 1
+    
+@cuda.jit(device=True)
+def denoise_range_merge(r_acc, rad_max, max_frame_count):
+    rad_min = 1 # 3 by 3 window
+    
+    if r_acc <= max_frame_count:
+        return rad_max
+    else:
+        return rad_min
+    
+
             
                 
     
