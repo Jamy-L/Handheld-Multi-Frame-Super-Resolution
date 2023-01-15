@@ -51,7 +51,6 @@ params["scale"] = 2
 params['merging'] = {'kernel': 'handheld'}
 params['post processing'] = {'on':True,
                     'do sharpening' : True,
-                    'on':True,
                     'do color correction':True,
                     'do tonemapping':True,
                     'do gamma' : True,
@@ -62,9 +61,10 @@ params['post processing'] = {'on':True,
                     }
 params['robustness']  = {'on' : True}
 params['accumulated robustness denoiser'] = {'on': True,
-                                             'type': 'median',
+                                             'type': 'merge',
                                              'sigma max' : 1.5, # std of the gaussian blur applied when only 1 frame is merged
-                                             'max frame count' : 8 # number of merged frames above which no blurr is applied
+                                             'max frame count' : 8, # number of merged frames above which no blurr is applied
+                                             'radius max':4
                                              }
 params['debug'] = True
 
@@ -78,7 +78,7 @@ output_img, debug_dict = process(burst_path, options, params)
 print('Nan detected in output: ', np.sum(np.isnan(output_img)))
 print('Inf detected in output: ', np.sum(np.isinf(output_img)))
 
-plt.figure("output iso")
+plt.figure("output")
 
 plt.imshow(output_img, interpolation = 'none')
 plt.xticks([])

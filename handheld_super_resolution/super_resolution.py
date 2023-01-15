@@ -18,7 +18,7 @@ import rawpy
 from . import raw2rgb
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add
 from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame_count_denoising_median
-from .merge import merge, init_merge
+from .merge import merge, merge_ref
 from .kernels import estimate_kernels
 from .block_matching import init_block_matching, align_image_block_matching
 from .optical_flow import ICA_optical_flow, init_ICA
@@ -100,37 +100,20 @@ def main(ref_img, comp_imgs, options, params):
     
     if accumulate_r:
         accumulated_r = cuda.to_device(np.zeros(ref_local_stats.shape[:2]))
+
     
     
     if verbose_2 :
         cuda.synchronize()
         current_time = getTime(current_time, 'Local stats estimated (Total)')
 
-        
-    #___ Kernel estimation
-    if verbose_2 : 
-        cuda.synchronize()
-        current_time = time.perf_counter()
-        print('\nEstimating kernels')
-        
-    cuda_kernels = estimate_kernels(cuda_ref_img, options, params['merging'])
+    # zeros init of num and den
+    scale = params["scale"]
+    native_imshape_y, native_imshape_x = cuda_ref_img.shape
+    output_size = (round(scale*native_imshape_y), round(scale*native_imshape_x))
+    num = cuda.to_device(np.zeros(output_size+(3,), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
+    den = cuda.to_device(np.zeros(output_size+(3,), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
     
-    if verbose_2 : 
-        cuda.synchronize()
-        current_time = getTime(current_time, 'Kernels estimated (Total)')
-    
-    
-    #___ init merge
-    if verbose_2 :
-        cuda.synchronize()
-        current_time = time.perf_counter()
-        print('\nAccumulating ref Img')
-        
-    num, den = init_merge(cuda_ref_img, cuda_kernels, options, params["merging"])
-    
-    if verbose_2 : 
-        cuda.synchronize()
-        getTime(current_time, 'Ref Img accumulated (Total)')
     if verbose :
         cuda.synchronize()
         getTime(t1, '\nRef Img processed (Total)')
@@ -235,9 +218,35 @@ def main(ref_img, comp_imgs, options, params):
         if debug_mode : 
             debug_dict['robustness'].append(cuda_robustness.copy_to_host())
     
-    if verbose_2 :
+    #___ Ref kernel estimation
+    if verbose_2 : 
         cuda.synchronize()
         current_time = time.perf_counter()
+        print('\nEstimating kernels')
+        
+    cuda_kernels = estimate_kernels(cuda_ref_img, options, params['merging'])
+    
+    if verbose_2 : 
+        cuda.synchronize()
+        current_time = getTime(current_time, 'Kernels estimated (Total)')
+    
+    #___ Merge ref
+    if verbose_2 :
+        cuda.synchronize()
+        print('\nAccumulating ref Img')
+    
+    if accumulate_r:     
+        merge_ref(cuda_ref_img, cuda_kernels,
+                  num, den,
+                  options, params["merging"], accumulated_r)
+    else:
+        merge_ref(cuda_ref_img, cuda_kernels,
+                  num, den,
+                  options, params["merging"])
+    
+    if verbose_2 : 
+        cuda.synchronize()
+        getTime(current_time, 'Ref Img accumulated (Total)')
         
     # num is outwritten into num/den
     divide(num, den)
@@ -448,6 +457,11 @@ def process(burst_path, options, custom_params=None):
     # deactivating robustness accumulation if robustness is disabled
     params['accumulated robustness denoiser']['on'] &= params['robustness']['on']
     
+    # if robustness aware denoiser is in merge mode, copy in merge params
+    if params['accumulated robustness denoiser']['merge']['on']:
+        params['merging']['accumulated robustness denoiser'] = params['accumulated robustness denoiser']['merge']
+    else:
+        params['merging']['accumulated robustness denoiser'] = {'on' : False}
     
     
         
@@ -460,19 +474,23 @@ def process(burst_path, options, custom_params=None):
     
     
     #___ Performing frame count aware denoising if enabled
-    frame_count_denoise = params['accumulated robustness denoiser']['on']
+    median_params = params['accumulated robustness denoiser']['median']
+    gauss_params = params['accumulated robustness denoiser']['gauss']
     
-    if frame_count_denoise : 
-        median = params['accumulated robustness denoiser']['type'] == 'median'
+    median = median_params['on']
+    gauss = gauss_params['on']
+    post_frame_count_denoise = (median or gauss)
+    
+    if post_frame_count_denoise : 
         if verbose_2:
             print('-- Robustness aware bluring')
         
         if median:
             handheld_output = frame_count_denoising_median(handheld_output, debug_dict['accumulated robustness'],
-                                                           params['accumulated robustness denoiser'])
-        else:
+                                                           median_params)
+        if gauss:
             handheld_output = frame_count_denoising_gauss(handheld_output, debug_dict['accumulated robustness'],
-                                                           params['accumulated robustness denoiser'])
+                                                          gauss_params)
 
 
     #___ post processing

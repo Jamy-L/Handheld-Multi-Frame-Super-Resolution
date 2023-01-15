@@ -13,41 +13,49 @@ import numpy as np
 from numba import uint8, cuda
 
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, EPSILON_DIV, DEFAULT_THREADS
+from .utils_image import denoise_power_merge, denoise_range_merge
 from .linalg import quad_mat_prod, invert_2x2, interpolate_cov
 
-def init_merge(ref_img, kernels, options, params):
+def merge_ref(ref_img, kernels, num, den, options, params, acc_rob=None):
     verbose = options['verbose']
     scale = params['scale']
     
     CFA_pattern = cuda.to_device(params['exif']['CFA Pattern'])
     bayer_mode = params['mode'] == 'bayer'
     act = params['kernel'] == 'act'
-        
-
-    native_im_size = ref_img.shape
-    # casting to integer to account for floating scale
-    output_size = (round(scale*native_im_size[0]), round(scale*native_im_size[1]))
-
-    num = cuda.device_array(output_size+(3,), dtype = DEFAULT_NUMPY_FLOAT_TYPE)
-    den = cuda.device_array(output_size+(3,), dtype = DEFAULT_NUMPY_FLOAT_TYPE)
-
+    
+    robustness_denoise = params['accumulated robustness denoiser']['on']
+    # numba is strict on types and dimension : let's use a consistent object
+    # for acc_rob even when it is not used.
+    if robustness_denoise:
+        rad_max = params['accumulated robustness denoiser']['rad max']
+        max_multiplier = params['accumulated robustness denoiser']['max multiplier']
+        max_frame_count = params['accumulated robustness denoiser']['max frame count']
+    else:
+        acc_rob = cuda.device_array((1,1), DEFAULT_NUMPY_FLOAT_TYPE)
+        rad_max = 0
+        max_multiplier = 0.
+        max_frame_count = 0
+    
+    
+    output_shape_y, output_shape_x, _ = num.shape
 
     # dispatching threads. 1 thread for 1 output pixel
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
     
-    blockspergrid_x = int(np.ceil(output_size[1]/threadsperblock[1]))
-    blockspergrid_y = int(np.ceil(output_size[0]/threadsperblock[0]))
+    blockspergrid_x = int(np.ceil(output_shape_x/threadsperblock[1]))
+    blockspergrid_y = int(np.ceil(output_shape_y/threadsperblock[0]))
     blockspergrid = (blockspergrid_x, blockspergrid_y)
     
     accumulate_ref[blockspergrid, threadsperblock](
         ref_img, kernels, bayer_mode, act, scale, CFA_pattern,
-        num, den)
+        num, den, acc_rob, robustness_denoise, max_frame_count, rad_max, max_multiplier)
     
-    return num, den
     
-@cuda.jit(cache=True)
+@cuda.jit
 def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
-                   num, den):
+                   num, den, acc_rob,
+                   robustness_denoise, max_frame_count, rad_max, max_multiplier):
     """
 
 
@@ -156,12 +164,26 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
             cov_i[0, 1] = 0
             cov_i[1, 0] = 0
             cov_i[1, 1] = 1
-                    
+            
+    
+    # fetching acc robustness if required
+    # The robustness of the center of the patch is picked through neirest neigbhoor interpolation
+    if robustness_denoise : 
+        local_acc_r = acc_rob[round(grey_pos[0]),
+                              round(grey_pos[1])]
+        
+        additional_denoise_power = denoise_power_merge(local_acc_r, max_multiplier, max_frame_count)
+        rad = denoise_range_merge(local_acc_r, rad_max, max_frame_count)
+        
+    else:
+        additional_denoise_power = 1
+        rad = 1     
+
         
     center_x = round(coarse_ref_sub_pos[1])
     center_y = round(coarse_ref_sub_pos[0])
-    for i in range(-1, 2):
-        for j in range(-1, 2):
+    for i in range(-rad, rad+1):
+        for j in range(-rad, rad+1):
             pixel_idx = center_x + j
             pixel_idy = center_y + i
             
@@ -190,6 +212,12 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
                     y = max(0, quad_mat_prod(cov_i, dist_x, dist_y))
                     # y can be slightly negative because of numerical precision.
                     # I clamp it to not explode the error with exp
+                    
+                
+                # this is equivalent to multiplying the covariance,
+                # but at the cost of one scalar operation (instead of 4)
+                y/= additional_denoise_power
+                
                 if bayer_mode : 
                     w = math.exp(-0.5*y)
                 else:
@@ -198,11 +226,18 @@ def accumulate_ref(ref_img, covs, bayer_mode, act, scale, CFA_pattern,
                 
                 val[channel] += c*w
                 acc[channel] += w
-                    
-
-    for chan in range(n_channels):
-        num[output_pixel_idy, output_pixel_idx, chan] = val[chan]
-        den[output_pixel_idy, output_pixel_idx, chan] = acc[chan]
+    
+    if robustness_denoise and local_acc_r < max_frame_count:
+        # Overwritting values to enforce single frame
+        # demosaicing        
+        for chan in range(n_channels):
+            num[output_pixel_idy, output_pixel_idx, chan] = val[chan]
+            den[output_pixel_idy, output_pixel_idx, chan] = acc[chan]
+        
+    else:
+        for chan in range(n_channels):
+            num[output_pixel_idy, output_pixel_idx, chan] += val[chan]
+            den[output_pixel_idy, output_pixel_idx, chan] += acc[chan]
           
     
 def merge(comp_img, alignments, covs, r, num, den,
