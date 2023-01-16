@@ -11,6 +11,8 @@
 - Numba with a working CUDA environment (it may be possible to use [the numba CUDA simulator](https://numba.readthedocs.io/en/stable/cuda/simulator.html) if you have no GPU, but it has not been tested).
 - pyTorch with a working CUDA environment.
 - [exifread](https://pypi.org/project/ExifRead/) and [rawpy](https://pypi.org/project/rawpy/) to read .dng files.
+- Noise profile curves. The curves included in the repo are for the camera of the Google Pixel 4a. They may be used for other cameras, but generating the adapted noise model using <code>monte_carlo_simulation.py()</code> would be preferable.
+- An NVIDIA GPU with a [compute capability](https://developer.nvidia.com/cuda-gpus) of at least 2.0. This condition may be removed by optimizing further the block matching module.
 
 
 ## Calling the pipeline
@@ -66,5 +68,12 @@ The list of all the parameters, their default values and their relation to the S
 |k_shrink||
 |k_stretch||
 
+### Others
+The default floating number representation and the default threads per block number can be modified in <code>utils.py</code>.
+
 ### Accumulated robustness denoiser
 3 options are available : Gaussian filter during post-processing, median filter during post-processing or filtering during the merge of the reference image (See section 23 of the IPOL article). All of them can be turned on or off and parametrized freely, although the last one gave the best results.
+
+### Known Issues
+- The threshold functions and all the hyper-parameters mentionned in the IPOL article have only been partially tweaked : better results are expected with an in depth optimization.
+- For images whose estimated SNR is under 14, the tile size should be 64 but the block matching module cannot handle that.
