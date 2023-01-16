@@ -19,10 +19,17 @@ def get_params(SNR):
     else:
         Ts = 16
         
+    # TODO this could be adressed by reworking the block matching module
+    if Ts > 32:
+        Ts = 32
+        warnings.warn("Warning.... Tile sizes of more than 32 cannot be \
+                      processed by the bloc matching module at the moment.\
+                      Falling back to Ts=32") 
+        
     
     params = {'scale' : 1, # upscaling factor ( >=1 )
               'mode' : 'bayer', # 'bayer' or 'grey' (input image type)
-              'grey method' : 'FFT',
+              'grey method' : 'FFT', # method to compute grey image for alignment. Only FFT is supported !
               'debug': False, # when True, a dict is returned with debug infos.
               'block matching': {
                     'tuning': {

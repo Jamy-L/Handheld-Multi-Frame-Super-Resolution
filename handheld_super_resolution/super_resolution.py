@@ -30,7 +30,7 @@ from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame
 from .merge import merge, merge_ref
 from .kernels import estimate_kernels
 from .block_matching import init_block_matching, align_image_block_matching
-from .optical_flow import ICA_optical_flow, init_ICA
+from .ICA import ICA_optical_flow, init_ICA
 from .robustness import init_robustness, compute_robustness
 from .params import check_params_validity, get_params, merge_params
 
@@ -296,7 +296,7 @@ def main(ref_img, comp_imgs, options, params):
     return num, debug_dict
 
 
-def process(burst_path, options, custom_params=None):
+def process(burst_path, options=None, custom_params=None):
     """
     Processes the burst
 
@@ -315,6 +315,8 @@ def process(burst_path, options, custom_params=None):
         The processed image
 
     """
+    if options is None:
+        options = {'verbose' : 0}
     currentTime, verbose_1, verbose_2 = (time.perf_counter(),
                                          options['verbose'] >= 1,
                                          options['verbose'] >= 2)
@@ -479,11 +481,6 @@ def process(burst_path, options, custom_params=None):
         params["merging"]["mode"] = params['mode']
     if 'mode' not in params['accumulated robustness denoiser'].keys():
         params['accumulated robustness denoiser']["mode"] = params['mode']
-        
-    params['kanade']['grey method'] = params['grey method']
-    
-    # systematically grey, so we can control internally how grey is obtained
-    params["block matching"]["mode"] = 'grey'
     
     # deactivating robustness accumulation if robustness is disabled
     params['accumulated robustness denoiser']['median']['on'] &= params['robustness']['on']

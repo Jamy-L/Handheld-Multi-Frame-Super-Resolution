@@ -56,7 +56,7 @@ def compute_grey_images(img, method):
 
     Returns
     -------
-    img_gre : device Array[:, :]
+    img_grey : device Array[:, :]
         Corresponding grey scale image G
 
     """
@@ -97,6 +97,26 @@ def compute_grey_images(img, method):
         raise NotImplementedError('Computation of gray level on GPU is only supported for FFT')
 
 def GAT(image, alpha, iso, beta):
+    """
+    Generalized Ascombe Transform
+
+    Parameters
+    ----------
+    image : TYPE
+        DESCRIPTION.
+    alpha : TYPE
+        DESCRIPTION.
+    iso : TYPE
+        DESCRIPTION.
+    beta : TYPE
+        DESCRIPTION.
+
+    Returns
+    -------
+    VST_image : TYPE
+        DESCRIPTION.
+
+    """
     assert len(image.shape) == 2
     imshape_y, imshape_x = image.shape
     
