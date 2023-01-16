@@ -2,6 +2,11 @@
 """
 Created on Thu Jan  5 18:10:18 2023
 
+This is an example script showing how to call the pipeline and specify
+the paramters.
+
+Make sure that the example bursts have been downloaded from the release version !!
+
 
 @author: jamyl
 """

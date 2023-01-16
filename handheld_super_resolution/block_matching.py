@@ -111,10 +111,7 @@ def align_image_block_matching(img, referencePyramid, options, params, debug=Fal
     # Initialization.
     h, w = img.shape  # height and width should be identical for all images
     
-    if params['mode'] == 'bayer':
-        tileSize = 2 * params['tuning']['tileSizes'][0]
-    else:
-        tileSize = params['tuning']['tileSizes'][0]
+    tileSize = params['tuning']['tileSizes'][0]
     # if needed, pad images with zeros so that getTiles contains all image pixels
     paddingPatchesHeight = (tileSize - h % (tileSize)) * (h % (tileSize) != 0)
     paddingPatchesWidth = (tileSize - w % (tileSize)) * (w % (tileSize) != 0)
@@ -215,32 +212,6 @@ def align_on_a_level(referencePyramidLevel, alternatePyramidLevel, options, upsa
     alignment for ICA without any casting from int to float, which would be hard
     to perform on GPU : Numba is completely powerless and cannot make the
     casting.
-
-    Parameters
-    ----------
-    referencePyramidLevel : device Array
-        DESCRIPTION.
-    alternatePyramidLevel : device Array
-        DESCRIPTION.
-    options : TYPE
-        DESCRIPTION.
-    upsamplingFactor : int
-        DESCRIPTION.
-    tileSize : int
-        DESCRIPTION.
-    previousTileSize : int
-        DESCRIPTION.
-    searchRadius : int
-        DESCRIPTION.
-    distance : str
-        DESCRIPTION.
-    previousAlignments : device Array
-        DESCRIPTION.
-
-    Returns
-    -------
-    upsampledAlignments : TYPE
-        DESCRIPTION.
 
     """
     
@@ -343,6 +314,7 @@ def cuda_upsample_alignments(referencePyramidLevel, alternatePyramidLevel, upsam
     subtile_pos_x = subtile_x*tileSize
     
     # copying ref patch into local memory, because it needs to be read 3 times
+    # TODO this should be rewritten to allow patchs bigger than 32
     local_ref = cuda.local.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
     for i in range(tileSize):
         for j in range(tileSize):
@@ -484,6 +456,7 @@ def cuda_L1_local_search(referencePyramidLevel, alternatePyramidLevel,
     patch_pos_x = tile_x * tileSize
     patch_pos_y = tile_y * tileSize
     
+    # TODO this should be rewritten to allow patchs bigger than 32
     local_ref = cuda.local.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
     for i in range(tileSize):
         for j in range(tileSize):
@@ -538,6 +511,7 @@ def cuda_L2_local_search(referencePyramidLevel, alternatePyramidLevel,
     patch_pos_x = tile_x * tileSize
     patch_pos_y = tile_y * tileSize
     
+    # TODO this should be rewritten to allow patchs bigger than 32
     local_ref = cuda.local.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
     for i in range(tileSize):
         for j in range(tileSize):

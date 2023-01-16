@@ -10,11 +10,11 @@ import glob
 # import logging
 
 import numpy as np
-from math import modf, sqrt, exp
+from math import sqrt
 import cv2
 import torch as th
 import torch.nn.functional as F
-from numba import vectorize, guvectorize, uint8, uint16, float32, float64, jit, njit, cuda, int32
+from numba import cuda, float32
 import exifread
 import rawpy
 import matplotlib.pyplot as plt
@@ -26,19 +26,6 @@ from plot_flow import flow2img
 from handheld_super_resolution.utils import clamp
 from handheld_super_resolution.utils_image import compute_grey_images
 from handheld_super_resolution.linalg import get_eighen_elmts_2x2
-
-
-
-def flat(x):
-    return 1-np.exp(-x/1000)
-
-
-def cfa_to_grayscale(raw_img):
-    return (raw_img[..., 0::2, 0::2] + 
-            raw_img[..., 1::2, 0::2] + 
-            raw_img[..., 0::2, 1::2] + 
-            raw_img[..., 1::2, 1::2])/4
-
 
 #%%
 options = {'verbose' : 1}
@@ -134,9 +121,7 @@ colors = "RGB"
 bayer = CFA
 pattern = colors[bayer[0,0]] + colors[bayer[0,1]] + colors[bayer[1,0]] + colors[bayer[1,1]]
 
-#%%
-# menon2007, demosaicnet
-# bicubic+demosaicnet, VSR+demosaicnet
+#%% Demosaicing using Menon 2007
 
 # base = colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(ref_img, pattern=pattern)  # pattern is [[G,R], [B,G]] for the Samsung G8
 base = colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(ref_img, pattern=pattern)
@@ -147,7 +132,7 @@ plt.imshow(postprocessed_menon, interpolation = 'none')
 plt.xticks([])
 plt.yticks([])
 
-#%% mosaicnet
+#%% Demosaicing using demosaicnet
 import demosaicnet
 
 demosaicnet_bayer = demosaicnet.BayerDemosaick()
@@ -177,11 +162,12 @@ postprocessed_mosaicnet = raw2rgb.postprocess(raw_ref_img, mosaicnet_output, xyz
 # plt.yticks([])
     
 
-#%% Upscale
+#%% Upscale with bicubic
+
 plt.figure('demosaicnet bicubic')
 postprocessed_bicubic = cv2.resize(postprocessed_mosaicnet, None, fx = params['scale'], fy = params['scale'], interpolation=cv2.INTER_CUBIC)
 plt.imshow(postprocessed_bicubic)
-#%%
+#%% Upscale with nearest neighboor
 plt.figure('demosaicnet nearest')
 postprocessed_nearest = cv2.resize(postprocessed_mosaicnet, None, fx = params["scale"], fy = params["scale"], interpolation=cv2.INTER_NEAREST)
 plt.imshow(postprocessed_nearest)
@@ -309,39 +295,14 @@ blockspergrid = (blockspergrid_x, blockspergrid_y)
 cuda_estimate_kernel_elements[blockspergrid, threadsperblock](cuda_full_grads, l, A, D,
                               k_detail, k_denoise, D_th, D_tr)
 
-#%%
+#%% Plot kernel elements
 
 l1 = l[:,:,0].copy_to_host()
 plt.figure('l1')
 plt.title('l1')
 plt.imshow(l1, vmin= 0.5, vmax=3)
 plt.colorbar()
-#%%
-plt.figure('hist l1')
-plt.hist(l1.reshape(l1.size), range=(0, 5), bins=50)
-#%%
-D_tr = 1
-D_th = 0.71
 
-plt.figure('D')
-plt.title('D')
-plt.imshow(np.clip(1 - np.sqrt(l1)/D_tr + D_th, 0, 1))
-plt.colorbar()
-#%%
-
-D_tr = 1
-D_th = 0.71
-L = np.linspace(0, 1.5*(D_tr + D_tr*D_th)**2, 300)
-Y = np.clip(1-np.sqrt(L)/D_tr + D_th, 0, 1)
-plt.figure('D curve')
-plt.plot(L, Y)
-plt.xlabel('Lambda 1')
-plt.ylabel('D')
-
-
-
-
-#%%
 plt.figure('A')
 plt.imshow(A)
 plt.title('A')
@@ -351,8 +312,6 @@ plt.figure('D')
 plt.imshow(D)
 plt.title('D')
 plt.colorbar()
-
- 
 
 plt.figure('gradx')
 plt.title('gradx')
@@ -365,37 +324,12 @@ plt.imshow(cuda_full_grads[:,:,1])
 plt.colorbar()     
 
 
-#%% eighen vectors
-e1 = covs[0,:,:,:,0]
-e2 = covs[0,:,:,:,1]
-
-grey_ref_img = (ref_img[::2,::2,] + ref_img[1::2, ::2] + ref_img[::2, 1::2] + ref_img[1::2, 1::2])/4
-imsize = grey_ref_img.shape
-
-# quivers for eighenvectors
-# Lower res because pyplot's quiver is really not made for that (=slow)
-plt.figure('quiver')
-scale = 5*1e1
-downscale_coef = 4
-ix, iy = 0, 0
-patchx, patchy = int(imsize[1]/downscale_coef), int(imsize[0]/downscale_coef)
-plt.imshow(grey_ref_img[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1)], cmap="gray")
-
-# minus sign because pyplot takes y axis growing towards top. but we need the opposite
-plt.quiver(e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
-            -e1[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1],width=0.001,linewidth=0.0001, scale=scale)
-plt.quiver(e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 0],
-            -e2[iy*patchy:patchy*(iy+1), ix*patchx:patchx*(ix + 1), 1], width=0.001,linewidth=0.0001, scale=scale, color='b')
-
-
-
-
-
 #%% plot flow
 maxrad = 10
+flow = debug_dict['flow']
 
 for image_index in range(comp_images.shape[0]):
-    flow_image = flow2img([image_index], maxrad)
+    flow_image = flow2img(flow[image_index], maxrad)
     plt.figure("flow {}".format(image_index))
     plt.imshow(flow_image)
 
@@ -404,124 +338,19 @@ X = np.linspace(-maxrad, maxrad, 1000)
 Y = np.linspace(-maxrad, maxrad, 1000)
 Xm, Ym = np.meshgrid(X, Y)
 Z = np.stack((Xm, Ym)).transpose(1,2,0)
-# Z = np.stack((-Z[:,:,1], -Z[:,:,0]), axis=-1)
+
 flow_image = flow2img(Z, maxrad)
 plt.figure("wheel")
 plt.imshow(flow_image)
 
-#%% kernels
-def plot_local_flow(pos, upscaled_flow):
-    scale = 1
-    plt.figure("flow in (x = {}, y = {})".format(pos[1],pos[0]))
-    for image_id in range(upscaled_flow.shape[0]):
-        plt.arrow(0, 0,
-                  upscaled_flow[image_id, pos[0], pos[1], 0],
-                  upscaled_flow[image_id, pos[0], pos[1], 1],
-                  width=0.01)
-    plt.gca().invert_yaxis()
-        
-    
-    
-    
 
-def plot_merge(covs, Dist, pos):
-    reframed_posx, x = modf(pos[1]/(2*params['scale'])) # these positions are between 0 and 1
-    reframed_posy, y = modf(pos[0]/(2*params['scale']))
-    x=int(x); y=int(y)
-    
-    int_cov = (covs[0, y, x]*(1 - reframed_posx)*(1 - reframed_posy) +
-               covs[0, y, x+1]*(reframed_posx)*(1 - reframed_posy) + 
-               covs[0, y+1, x]*(1 - reframed_posx)*(reframed_posy) + 
-               covs[0, y+1, y+1]*reframed_posx*reframed_posy)
-    
-    cov_i = np.linalg.inv(int_cov*4*params['scale']**2)
-    print(int_cov.shape)
-    
-
-    
-    
-    L = np.linspace(-5, 5, 100)
-    Xm, Ym = np.meshgrid(L,L)
-    Z = np.empty_like(Xm)
-    Z = cov_i[0,0] * Xm**2 + (cov_i[1, 0] + cov_i[0, 1])*Xm*Ym + cov_i[1, 1]*Ym**2
-    plt.figure("merge in (x = {}, y = {})".format(pos[1],pos[0]))
-    plt.pcolor(Xm, Ym, np.exp(-Z/2), vmin = 0, vmax=1)
-    plt.gca().invert_yaxis()
-    plt.scatter([0], [0], c='k', marker ='o')
-    
-    
-    
-    r_index_x = np.where(bayer ==0)[0][0]
-    r_index_y = np.where(bayer ==0)[1][0]
-    
-    b_index_x = np.where(bayer ==2)[0][0]
-    b_index_y = np.where(bayer ==2)[1][0]
-    
-    colors = ['r', 'g', 'b']
-    
-    
-    for image in range(Dist.shape[0]):
-        D = Dist[(image,) + pos]
-        dist = abs(D[0,1] - D[1,1]) # for scale
-        
-        
-        if D[0,2] != 1 :
-            y = 0
-            color = D[0, 2]
-        else :
-            y = 1
-            color = D[1, 2]
-        
-        if color == 0:
-            bayer_index_x = r_index_x
-            bayer_index_y = r_index_y
-        else :
-            bayer_index_x = b_index_x
-            bayer_index_y = b_index_y
-        
-        for idx in range(-1,2):
-            for idy in range(-1, 2):
-                x = D[0,1] + idx*dist
-                y = D[0,0] + idy*dist
-                
-                bayer_idx = (bayer_index_x + idx)%2
-                bayer_idy = (bayer_index_y + idy)%2
-                c = colors[CFA[bayer_idy, bayer_idx]]
-                d = np.array([x, y])
-                plt.scatter(x,y,c=c,marker='x')            
-
-    
-
-    plt.colorbar()
-    
-    
-
-#%% robustness
-
-# for im_id in range(R.shape[0]):
-#     plt.figure('r '+str(im_id))
-#     plt.imshow(r[im_id], vmax=1, vmin = 0, cmap = "gray", interpolation='none')
-
-
-r = debug_dict['robustness']
+#%% Visualizing robustness
 
 plt.figure('accumulated r')
-r_acc = np.sum(r, axis = 0)
+r_acc = debug_dict['accumulated robustness']
 plt.imshow(r_acc, cmap = "gray", interpolation='none')
-# clb=plt.colorbar()
-# clb.ax.tick_params() 
-# clb.ax.set_title('Accumulated\nrobustness',fontsize=15)
+clb=plt.colorbar()
+clb.ax.tick_params() 
+clb.ax.set_title('Accumulated\nrobustness',fontsize=15)
 plt.xticks([])
 plt.yticks([])
-
-#%% D curve
-
-D_tr = params["merging"]['tuning']['D_tr']
-D_th = params["merging"]['tuning']['D_th']
-
-L = np.linspace(0, 1.5*(D_tr + D_tr*D_th)**2, 300)
-Y = np.clip(1-np.sqrt(L)/D_tr + D_th, 0, 1)
-plt.figure('D curve')
-plt.plot(L, Y)
-plt.xlabel('Lambda 1')
-plt.ylabel('D')
