@@ -1,3 +1,0 @@
-cv2==4.6.0
-colour_demosaicing==0.2.2
-matplotlib==3.5.2
