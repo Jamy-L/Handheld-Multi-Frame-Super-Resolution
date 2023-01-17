@@ -1,7 +1,7 @@
 # Handheld Multi-Frame Super-Resolution
  This repository contains a non official implementation of the method “Handheld Multi-Frame Super-Resolution algorithm” by Wronski et al. (used in the Google Pixel 3 camera), which performs simultaneously multi-image super-resolution demosaicking and denoising from a burst of images.
  
- The original paper and materials can be found [here](https://sites.google.com/view/handheld-super-res/), whereas our publication detailing the implementation is available [on the IPOL website]((https://www.ipol.im/pub/pre/460)). TODO add the link
+ The original paper and materials can be found [here](https://sites.google.com/view/handheld-super-res/), whereas our publication detailing the implementation is available [on the IPOL website](https://www.ipol.im/pub/pre/460).
  It only serves a scientific and educational purpose, and was not optimized to minimize the execution time or the memory usage. On high-end consumer grade GPUs, a 12MP burst of 20 images is expected to generate a 48MP image within less than 4 seconds (without counting Numba's just-in-time compilation).
 
 ![image](https://user-images.githubusercontent.com/46826148/212689891-603e0502-c817-4623-9134-3e7522c72680.png)
