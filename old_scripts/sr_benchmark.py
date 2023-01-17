@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Sun Oct  9 15:40:46 2022
-
+Created on Sun Oct  9 18:18:03 2022
 @author: jamyl
 """
 import os
@@ -26,13 +25,7 @@ logger = logging.getLogger()
 logger.setLevel(logging.WARNING)
 
 
-# numba_logger = logging.getLogger('numba')
-# numba_logger.setLevel(logging.WARNING)
-# plt_logger = logging.getLogger('plt')
-# plt_logger.setLevel(logging.WARNING)
-
-
-DATASET_PATH = Path("P:/Kodak")
+DATASET_PATH = Path("P:/DIV2K_valid_HR/DIV2K_valid_HR")
 
 #%% synthetic burst functions
 
@@ -125,7 +118,6 @@ def single2lrburst(image, burst_size, downsample_factor=1, transformation_params
                                 random.uniform(-max_translation, max_translation))
 
             max_rotation = transformation_params.get('max_rotation', 0.0)
-            #theta = 5
             theta = random.uniform(-max_rotation, max_rotation)
 
             max_shear = transformation_params.get('max_shear', 0.0)
@@ -194,7 +186,7 @@ transformation_params = {'max_translation':3,
                           'max_ar_factor': 0,
                           'max_rotation': 0}
 
-params = {'scale' : 1,
+params = {'scale' : 2,
           'mode' : 'bayer', # 'bayer' or grey if something else 
           'grey method' : 'FFT',
           'debug': False, # when True, a dict is returned with tensors.
@@ -219,7 +211,7 @@ params = {'scale' : 1,
             'robustness' : {
                 'exif':{'CFA Pattern':CFA},
                 'mode':'bayer',
-                'on':True,
+                'on':False,
                 'tuning' : {
                     'tileSize': 16,
                     't' : 0.12,            # 0.12
@@ -232,7 +224,7 @@ params = {'scale' : 1,
                 'exif':{'CFA Pattern':CFA},
                 'mode':'bayer',
                 'kernel':'handheld',
-                'scale': 1,
+                'scale': 2,
                 'tuning': {
                     'tileSize': 16,
                     'k_detail' : 0.33, # [0.25, ..., 0.33]
@@ -249,68 +241,50 @@ options = {'verbose' : 0}
 
 N_images = len(os.listdir(DATASET_PATH))
 PSNR = {"handheld": np.zeros(N_images),
-        "malvar" : np.zeros(N_images),
-        "bilinear" : np.zeros(N_images),
-        "mosaicnet" : np.zeros(N_images)}
+        "bicubic" : np.zeros(N_images)}
 
 SSIM = {"handheld": np.zeros(N_images),
-        "malvar" : np.zeros(N_images),
-        "bilinear" : np.zeros(N_images),
-        "mosaicnet" : np.zeros(N_images)}
+        "bicubic" : np.zeros(N_images)}
 
 demosaicnet_bayer = demosaicnet.BayerDemosaick()
 
-#%% 
 for im_id, filename in tqdm(enumerate(os.listdir(DATASET_PATH)), total=N_images):
     impath = DATASET_PATH/filename
     
     ground_truth = plt.imread(impath.as_posix()).astype(np.float64)
-    #  ensuring the image can be decimated into Bayer
     if ground_truth.shape[0]%2 == 1:
         ground_truth = ground_truth[:-1,:]
     if ground_truth.shape[1]%2 == 1:
         ground_truth = ground_truth[:,:-1]
         
-    burst, _ = single2lrburst(ground_truth, 15, downsample_factor=1, transformation_params=transformation_params)
+    burst, _ = single2lrburst(ground_truth, 15, downsample_factor=2, transformation_params=transformation_params)
     dec_burst = decimate(burst).astype(np.float32)
-        
+    
+    handheld_output = main(dec_burst[0], dec_burst[1:], options, params).astype(np.float64)
     with torch.no_grad():
         mosaic = demosaicnet.bayer(np.transpose(burst[0], [2, 0, 1]))
         mosaicnet_output = demosaicnet_bayer(torch.from_numpy(mosaic).unsqueeze(0)).squeeze(0).cpu().numpy()
     mosaicnet_output = np.clip(mosaicnet_output, 0, 1).transpose(1,2,0).astype(np.float64)
-    # mosaicnet is outputing a cropped image. We need to crop ground truth
-    crop = int((ground_truth.shape[0] - mosaicnet_output.shape[0])/2)
     
-    handheld_output = main(dec_burst[0], dec_burst[1:], options, params).astype(np.float64)
-    malvar_output = colour_demosaicing.demosaicing_CFA_Bayer_Malvar2004(dec_burst[0], pattern='BGGR')
-    bilinear_output = colour_demosaicing.demosaicing_CFA_Bayer_bilinear(dec_burst[0], pattern='BGGR')
+    bicubic_output = cv2.resize(mosaicnet_output, None, fx = params["merging"]['scale'], fy = params["merging"]['scale'], interpolation=cv2.INTER_CUBIC)
+    
+    PSNR["handheld"][im_id] = computePSNR(ground_truth, handheld_output)
+    SSIM["handheld"][im_id] = ssim(ground_truth, handheld_output, channel_axis=2)
 
-    
-    PSNR["handheld"][im_id] = computePSNR(ground_truth[crop:-crop, crop:-crop], handheld_output[crop:-crop, crop:-crop])
-    PSNR["malvar"][im_id] = computePSNR(ground_truth[crop:-crop, crop:-crop], malvar_output[crop:-crop, crop:-crop])
-    PSNR["bilinear"][im_id] = computePSNR(ground_truth[crop:-crop, crop:-crop], bilinear_output[crop:-crop, crop:-crop])
-    
-    SSIM["handheld"][im_id] = ssim(ground_truth[crop:-crop, crop:-crop], handheld_output[crop:-crop, crop:-crop], channel_axis=2)
-    SSIM["malvar"][im_id] = ssim(ground_truth[crop:-crop, crop:-crop], malvar_output[crop:-crop, crop:-crop], channel_axis=2)
-    SSIM["bilinear"][im_id] = ssim(ground_truth[crop:-crop, crop:-crop], bilinear_output[crop:-crop, crop:-crop], channel_axis=2)
-    
-    PSNR["mosaicnet"][im_id] = computePSNR(ground_truth[crop:-crop, crop:-crop], mosaicnet_output)
-    SSIM["mosaicnet"][im_id] = ssim(ground_truth[crop:-crop, crop:-crop], mosaicnet_output, channel_axis=2)
-    
+    # mosaicnet is outputing a cropped image. We need to crop ground truth
+    crop = int((ground_truth.shape[0] - bicubic_output.shape[0])/2)
+    PSNR["bicubic"][im_id] = computePSNR(ground_truth[crop:-crop, crop:-crop], bicubic_output)
+    SSIM["bicubic"][im_id] = ssim(ground_truth[crop:-crop, crop:-crop], bicubic_output, channel_axis=2)
     
     print('\nPSNR')
     print('\tHandheld : {}'.format( PSNR["handheld"][im_id]))
-    print('\tmalvar : {}'.format( PSNR["malvar"][im_id]))
-    print('\tbilinear : {}'.format( PSNR["bilinear"][im_id]))
-    print('\tmosaicnet : {}'.format( PSNR["mosaicnet"][im_id]))
-    
+    print('\tbicubic : {}'.format( PSNR["bicubic"][im_id]))
+
     print('\nSSIM')
     print('\tHandheld : {}'.format( SSIM["handheld"][im_id]))
-    print('\tmalvar : {}'.format( SSIM["malvar"][im_id]))
-    print('\tbilinear : {}'.format( SSIM["bilinear"][im_id]))
-    print('\tmosaicnet : {}'.format( SSIM["mosaicnet"][im_id]))
-    
+    print('\tbicubic : {}'.format( SSIM["bicubic"][im_id]))
 
+    
 #%% ploting result
 
 PSNR_means = [np.mean(PSNR[method]) for method in PSNR.keys()]

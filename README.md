@@ -25,7 +25,12 @@ python monte_carlo_simulation.py
 ```
 Please replace `alpha` and `beta` with the coefficients of your camera, and run the MC simulator to generate the correction curves at several ISO levels tailored for you specific device. Our curves may work for you camera but it might be sub-optimal as the noise models of the Google Pixel 4a camera and yours may diverge.
 
-Last, run the approach for x2 super-resolution with:
+Last, download and unzip the test burst from [here](https://drive.google.com/file/d/1ot0E6guY5AacM-I6-GffHqFzykVb22wV/view?usp=share_link) and put it in the `./test_burst/` folder (it is a zipped folder containing 13 raw images originally from [here](https://github.com/goutamgmb/deep-rep)), or download the latest release of the code already containing test bursts. Now, simply run the code for x2 super-resolution with:
+```
+python example.py
+```
+
+You can also use the following canvas in your own scripts:
 ```python
 from handeld_super_resolution import process
 
@@ -34,9 +39,9 @@ options = {'verbose': 1}
 
 # Specify the scale (1 is demosaicking), the merging kernel, and if you want to postprocess the final image.
 params = {
-  "scale": 2,
-  "merging": {"kernel": "handheld"},
-  "post processing": {"on": True}
+  "scale": 2,  # choose between 1 and 2 in practice.
+  "merging": {"kernel": "handheld"},  # keep unchanged.
+  "post processing": {"on": True}  # set it to False if you want to use your own ISP.
   }
 
 # Run the algorithm.
@@ -44,9 +49,9 @@ burst_path = 'path/to/folder/containing/raw/files'
 output_img = process(burst_path, options, params)
 ```
 
-An example of pipeline call can be found in `example.py`. Simply call `handheld_super_resolution.process(burst_path, options, params)` where :
+The core of the algorithm is in `handheld_super_resolution.process(burst_path, options, params)` where :
 <ul>
-  <li><code>burst_patch</code> is a string containing the file containing .dng files.</li>
+  <li><code>burst_path</code> is a string containing the file containing .dng files.</li>
   <li><code>options</code> is an optionnal dictionnary containing the verbose option, where higher number means more details during the execution <code>{'verbose' : 1}</code> for example.</li>
   <li><code>params</code> is an optional dictionanry containing all the parameters of the pipleine (such as the upscaling factor). The pipeline is designed to automatically pick some of the parameters based on an estimation of the image SNR and the rest are set to default values, but they can be overwritten by simply assignin a value in <code>params</code>.</li>
 </ul>
@@ -57,7 +62,7 @@ To obtain the bursts used in the publication, please download the latest release
 If this code or the implementation details of the companion IPOL publication are of any help, please cite our work:
 ```BibTex
 @article{lafenetre23handheld,
-  title={Implementing Handheld Burst Super-resolution},
+  title={Implementing Handheld Burst Super-Resolution},
   author={Lafenetre, Jamy and Facciolo, Gabriele and Eboli, Thomas},
   journal={Image Processing On Line},
   year={2023},

@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 Created on Mon Sep 12 10:14:52 2022
-
-
 @author: jamyl
 """
 
@@ -297,19 +295,16 @@ def align_fb(dec_burst, params):
 def evaluate_alignment(comp_alignment, gt_flow, label="", params=None):
     """
     
-
     Parameters
     ----------
     alignment : Array [n_iter, n_images, imsize_y, imsize_x, 2]
         DESCRIPTION.
     imshow : TYPE, optional
         DESCRIPTION. The default is False.
-
     Returns
     -------
     TYPE
         DESCRIPTION.
-
     """
 
 
