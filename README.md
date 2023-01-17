@@ -5,7 +5,9 @@
  This repository contains a non-official implementation of the “Handheld Multi-Frame Super-Resolution algorithm” paper by Wronski et al. (used in the Google Pixel 3 camera), which performs simultaneously multi-image super-resolution demosaicking and denoising from a burst of raw photgraphs. To the best of our knowledge, this is the first publicly available comprehensive implementation of this well-acclaimed paper, for which no official code has been released so far.
  
  The original paper can be found [here](https://sites.google.com/view/handheld-super-res/), whereas our publication detailing the implementation is available on [IPOL](https://www.ipol.im/pub/pre/460). In this companion publication, we fill the implementation blanks of the original SIGGRAPH paper, and disclose many details to actually implement the method.
- Note that our Numba-based implementation is not as fast as that of Google. It is mainly for scientific and educational purpose, with a special care given to make the code as readable and understandable as possible, and was not optimized to minimize the execution time or the memory usage as in an industrial context. Yet, on high-end consumer grade GPUs (NVIDIA RTX 3090 GPU), a 12MP burst of 20 images is expected to generate a 48MP image within less than 4 seconds (without counting Numba's just-in-time compilation), which is enough for running comparisons, or being the base of a faster implementation. We hope this code and the details in the IPOL publication will help the image processing and computational photography community, and foster new top-of-the-line super-resolution approaches. Please find below two examples of demosaicking and super-resolution from a real raw burst from [this repository](https://github.com/goutamgmb/deep-rep).
+ Note that our Numba-based implementation is not as fast as that of Google. It is mainly for scientific and educational purpose, with a special care given to make the code as readable and understandable as possible, and was not optimized to minimize the execution time or the memory usage as in an industrial context. Yet, on high-end consumer grade GPUs (NVIDIA RTX 3090 GPU), a 12MP burst of 20 images is expected to generate a 48MP image within less than 4 seconds (without counting Numba's just-in-time compilation), which is enough for running comparisons, or being the base of a faster implementation. 
+
+ We hope this code and the details in the IPOL publication will help the image processing and computational photography communities, and foster new top-of-the-line super-resolution approaches. Please find below two examples of demosaicking and super-resolution from a real raw burst from [this repository](https://github.com/goutamgmb/deep-rep).
 
 ![image](https://user-images.githubusercontent.com/46826148/212689891-603e0502-c817-4623-9134-3e7522c72680.png)
 ![image](https://user-images.githubusercontent.com/46826148/212690127-eb18b00b-5457-44b6-9e27-7f9f88159f4a.png)
@@ -13,12 +15,12 @@
 
 ## Get started
 First of all, install the requirements by running (PyTorch is solely used for the GPU-based FFT as there is none in Numba):
-```
+```bash
 pip install -r requirements.txt
 ```
 
 Then, run the approach for x2 super-resolution with:
-```
+```python
 from handeld_super_resolution import process
 
 # Set the verbose level.
@@ -27,11 +29,9 @@ options = {'verbose': 1}
 # Specify the scale (1 is demosaicking), the merging kernel, and if you want to postprocess the final image.
 params = {
   "scale": 2,
-  "merging": {
-    "kernel": "handheld"},
-    "post processing": {"on": True}
+  "merging": {"kernel": "handheld"},
+  "post processing": {"on": True}
   }
-}
 
 # Run the algorithm.
 burst_path = 'path/to/folder/containing/raw/files'
