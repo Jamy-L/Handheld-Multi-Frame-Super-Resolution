@@ -2,7 +2,7 @@ numpy==1.23.4
 rawpy==0.17.2
 numba==0.56.4
 exifread==3.0.0
-torch==1.13.0
+torch==1.13.1
 scipy==1.9.1
 opencv-python==4.6.0.66
 colour-demosaicing==0.2.2
