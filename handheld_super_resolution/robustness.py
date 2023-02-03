@@ -63,7 +63,8 @@ def init_robustness(ref_img, options, params):
         if bayer_mode:
             guide_ref_img = compute_guide_image(ref_img, CFA_pattern)
         else:
-            guide_ref_img = ref_img[:, :, None] # Adding 1 channel
+            # Numba friendly code to add 1 channel
+            guide_ref_img = ref_img.reshape((imshape_y, imshape_x, 1)) 
 
         
         if verbose_3 :
@@ -146,7 +147,7 @@ def compute_robustness(comp_img, ref_local_stats, flows, options, params):
             guide_img = compute_guide_image(comp_img, CFA_pattern)
             comp_local_stats = cuda.device_array(guide_imshape+(2, 3), dtype=DEFAULT_NUMPY_FLOAT_TYPE) # mu, sigma for rgb
         else:
-            guide_img = comp_img[:, :, None] # addign 1 channel
+            guide_img = comp_img.reshape((imshape_y, imshape_x, 1)) # Adding 1 channel
             comp_local_stats = cuda.device_array(guide_imshape + (2, 1), dtype=DEFAULT_NUMPY_FLOAT_TYPE) # mu, sigma
             
 

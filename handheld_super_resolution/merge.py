@@ -15,7 +15,7 @@ import math
 
 from numba import uint8, cuda
 
-from .utils import DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, EPSILON_DIV, DEFAULT_THREADS
+from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, EPSILON_DIV, DEFAULT_THREADS
 from .utils_image import denoise_power_merge, denoise_range_merge
 from .linalg import quad_mat_prod, invert_2x2, interpolate_cov
 
@@ -415,13 +415,14 @@ def accumulate(comp_img, alignments, covs, r,
     # fetching robustness
     # The robustness of the center of the patch is picked through neirest neigbhoor interpolation
 
-    if bayer_mode : 
-        local_r = r[round((coarse_ref_sub_pos[0] - 0.5)/2),
-                    round((coarse_ref_sub_pos[1] - 0.5)/2)]
+    if bayer_mode :
+        y_r = clamp(round((coarse_ref_sub_pos[1] - 0.5)/2), 0, r.shape[0])
+        x_r = clamp(round((coarse_ref_sub_pos[1] - 0.5)/2), 0, r.shape[1])
 
     else:
-        local_r = r[round(coarse_ref_sub_pos[0]),
-                    round(coarse_ref_sub_pos[1])]
+        y_r = clamp(round(coarse_ref_sub_pos[0]), 0, r.shape[0]-1)
+        x_r = clamp(round(coarse_ref_sub_pos[1]), 0, r.shape[1]-1)
+    local_r = r[y_r, x_r]
         
     patch_center_pos[1] = coarse_ref_sub_pos[1] + local_optical_flow[0]
     patch_center_pos[0] = coarse_ref_sub_pos[0] + local_optical_flow[1]
@@ -486,8 +487,8 @@ def accumulate(comp_img, alignments, covs, r,
             pixel_idy = center_y + i
             
             # in bound condition
-            if (0 <= pixel_idx < output_size_x and
-                0 <= pixel_idy < output_size_y):
+            if (0 <= pixel_idx < input_size_x and
+                0 <= pixel_idy < input_size_y):
             
                 # checking if pixel is r, g or b
                 if bayer_mode : 
@@ -510,10 +511,9 @@ def accumulate(comp_img, alignments, covs, r,
                     y = max(0, quad_mat_prod(cov_i, dist_x, dist_y))
                     # y can be slightly negative because of numerical precision.
                     # I clamp it to not explode the error with exp
-                if bayer_mode : 
-                    w = math.exp(-0.5*y)
-                else:
-                    w = math.exp(-0.5*4*y) # original kernel constants are designed for bayer distances, not greys, Hence x4
+ 
+                w = math.exp(-0.5*y)
+
                 ############
                     
                 val[channel] += c*w*local_r
