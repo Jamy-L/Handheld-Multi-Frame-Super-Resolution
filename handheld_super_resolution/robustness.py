@@ -625,9 +625,9 @@ def cuda_compute_local_min(R, r):
     
     #local min search
     for i in range(-2, 3):
-        y = clamp(idy + i, 0, guide_imshape_y)
+        y = clamp(idy + i, 0, guide_imshape_y-1)
         for j in range(-2, 3):
-            x = clamp(idx + j, 0, guide_imshape_x)
+            x = clamp(idx + j, 0, guide_imshape_x-1)
             mini = min(mini, R[y, x])
     
     r[idy, idx] = mini

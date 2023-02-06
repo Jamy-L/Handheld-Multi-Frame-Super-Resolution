@@ -302,8 +302,8 @@ def process(burst_path, options=None, custom_params=None):
 
     Parameters
     ----------
-    burst_path : str
-        Path where the .dng burst is located
+    burst_path : str or Path
+        Path of the folder where the .dng burst is located
     options : dict
         
     params : Parameters
@@ -326,8 +326,12 @@ def process(burst_path, options=None, custom_params=None):
     
     raw_comp = []
     
+    # This ensures that burst_path is a Path object
+    burst_path = Path(burst_path)
+    
+    
     # Get the list of raw images in the burst path
-    raw_path_list = glob.glob(os.path.join(burst_path, '*.dng'))
+    raw_path_list = glob.glob(os.path.join(burst_path.as_posix(), '*.dng'))
     assert len(raw_path_list) != 0, 'At least one raw .dng file must be present in the burst folder.'
 	# Read the raw bayer data from the DNG files
     for index, raw_path in enumerate(raw_path_list):
