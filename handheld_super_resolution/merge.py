@@ -115,6 +115,7 @@ def accumulate_ref(ref_img, covs, bayer_mode, iso_kernel, scale, CFA_pattern,
 
     output_pixel_idx, output_pixel_idy = cuda.grid(2)
     output_size_y, output_size_x, _ = num.shape
+    input_size_y, input_size_x = ref_img.shape
     
     if not (0 <= output_pixel_idx < output_size_x and
             0 <= output_pixel_idy < output_size_y):
@@ -218,8 +219,8 @@ def accumulate_ref(ref_img, covs, bayer_mode, iso_kernel, scale, CFA_pattern,
             pixel_idy = center_y + i
             
             # in bound condition
-            if (0 <= pixel_idx < output_size_x and
-                0 <= pixel_idy < output_size_y):
+            if (0 <= pixel_idx < input_size_x and
+                0 <= pixel_idy < input_size_y):
             
                 # checking if pixel is r, g or b
                 if bayer_mode : 
