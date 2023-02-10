@@ -417,7 +417,7 @@ def accumulate(comp_img, alignments, covs, r,
     # The robustness of the center of the patch is picked through neirest neigbhoor interpolation
 
     if bayer_mode :
-        y_r = clamp(round((coarse_ref_sub_pos[1] - 0.5)/2), 0, r.shape[0])
+        y_r = clamp(round((coarse_ref_sub_pos[0] - 0.5)/2), 0, r.shape[0])
         x_r = clamp(round((coarse_ref_sub_pos[1] - 0.5)/2), 0, r.shape[1])
 
     else:
