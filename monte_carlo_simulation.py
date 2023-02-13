@@ -31,10 +31,10 @@ for b in tqdm.tqdm(range(n_brightness_levels + 1)):
         patch = np.ones((3, 3, n_colors)) * color
 
         # add noise and clip
-        patch1 = patch + iso**2 * np.sqrt(patch/iso * alpha + beta) * np.random.randn(*patch.shape)
+        patch1 = patch + iso * np.sqrt(patch/iso * alpha + beta) * np.random.randn(*patch.shape)
         patch1 = np.clip(patch1, 0.0, 1.0)
 
-        patch2 = patch + iso**2 * np.sqrt(patch/iso * alpha + beta) * np.random.randn(*patch.shape)
+        patch2 = patch + iso * np.sqrt(patch/iso * alpha + beta) * np.random.randn(*patch.shape)
         patch2 = np.clip(patch2, 0.0, 1.0)
  
         # compute statistics and store
