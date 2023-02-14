@@ -363,6 +363,8 @@ def process(burst_path, options=None, custom_params=None):
     CFA = np.array(list(CFA.values)).reshape(2,2)
     
     ISO = int(str(tags['Image ISOSpeedRatings']))
+    # Clipping ISO to 100 from below 
+    ISO = max(100, ISO)
     
     
     # Packing noise model related to picture ISO
@@ -392,10 +394,9 @@ def process(burst_path, options=None, custom_params=None):
                 ref_raw[i::2, j::2] *= white_balance[channel] / white_balance[1]
         
         
-        # images[:, 0::2, 1::2] *= float(ref_raw.camera_whitebalance[0]) / raw.camera_whitebalance[1]
-        # images[:, 1::2, 0::2] *= float(ref_raw.camera_whitebalance[2]) / raw.camera_whitebalance[1]
+
         ref_raw = np.clip(ref_raw, 0.0, 1.0)
-        # ## The division by the green WB value is important because WB may come with integer coefficients instead
+        ## The division by the green WB value is important because WB may come with integer coefficients instead
         
     if np.issubdtype(type(raw_comp[0,0,0]), np.integer):
         raw_comp = raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE)
@@ -436,20 +437,20 @@ def process(burst_path, options=None, custom_params=None):
     if not 'noise' in params['merging'].keys(): 
         params['merging']['noise'] = {}
 
-    # TODO beta is often absent from exif data
-    # is the algorithm had to be run on a specific sensor,
+    # if the algorithm had to be run on a specific sensor,
     # the precise values of alpha and beta could be used instead
     if params['mode'] == 'grey':
         alpha = tags['Image Tag 0xC761'].values[0][0]
         beta = tags['Image Tag 0xC761'].values[1][0]
     else:
         # Averaging RGB noise values
+        ## IMPORTAN0T NOTE : the noise model exif already are NOT for nominal ISO 100
+        ## But are already scaled for the image ISO.
         alpha = sum([x[0] for x in tags['Image Tag 0xC761'].values[::2]])/3
         beta = sum([x[0] for x in tags['Image Tag 0xC761'].values[1::2]])/3
         
     params['merging']['noise']['alpha'] = alpha
     params['merging']['noise']['beta'] = beta
-    params['merging']['noise']['ISO'] = ISO
     
     ## Writing exifs data into parameters
     if not 'exif' in params['merging'].keys(): 

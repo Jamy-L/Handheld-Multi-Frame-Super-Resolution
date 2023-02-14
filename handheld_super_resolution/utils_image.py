@@ -68,25 +68,27 @@ def compute_grey_images(img, method):
     else:
         raise NotImplementedError('Computation of gray level on GPU is only supported for FFT')
 
-def GAT(image, alpha, iso, beta):
+def GAT(image, alpha, beta):
     """
     Generalized Ascombe Transform
+    noise model : std² = alpha * I + beta
+    Where alpha and beta are iso dependant. 
 
     Parameters
     ----------
     image : TYPE
         DESCRIPTION.
-    alpha : TYPE
-        DESCRIPTION.
-    iso : TYPE
-        DESCRIPTION.
-    beta : TYPE
-        DESCRIPTION.
+    alpha : float
+        value of alpha for the given iso 
+    iso : float
+        ISO value
+    beta : float
+        Value of beta for the given iso
 
     Returns
     -------
     VST_image : TYPE
-        DESCRIPTION.
+        input image with stabilized variance
 
     """
     assert len(image.shape) == 2
@@ -100,12 +102,12 @@ def GAT(image, alpha, iso, beta):
     blockspergrid = (blockspergrid_x, blockspergrid_y)
     
     cuda_GAT[blockspergrid, threadsperblock](image, VST_image,
-                                             alpha, iso, beta)
+                                             alpha, beta)
     
     return VST_image
 
 @cuda.jit
-def cuda_GAT(image, VST_image, alpha, iso, beta):
+def cuda_GAT(image, VST_image, alpha, beta):
     x, y = cuda.grid(2)
     imshape_y,  imshape_x = image.shape
     
@@ -113,10 +115,12 @@ def cuda_GAT(image, VST_image, alpha, iso, beta):
             0 <= x < imshape_x):
         return
     
-    VST = alpha*image[y, x]/iso + 3/8 * alpha*alpha + beta
+    # ISO should not appear here,  since alpha and beta are
+    # already iso dependant.
+    VST = alpha*image[y, x] + 3/8 * alpha*alpha + beta
     VST = max(0, VST)
     
-    VST_image[y, x] = 2/alpha * iso*iso * math.sqrt(VST)
+    VST_image[y, x] = 2/alpha * math.sqrt(VST)
     
     
 

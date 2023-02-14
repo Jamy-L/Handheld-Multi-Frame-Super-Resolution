@@ -61,7 +61,6 @@ def estimate_kernels(img, options, params):
     
     alpha = params['noise']['alpha']
     beta = params['noise']['beta']
-    iso = params['noise']['ISO']/100
     
     if verbose_3:
         cuda.synchronize()
@@ -81,7 +80,7 @@ def estimate_kernels(img, options, params):
     
     #__ Performing Variance Stabilization Transform
     
-    img_grey = GAT(img_grey, alpha, iso, beta)
+    img_grey = GAT(img_grey, alpha, beta)
     
     if verbose_3:
         cuda.synchronize()
