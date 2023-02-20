@@ -43,7 +43,7 @@ def get_params(SNR):
                     'tuning' : {
                         'kanadeIter': 3, # 3
                         # gaussian blur before computing grads. If 0, no blur is applied
-                        'sigma blur':0.5,
+                        'sigma blur': 0, # grayscale by FFT already induces low pass filtering 
                         }},
                 'robustness' : {
                     'on':True,
