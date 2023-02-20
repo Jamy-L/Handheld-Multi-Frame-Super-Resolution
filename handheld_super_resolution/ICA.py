@@ -125,6 +125,12 @@ def init_ICA(ref_img, options, params):
 def compute_hessian(gradx, grady, tile_size, hessian):
     imshape = gradx.shape
     patch_idx, patch_idy = cuda.grid(2)
+    n_patchy, n_patch_x, _, _ = hessian.shape
+    
+    # discarding non existing patches
+    if not (patch_idy < n_patchy and
+            patch_idx < n_patch_x):
+        return
     
     patch_pos_idx = tile_size * patch_idx # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
     patch_pos_idy = tile_size * patch_idy
