@@ -306,6 +306,11 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
     A[1, 0] = hessian[patch_idy, patch_idx, 1, 0]
     A[1, 1] = hessian[patch_idy, patch_idx, 1, 1]
     
+    # By putting non solvable exit this early, the remaining calculations are 
+    # skipped for burned patches, which reprensent most of of over-exposed images !
+    if abs(A[0, 0]*A[1, 1] - A[0, 1]*A[1, 0]) < 1e-5: # system is Not solvable
+        return 
+    
     B = cuda.local.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
     B[0] = 0
     B[1] = 0
@@ -364,8 +369,9 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
         
     
     alignment_step = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-    if abs(A[0, 0]*A[1, 1] - A[0, 1]*A[1, 0]) > 1e-5: # system is solvable 
-        solve_2x2(A, B, alignment_step)
-        
-        alignment[patch_idy, patch_idx, 0] = local_alignment[0] + alignment_step[0]
-        alignment[patch_idy, patch_idx, 1] = local_alignment[1] + alignment_step[1]
+    
+    # solvability has been checked earlier.
+    solve_2x2(A, B, alignment_step)
+    
+    alignment[patch_idy, patch_idx, 0] = local_alignment[0] + alignment_step[0]
+    alignment[patch_idy, patch_idx, 1] = local_alignment[1] + alignment_step[1]
