@@ -34,7 +34,7 @@ from .ICA import ICA_optical_flow, init_ICA
 from .robustness import init_robustness, compute_robustness
 from .params import check_params_validity, get_params, merge_params
 
-NOISE_MODEL_PATH = Path(os.getcwd()) / 'data' 
+NOISE_MODEL_PATH = Path(os.path.dirname(__file__)).parent / 'data' 
         
 
 
@@ -521,6 +521,13 @@ def process(burst_path, options=None, custom_params=None):
     gauss = gauss_params['on']
     post_frame_count_denoise = (median or gauss)
     
+    params_pp = params['post processing']
+    post_processing_enabled = params_pp['on']
+    
+    if post_frame_count_denoise or post_processing_enabled:
+        if verbose_1:
+            print('Beginning post processing')
+    
     if post_frame_count_denoise : 
         if verbose_2:
             print('-- Robustness aware bluring')
@@ -534,8 +541,6 @@ def process(burst_path, options=None, custom_params=None):
 
 
     #___ post processing
-    params_pp = params['post processing']
-    post_processing_enabled = params_pp['on']
     
     if post_processing_enabled:
         if verbose_2:
