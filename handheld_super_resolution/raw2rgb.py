@@ -229,7 +229,7 @@ def postprocess(raw, img=None, do_color_correction=True, do_tonemapping=True,
             ## TODO: polyblur instead
             if sharpening_params is not None:
                 img = filters.unsharp_mask(img, radius=sharpening_params['radius'],
-                                           amount=sharpening_params['ammount'],
+                                           amount=sharpening_params['amount'],
                                            channel_axis=2, preserve_range=True)
             else:
                 img = filters.unsharp_mask(img, radius=3,

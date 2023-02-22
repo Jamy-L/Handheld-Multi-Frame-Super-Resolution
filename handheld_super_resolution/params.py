@@ -90,7 +90,7 @@ def get_params(SNR):
                     
                     'sharpening':{
                         'radius':3,
-                        'ammount':1.5
+                        'amount':1.5
                         }
                     }
                 }

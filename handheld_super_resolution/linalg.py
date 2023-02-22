@@ -105,21 +105,19 @@ def get_real_polyroots_2(a, b, c, roots):
 
     """
 
-    delta = b*b - 4*a*c
+    # numerical instabilities can cause delta to be slightly negative despite
+    # the equation admitting 2 real roots.
+    delta = max(b*b - 4*a*c, 0)
 
-    if delta >= 0:
-        r1 = (-b+math.sqrt(delta))/(2*a)
-        r2 = (-b-math.sqrt(delta))/(2*a)
-        if abs(r1) >= abs(r2) :
-            roots[0] = r1
-            roots[1] = r2
-        else:
-            roots[0] = r2
-            roots[1] = r1
+    r1 = (-b+math.sqrt(delta))/(2*a)
+    r2 = (-b-math.sqrt(delta))/(2*a)
+    if abs(r1) >= abs(r2) :
+        roots[0] = r1
+        roots[1] = r2
     else:
-        # Nan
-        roots[0] = 0/0
-        roots[1] = 0/0
+        roots[0] = r2
+        roots[1] = r1
+
 
 @cuda.jit(device=True)
 def get_eighen_val_2x2(M, l):

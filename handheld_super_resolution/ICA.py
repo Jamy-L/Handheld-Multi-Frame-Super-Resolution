@@ -146,17 +146,17 @@ def compute_hessian(gradx, grady, tile_size, hessian):
             pixel_global_idy = patch_pos_idy + i
             pixel_global_idx = patch_pos_idx + j
             
-            inbound = (0 <= pixel_global_idy < imshape[0] and 
-                       0 <= pixel_global_idx < imshape[1])
-    
-            if inbound : 
-                local_gradx = gradx[pixel_global_idy, pixel_global_idx]
-                local_grady = grady[pixel_global_idy, pixel_global_idx]
-                
-                local_hessian[0, 0] += local_gradx*local_gradx
-                local_hessian[0, 1] += local_gradx*local_grady
-                local_hessian[1, 0] += local_gradx*local_grady
-                local_hessian[1, 1] += local_grady*local_grady
+            if not (0 <= pixel_global_idy < imshape[0] and 
+                    0 <= pixel_global_idx < imshape[1]):
+                continue
+
+            local_gradx = gradx[pixel_global_idy, pixel_global_idx]
+            local_grady = grady[pixel_global_idy, pixel_global_idx]
+            
+            local_hessian[0, 0] += local_gradx*local_gradx
+            local_hessian[0, 1] += local_gradx*local_grady
+            local_hessian[1, 0] += local_gradx*local_grady
+            local_hessian[1, 1] += local_grady*local_grady
                 
     hessian[patch_idy, patch_idx, 0, 0] = local_hessian[0, 0]
     hessian[patch_idy, patch_idx, 0, 1] = local_hessian[0, 1]
@@ -313,8 +313,8 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
     A[1, 1] = hessian[patch_idy, patch_idx, 1, 1]
     
     # By putting non solvable exit this early, the remaining calculations are 
-    # skipped for burned patches, which reprensent most of of over-exposed images !
-    if abs(A[0, 0]*A[1, 1] - A[0, 1]*A[1, 0]) < 1e-5: # system is Not solvable
+    # skipped for burned patches, which represents most of over-exposed images !
+    if abs(A[0, 0]*A[1, 1] - A[0, 1]*A[1, 0]) < 1e-10: # system is Not solvable
         return 
     
     B = cuda.local.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
@@ -333,50 +333,49 @@ def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_s
             pixel_global_idx = patch_pos_x + j # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
             pixel_global_idy = patch_pos_y + i
             
-            inbound = (0 <= pixel_global_idx < imsize_x and 
-                       0 <= pixel_global_idy < imsize_y)
+            if not (0 <= pixel_global_idx < imsize_x and 
+                    0 <= pixel_global_idy < imsize_y):
+                continue
             
-            if inbound :
-                local_gradx = gradx[pixel_global_idy, pixel_global_idx]
-                local_grady = grady[pixel_global_idy, pixel_global_idx]
+            local_gradx = gradx[pixel_global_idy, pixel_global_idx]
+            local_grady = grady[pixel_global_idy, pixel_global_idx]
 
-                # Warp I with W(x; p) to compute I(W(x; p))
-                new_idx = local_alignment[0] + pixel_global_idx
-                new_idy = local_alignment[1] + pixel_global_idy 
+            # Warp I with W(x; p) to compute I(W(x; p))
+            new_idx = local_alignment[0] + pixel_global_idx
+            new_idy = local_alignment[1] + pixel_global_idy 
  
-            inbound &= (0 <= new_idx < imsize_x - 1 and
-                        0 <= new_idy < imsize_y - 1) # -1 for bicubic interpolation
-    
-            if inbound:
-                # bicubic interpolation
-                normalised_pos_x, floor_x = math.modf(new_idx) # https://www.rollpie.com/post/252
-                normalised_pos_y, floor_y = math.modf(new_idy) # separating floor and floating part
-                floor_x = int(floor_x)
-                floor_y = int(floor_y)
-                
-                ceil_x = floor_x + 1
-                ceil_y = floor_y + 1
-                pos[0] = normalised_pos_y
-                pos[1] = normalised_pos_x
-                
-                buffer_val[0, 0] = comp_img[floor_y, floor_x]
-                buffer_val[0, 1] = comp_img[floor_y, ceil_x]
-                buffer_val[1, 0] = comp_img[ceil_y, floor_x]
-                buffer_val[1, 1] = comp_img[ceil_y, ceil_x]
-                
-                comp_val = bilinear_interpolation(buffer_val, pos)
-                
-                gradt = comp_val - ref_img[pixel_global_idy, pixel_global_idx]
-                
-                
-                
-                B[0] += -local_gradx*gradt
-                B[1] += -local_grady*gradt
+            if not (0 <= new_idx < imsize_x - 1 and
+                    0 <= new_idy < imsize_y - 1): # -1 for bicubic interpolation
+                continue
+            
+            # bicubic interpolation
+            normalised_pos_x, floor_x = math.modf(new_idx) # https://www.rollpie.com/post/252
+            normalised_pos_y, floor_y = math.modf(new_idy) # separating floor and floating part
+            floor_x = int(floor_x)
+            floor_y = int(floor_y)
+            
+            ceil_x = floor_x + 1
+            ceil_y = floor_y + 1
+            pos[0] = normalised_pos_y
+            pos[1] = normalised_pos_x
+            
+            buffer_val[0, 0] = comp_img[floor_y, floor_x]
+            buffer_val[0, 1] = comp_img[floor_y, ceil_x]
+            buffer_val[1, 0] = comp_img[ceil_y, floor_x]
+            buffer_val[1, 1] = comp_img[ceil_y, ceil_x]
+            
+            comp_val = bilinear_interpolation(buffer_val, pos)
+            
+            gradt = comp_val - ref_img[pixel_global_idy, pixel_global_idx]
+            
+            
+            B[0] += -local_gradx*gradt
+            B[1] += -local_grady*gradt
         
     
     alignment_step = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
     
-    # solvability has been checked earlier.
+    # solvability is ensured by design
     solve_2x2(A, B, alignment_step)
     
     alignment[patch_idy, patch_idx, 0] = local_alignment[0] + alignment_step[0]
