@@ -34,7 +34,7 @@ Please replace `alpha` and `beta` with the coefficients of your camera, and run 
 
 Last, download and unzip the test burst from [here](https://drive.google.com/file/d/1ot0E6guY5AacM-I6-GffHqFzykVb22wV/view?usp=share_link) and put it in the `./test_burst/` folder (it is a zipped folder containing 13 raw images originally from [here](https://github.com/goutamgmb/deep-rep)), or download the latest release of the code already containing test bursts. Now, simply run the code for x2 super-resolution with:
 ```
-python example.py
+python run_handheld.py --impath test_burst --outpath output.png
 ```
 
 You can also use the following canvas in your own scripts:
