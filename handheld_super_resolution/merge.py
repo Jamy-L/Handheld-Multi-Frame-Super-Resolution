@@ -200,8 +200,8 @@ def accumulate_ref(ref_img, covs, bayer_mode, iso_kernel, scale, CFA_pattern,
     # fetching acc robustness if required
     # The robustness of the center of the patch is picked through neirest neigbhoor interpolation
     if robustness_denoise : 
-        local_acc_r = acc_rob[round(grey_pos[0]),
-                              round(grey_pos[1])]
+        local_acc_r = acc_rob[min(round(grey_pos[0]), acc_rob.shape[0]-1),
+                              min(round(grey_pos[1]), acc_rob.shape[1]-1)]
         
         additional_denoise_power = denoise_power_merge(local_acc_r, max_multiplier, max_frame_count)
         rad = denoise_range_merge(local_acc_r, rad_max, max_frame_count)
