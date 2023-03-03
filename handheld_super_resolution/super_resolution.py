@@ -354,8 +354,11 @@ def process(burst_path, options=None, custom_params=None):
         
     white_level = tags['Image Tag 0xC61D'].values[0] # there is only one white level
     
-    black_levels = tags['Image BlackLevel'] # This tag is a fraction object for some reason. It seems that black levels are all integers anyway
-    black_levels = np.array([int(x.decimal()) for x in black_levels.values])
+    black_levels = tags['Image BlackLevel'] 
+    if isinstance(black_levels.values[0], int):
+        black_levels = np.array(black_levels.values)
+    else: # Sometimes this tag is a fraction object for some reason. It seems that black levels are all integers anyway
+        black_levels = np.array([int(x.decimal()) for x in black_levels.values])
     
     white_balance = raw.camera_whitebalance
     
