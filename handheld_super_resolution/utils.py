@@ -120,4 +120,12 @@ def cuda_add(A, B):
     if 0 <= x < A.shape[1] and 0 <= y < A.shape[0]:
         A[y, x] += B[y, x]
     
+def round_iso(iso):
+    n = round(math.log2(iso/100))
+    rounded_iso = 100 * (2**n)
+    return int(rounded_iso)
 
+
+
+    
+    

@@ -25,7 +25,7 @@ import exifread
 import rawpy
 
 from . import raw2rgb
-from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add
+from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso
 from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame_count_denoising_median
 from .merge import merge, merge_ref
 from .kernels import estimate_kernels
@@ -365,14 +365,21 @@ def process(burst_path, options=None, custom_params=None):
     CFA = tags['Image CFAPattern']
     CFA = np.array(list(CFA.values)).reshape(2,2)
     
-    ISO = int(str(tags['Image ISOSpeedRatings']))
+    if 'EXIF ISOSpeedRatings' in tags.keys():
+        ISO = int(str(tags['EXIF ISOSpeedRatings']))
+    elif 'Image ISOSpeedRatings' in tags.keys():
+        ISO = int(str(tags['Image ISOSpeedRatings']))
+    else:
+        raise AttributeError('ISO value could not be found in both EXIF and Image type.')
+        
     # Clipping ISO to 100 from below 
     ISO = max(100, ISO)
-    
+    ISO = min(3200, ISO)
     
     # Packing noise model related to picture ISO
-    std_noise_model_label = 'noise_model_std_ISO_{}'.format(ISO)
-    diff_noise_model_label = 'noise_model_diff_ISO_{}'.format(ISO)
+    curve_iso = round_iso(ISO) # Rounds non standart ISO to regular ISO (100, 200, 400, ...)
+    std_noise_model_label = 'noise_model_std_ISO_{}'.format(curve_iso)
+    diff_noise_model_label = 'noise_model_diff_ISO_{}'.format(curve_iso)
     std_noise_model_path = (NOISE_MODEL_PATH / std_noise_model_label).with_suffix('.npy')
     diff_noise_model_path = (NOISE_MODEL_PATH / diff_noise_model_label).with_suffix('.npy')
     
