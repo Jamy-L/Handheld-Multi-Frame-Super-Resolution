@@ -27,6 +27,7 @@ import rawpy
 from . import raw2rgb
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso
 from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame_count_denoising_median
+from .utils_dng import save_as_dng
 from .merge import merge, merge_ref
 from .kernels import estimate_kernels
 from .block_matching import init_block_matching, align_image_block_matching
@@ -521,6 +522,12 @@ def process(burst_path, options=None, custom_params=None):
     #___ Running the handheld pipeline
     handheld_output, debug_dict = main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), options, params)
     
+    #___ Saving output as dng if required
+    if 'dng_outpath' in options.keys():
+        outpath = Path(options["dng_outpath"])
+        if verbose_1:
+            print('Saving output to {}'.format(outpath.with_suffix('.dng').as_posix()))
+        save_as_dng(handheld_output.copy_to_host(), raw_path_list[ref_id], outpath)
     
     
     #___ Performing frame count aware denoising if enabled
