@@ -65,6 +65,40 @@ The core of the algorithm is in `handheld_super_resolution.process(burst_path, o
 
 To obtain the bursts used in the publication, please download the latest release of the repo. It contains the code and two raw bursts of respectively 13 images from [[Bhat et al., ICCV21]](https://arxiv.org/abs/2108.08286) and 20 images from [[Lecouat et al., SIGGRAPH22]](https://arxiv.org/abs/2207.14671). Otherwise specify the path to any burst of raw images, e.g., `*.dng`, `*.ARW` or `*.CR2` for instance. The result is found in the `./results/` folder. Remember that if you have activated the post-processing flag, the predicted image will be further tone-mapped and sharpened. Deactivate it if you want to plug in your own ISP.
 
+## Generating DNG
+
+Saving images as DNG requires extra-dependencies and steps:
+1. Install imageio using pip:
+
+    ```bash
+    pip install imageio
+    ```
+
+2. Install exiftool. You can download the appropriate version for your operating system from the [exiftool website](https://exiftool.org/).
+
+3. Download the DNG SDK from the [Adobe website](https://helpx.adobe.com/camera-raw/digital-negative.html#dng_sdk_download).
+
+4. Follow the instructions in the `DNG_ReadMe.txt` file included in the downloaded DNG SDK to complete the installation.
+
+5. Set the paths to the exiftool and DNG validate executables in the `utils_dng.py` script. Open the `utils_dng.py` file located in the project directory, and modify the values of the `EXIFTOOL_PATH` and `DNG_VALIDATE_PATH` variables to match the paths to the exiftool and DNG validate executables on your system.
+
+    ```python
+    # utils_dng.py
+
+    # Set the path to the exiftool executable
+    EXIFTOOL_PATH = "/path/to/exiftool"
+
+    # Set the path to the DNG validate executable
+    DNG_VALIDATE_PATH = "/path/to/dng_validate"
+    ```
+
+    Note that you may need to adjust the paths based on the location where you installed exiftool and DNG validate on your system.
+
+That's it! Once you've completed these steps you should be able to save the output as DNG, for example by running:
+```
+python run_handheld.py --impath test_burst --outpath output.dng
+```
+
 ## Citation
 If this code or the implementation details of the companion IPOL publication are of any help, please cite our work:
 ```BibTex
