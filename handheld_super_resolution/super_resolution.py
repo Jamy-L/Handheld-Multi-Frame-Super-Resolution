@@ -15,28 +15,27 @@ This script contains :
 """
 
 import os
-import glob
 import time
 
 from pathlib import Path
 import numpy as np
 from numba import cuda
-import exifread
 import rawpy
 
-from . import raw2rgb
-from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso
 from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame_count_denoising_median
-from .merge import merge, merge_ref
-from .kernels import estimate_kernels
+from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso
 from .block_matching import init_block_matching, align_image_block_matching
-from .ICA import ICA_optical_flow, init_ICA
-from .robustness import init_robustness, compute_robustness
 from .params import check_params_validity, get_params, merge_params
+from .robustness import init_robustness, compute_robustness
+from .utils_dng import save_as_dng, load_dng_burst
+from .ICA import ICA_optical_flow, init_ICA
+from .fast_monte_carlo import run_fast_MC
+from .kernels import estimate_kernels
+from .merge import merge, merge_ref
+from . import raw2rgb
 
 NOISE_MODEL_PATH = Path(os.path.dirname(__file__)).parent / 'data' 
         
-
 
 def main(ref_img, comp_imgs, options, params):
     """
@@ -75,7 +74,7 @@ def main(ref_img, comp_imgs, options, params):
     
     accumulate_r = params['accumulated robustness denoiser']['on']
 
-    #___ Moving to GPU
+    #### Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
     cuda.synchronize()
     
@@ -84,7 +83,7 @@ def main(ref_img, comp_imgs, options, params):
         t1 = time.perf_counter()
     
     
-    #___ Raw to grey
+    #### Raw to grey
     grey_method = params['grey method']
     
     if bayer_mode :
@@ -95,7 +94,7 @@ def main(ref_img, comp_imgs, options, params):
     else:
         cuda_ref_grey = cuda_ref_img
         
-    #___ Block Matching
+    #### Block Matching
     if verbose_2 :
         cuda.synchronize()
         current_time = time.perf_counter()
@@ -108,7 +107,7 @@ def main(ref_img, comp_imgs, options, params):
         current_time = getTime(current_time, 'Block Matching initialised (Total)')
         
     
-    #___ ICA : compute grad and hessian    
+    #### ICA : compute grad and hessian    
     if verbose_2 :
         cuda.synchronize()
         current_time = time.perf_counter()
@@ -121,7 +120,7 @@ def main(ref_img, comp_imgs, options, params):
         current_time = getTime(current_time, 'ICA initialised (Total)')
     
     
-    #___ Local stats estimation
+    #### Local stats estimation
     if verbose_2:
         cuda.synchronize()
         current_time = time.perf_counter()
@@ -157,13 +156,13 @@ def main(ref_img, comp_imgs, options, params):
             print("\nProcessing image {} ---------\n".format(im_id+1))
             im_time = time.perf_counter()
         
-        #___ Moving to GPU
+        #### Moving to GPU
         cuda_img = cuda.to_device(comp_imgs[im_id])
         if verbose_3 : 
             cuda.synchronize()
             current_time = getTime(im_time, 'Arrays moved to GPU')
         
-        #___ Compute Grey Images
+        #### Compute Grey Images
         if bayer_mode:
             cuda_im_grey = compute_grey_images(comp_imgs[im_id], grey_method)
             if verbose_3 :
@@ -172,7 +171,7 @@ def main(ref_img, comp_imgs, options, params):
         else:
             cuda_im_grey = cuda_img
         
-        #___ Block Matching
+        #### Block Matching
         if verbose_2 :
             cuda.synchronize()
             current_time = time.perf_counter()
@@ -185,7 +184,7 @@ def main(ref_img, comp_imgs, options, params):
             current_time = getTime(current_time, 'Block Matching (Total)')
             
             
-        #___ ICA
+        #### ICA
         if verbose_2 :
             cuda.synchronize()
             current_time = time.perf_counter()
@@ -202,7 +201,7 @@ def main(ref_img, comp_imgs, options, params):
             current_time = getTime(current_time, 'Image aligned using ICA (Total)')
             
             
-        #___ Robustness
+        #### Robustness
         if verbose_2 :
             cuda.synchronize()
             current_time = time.perf_counter()
@@ -218,7 +217,7 @@ def main(ref_img, comp_imgs, options, params):
             current_time = getTime(current_time, 'Robustness estimated (Total)')
 
             
-        #___ Kernel estimation
+        #### Kernel estimation
         if verbose_2 :
             cuda.synchronize()
             current_time = time.perf_counter()
@@ -231,7 +230,7 @@ def main(ref_img, comp_imgs, options, params):
             current_time = getTime(current_time, 'Kernels estimated (Total)')
             
             
-        #___ Merging
+        #### Merging
         if verbose_2 : 
             current_time = time.perf_counter()
             print('\nAccumulating Image')
@@ -249,7 +248,7 @@ def main(ref_img, comp_imgs, options, params):
         if debug_mode : 
             debug_dict['robustness'].append(cuda_robustness.copy_to_host())
     
-    #___ Ref kernel estimation
+    #### Ref kernel estimation
     if verbose_2 : 
         cuda.synchronize()
         current_time = time.perf_counter()
@@ -261,7 +260,7 @@ def main(ref_img, comp_imgs, options, params):
         cuda.synchronize()
         current_time = getTime(current_time, 'Kernels estimated (Total)')
     
-    #___ Merge ref
+    #### Merge ref
     if verbose_2 :
         cuda.synchronize()
         print('\nAccumulating ref Img')
@@ -322,103 +321,42 @@ def process(burst_path, options=None, custom_params=None):
                                          options['verbose'] >= 2)
     params = {}
     
-    ref_id = 0 #TODO Select ref id based on HDR+ method
+    # reading image stack
+    ref_raw, raw_comp, ISO, tags, CFA, xyz2cam, ref_path = load_dng_burst(burst_path)
     
-    raw_comp = []
-    
-    # This ensures that burst_path is a Path object
-    burst_path = Path(burst_path)
-    
-    
-    # Get the list of raw images in the burst path
-    raw_path_list = glob.glob(os.path.join(burst_path.as_posix(), '*.dng'))
-    assert len(raw_path_list) != 0, 'At least one raw .dng file must be present in the burst folder.'
-	# Read the raw bayer data from the DNG files
-    for index, raw_path in enumerate(raw_path_list):
-        with rawpy.imread(raw_path) as rawObject:
-            if index != ref_id :
-                
-                raw_comp.append(rawObject.raw_image.copy())  # copy otherwise image data is lost when the rawpy object is closed
-    raw_comp = np.array(raw_comp)
-    
-    # Reference image selection and metadata     
-    raw = rawpy.imread(raw_path_list[ref_id])
-    ref_raw = raw.raw_image.copy()
-    xyz2cam = raw2rgb.get_xyz2cam_from_exif(raw_path_list[ref_id])
-    
-    
-    # reading exifs for white level, black leve and CFA
-    with open(raw_path_list[ref_id], 'rb') as raw_file:
-        tags = exifread.process_file(raw_file)
-
-        
-    white_level = tags['Image Tag 0xC61D'].values[0] # there is only one white level
-    
-    black_levels = tags['Image BlackLevel'] 
-    if isinstance(black_levels.values[0], int):
-        black_levels = np.array(black_levels.values)
-    else: # Sometimes this tag is a fraction object for some reason. It seems that black levels are all integers anyway
-        black_levels = np.array([int(x.decimal()) for x in black_levels.values])
-    
-    white_balance = raw.camera_whitebalance
-    
-    CFA = tags['Image CFAPattern']
-    CFA = np.array(list(CFA.values)).reshape(2,2)
-    
-    if 'EXIF ISOSpeedRatings' in tags.keys():
-        ISO = int(str(tags['EXIF ISOSpeedRatings']))
-    elif 'Image ISOSpeedRatings' in tags.keys():
-        ISO = int(str(tags['Image ISOSpeedRatings']))
+    # if the algorithm had to be run on a specific sensor,
+    # the precise values of alpha and beta could be used instead
+    if 'mode' in custom_params and custom_params['mode'] == 'grey':
+        alpha = tags['Image Tag 0xC761'].values[0][0]
+        beta = tags['Image Tag 0xC761'].values[1][0]
     else:
-        raise AttributeError('ISO value could not be found in both EXIF and Image type.')
-        
-    # Clipping ISO to 100 from below 
-    ISO = max(100, ISO)
-    ISO = min(3200, ISO)
+        # Averaging RGB noise values
+        ## IMPORTANT NOTE : the noise model exif already are NOT for nominal ISO 100
+        ## But are already scaled for the image ISO.
+        alpha = sum([x[0] for x in tags['Image Tag 0xC761'].values[::2]])/3
+        beta = sum([x[0] for x in tags['Image Tag 0xC761'].values[1::2]])/3
     
-    # Packing noise model related to picture ISO
-    curve_iso = round_iso(ISO) # Rounds non standart ISO to regular ISO (100, 200, 400, ...)
-    std_noise_model_label = 'noise_model_std_ISO_{}'.format(curve_iso)
-    diff_noise_model_label = 'noise_model_diff_ISO_{}'.format(curve_iso)
-    std_noise_model_path = (NOISE_MODEL_PATH / std_noise_model_label).with_suffix('.npy')
-    diff_noise_model_path = (NOISE_MODEL_PATH / diff_noise_model_label).with_suffix('.npy')
+    #### Packing noise model related to picture ISO
+    # curve_iso = round_iso(ISO) # Rounds non standart ISO to regular ISO (100, 200, 400, ...)
+    # std_noise_model_label = 'noise_model_std_ISO_{}'.format(curve_iso)
+    # diff_noise_model_label = 'noise_model_diff_ISO_{}'.format(curve_iso)
+    # std_noise_model_path = (NOISE_MODEL_PATH / std_noise_model_label).with_suffix('.npy')
+    # diff_noise_model_path = (NOISE_MODEL_PATH / diff_noise_model_label).with_suffix('.npy')
     
-    std_curve = np.load(std_noise_model_path)
-    diff_curve = np.load(diff_noise_model_path)
+    # std_curve = np.load(std_noise_model_path)
+    # diff_curve = np.load(diff_noise_model_path)
+    
+    ## Use this to compute noise curves on the fly
+    std_curve, diff_curve = run_fast_MC(alpha, beta)
     
     
     if verbose_2:
         currentTime = getTime(currentTime, ' -- Read raw files')
 
 
-    
-    if np.issubdtype(type(ref_raw[0,0]), np.integer):
-        ## Here do black and white level correction and white balance processing for all image in comp_images
-        ## Each image in comp_images should be between 0 and 1.
-        ## ref_raw is a (H,W) array
-        ref_raw = ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE)
-        for i in range(2):
-            for j in range(2):
-                channel = CFA[i, j]
-                ref_raw[i::2, j::2] = (ref_raw[i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
-                ref_raw[i::2, j::2] *= white_balance[channel] / white_balance[1]
-        
-        
 
-        ref_raw = np.clip(ref_raw, 0.0, 1.0)
-        ## The division by the green WB value is important because WB may come with integer coefficients instead
-        
-    if np.issubdtype(type(raw_comp[0,0,0]), np.integer):
-        raw_comp = raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE)
-        ## raw_comp is a (N, H,W) array
-        for i in range(2):
-            for j in range(2):
-                channel = channel = CFA[i, j]
-                raw_comp[:, i::2, j::2] = (raw_comp[:, i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
-                raw_comp[:, i::2, j::2] *= white_balance[channel] / white_balance[1]
-        raw_comp = np.clip(raw_comp, 0., 1.)
     
-    #___ Estimating ref image SNR
+    #### Estimating ref image SNR
     brightness = np.mean(ref_raw)
     
     id_noise = round(1000*brightness)
@@ -434,7 +372,7 @@ def process(burst_path, options=None, custom_params=None):
     
     SNR_params = get_params(SNR)
     
-    #__ Merging params dictionnaries
+    #### Merging params dictionnaries
     
     # checking (just in case !)
     check_params_validity(SNR_params, ref_raw.shape)
@@ -443,21 +381,10 @@ def process(burst_path, options=None, custom_params=None):
         params = merge_params(dominant=custom_params, recessive=SNR_params)
         check_params_validity(params, ref_raw.shape)
         
-    #__ adding metadatas to dict 
+    #### adding metadatas to dict 
     if not 'noise' in params['merging'].keys(): 
         params['merging']['noise'] = {}
 
-    # if the algorithm had to be run on a specific sensor,
-    # the precise values of alpha and beta could be used instead
-    if params['mode'] == 'grey':
-        alpha = tags['Image Tag 0xC761'].values[0][0]
-        beta = tags['Image Tag 0xC761'].values[1][0]
-    else:
-        # Averaging RGB noise values
-        ## IMPORTAN0T NOTE : the noise model exif already are NOT for nominal ISO 100
-        ## But are already scaled for the image ISO.
-        alpha = sum([x[0] for x in tags['Image Tag 0xC761'].values[::2]])/3
-        beta = sum([x[0] for x in tags['Image Tag 0xC761'].values[1::2]])/3
         
     params['merging']['noise']['alpha'] = alpha
     params['merging']['noise']['beta'] = beta
@@ -512,18 +439,16 @@ def process(burst_path, options=None, custom_params=None):
         params['merging']['accumulated robustness denoiser'] = params['accumulated robustness denoiser']['merge']
     else:
         params['merging']['accumulated robustness denoiser'] = {'on' : False}
-    
-    
         
         
+        
     
     
-    #___ Running the handheld pipeline
+    #### Running the handheld pipeline
     handheld_output, debug_dict = main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), options, params)
     
     
-    
-    #___ Performing frame count aware denoising if enabled
+    #### Performing frame count aware denoising if enabled
     median_params = params['accumulated robustness denoiser']['median']
     gauss_params = params['accumulated robustness denoiser']['gauss']
     
@@ -550,12 +475,13 @@ def process(burst_path, options=None, custom_params=None):
                                                           gauss_params)
 
 
-    #___ post processing
+    #### post processing
     
     if post_processing_enabled:
         if verbose_2:
             print('-- Post processing image')
-            
+        
+        raw = rawpy.imread(ref_path)
         output_image = raw2rgb.postprocess(raw, handheld_output.copy_to_host(),
                                            params_pp['do color correction'],
                                            params_pp['do tonemapping'],
@@ -568,7 +494,7 @@ def process(burst_path, options=None, custom_params=None):
     else:
         output_image = handheld_output.copy_to_host()
         
-    #__ return
+
     
     if params['debug']:
         return output_image, debug_dict
