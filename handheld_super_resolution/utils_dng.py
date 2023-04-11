@@ -82,7 +82,9 @@ def load_dng_burst(burst_path):
     with open(raw_path_list[ref_id], 'rb') as raw_file:
         tags = exifread.process_file(raw_file)
 
-    white_level = tags['Image Tag 0xC61D'].values[0]  # there is only one white level
+    white_level = int(raw.white_level)  # there is only one white level
+    # exifread method is inconsistent because camera manufacters can put
+    # this under many different tags.
 
     black_levels = tags['Image BlackLevel']
     if isinstance(black_levels.values[0], int):
