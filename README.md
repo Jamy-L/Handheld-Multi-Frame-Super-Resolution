@@ -98,6 +98,16 @@ That's it! Once you've completed these steps you should be able to save the outp
 ```
 python run_handheld.py --impath test_burst --outpath output.dng
 ```
+## About the noise profile
+The method requires the noise profile of the camera, which consists of $\alpha$ and $\beta$, two parameters that depends on the camera and its settings. In a nutshell, they describe how the variance of the noise $\sigma_n^2$ evolves with the brightness $I$ : $\sigma_n^2 = \alpha\times I + \beta$. They are necessary to compute the noise curves in `monte_carlo_simulation.py` or `fast_monte_carlo.py`, and to perform the generalised Anscombe transform (GAT) in `utils_image.py`.
+
+By default, the program reads the `noise profile` tag of the dng stack to determine $\alpha$ and $\beta$. If these values are unavailable or wrong, you can provide your own values of $\alpha$ and $\beta$. If the stack was captured using a smartphone, the noise profile of the Pixel 4 can give good results : 
+```python
+    alpha = 1.80710882e-4 * ISO / 100
+    beta = 3.1937599182128e-6 * (ISO / 100)**2
+```
+
+For better results, determining the accurate noise profile of your device can be done using tools [such as this demo](https://www.ipol.im/pub/art/2013/45/)
 
 ## Citation
 If this code or the implementation details of the companion IPOL publication are of any help, please cite our work:
@@ -109,16 +119,6 @@ If this code or the implementation details of the companion IPOL publication are
   year={2023},
 }
 ```
-## About the noise profile
-The method requires the noise profile of the camera, which consists of $\alpha$ and $\beta$, two parameters that depends on the camera and its settings. In a nutshell, they describe how the variance of the noise $\sigma_n^2$ evolves with the brightness $I$ : $\sigma_n^2 = \alpha\times I + \beta$. They are necessary to compute the noise curves in `monte_carlo_simulation.py` or `fast_monte_carlo.py`, and to perform the generalised Anscombe transform (GAT) in `utils_image.py`.
-
-By default, the program reads the `noise profile` tag of the dng stack to determine $\alpha$ and $\beta$. If these values are unavailable or wrong, you can provide your own values of $\alpha$ and $\beta$. If the stack was captured using a smartphone, the noise profile of the Pixel 4 can give good results : 
-```python
-    alpha = 1.80710882e-4 * ISO / 100
-    beta = 3.1937599182128e-6 * (ISO / 100)**2
-```
-
-For better results, determining the accurate noise profile of your device can be done using tools [such as this demo](https://www.ipol.im/pub/art/2013/45/)
 
 ## Troubleshooting
 If you encounter any bug, please open an issue and/or sent an email at jamy.lafenetre@ens-paris-saclay.fr and thomas.eboli@ens-paris-saclay.fr.
