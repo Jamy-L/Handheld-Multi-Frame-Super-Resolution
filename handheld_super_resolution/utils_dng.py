@@ -86,16 +86,12 @@ def load_dng_burst(burst_path):
     # exifread method is inconsistent because camera manufacters can put
     # this under many different tags.
 
-    black_levels = tags['Image BlackLevel']
-    if isinstance(black_levels.values[0], int):
-        black_levels = np.array(black_levels.values)
-    else:  # Sometimes this tag is a fraction object for some reason. It seems that black levels are all integers anyway
-        black_levels = np.array([int(x.decimal()) for x in black_levels.values])
+    black_levels = raw.black_level_per_channel
 
     white_balance = raw.camera_whitebalance
 
-    CFA = tags['Image CFAPattern']
-    CFA = np.array(list(CFA.values)).reshape(2, 2)
+    CFA = raw.raw_pattern.copy() # copying to ensure contiguity of the array
+    CFA[CFA == 3] = 1 # Rawpy gives channel 3 to the second green channel. Setting both greens to 1
 
     if 'EXIF ISOSpeedRatings' in tags.keys():
         ISO = int(str(tags['EXIF ISOSpeedRatings']))
