@@ -13,6 +13,7 @@ from pathlib import Path
 import exifread
 import rawpy
 import imageio
+import warnings
 
 from . import raw2rgb
 from .utils import DEFAULT_NUMPY_FLOAT_TYPE
@@ -20,6 +21,30 @@ from .utils import DEFAULT_NUMPY_FLOAT_TYPE
 # Paths of exiftool and dng validate. Only necessary to output dng.
 EXIFTOOL_PATH = 'path/to/exiftool.exe'
 DNG_VALIDATE_PATH = 'path/to/dng_validate.exe'
+
+
+# See "PhotometricInterpretation in" https://exiftool.org/TagNames/EXIF.html
+PHOTO_INTER = {
+    0 : 'WhiteIsZero',
+    1 : 'BlackIsZero',
+    2 : 'RGB',
+    3 : 'RGB Palette',
+    4 : 'Transparency Mask',
+    5 : 'CMYK',
+    6 : 'YCbCr',
+    8 : 'CIELab',
+    9 : 'ICCLab',
+    10 : 'ITULab',
+    32803 : 'Color Filter Array',
+    32844 : 'Pixar LogL',
+    32845 : 'Pixar LogLuv',
+    32892 : 'Sequential Color Filter',
+    34892 : 'Linear Raw',
+    51177 : 'Depth Map',
+    52527 : 'Semantic Mask'}
+
+# Supported Photometric Interpretations
+SUPPORTED = [1, 32803]
 
 
 def load_dng_burst(burst_path):
@@ -81,6 +106,19 @@ def load_dng_burst(burst_path):
     # reading exifs for white level, black leve and CFA
     with open(raw_path_list[ref_id], 'rb') as raw_file:
         tags = exifread.process_file(raw_file)
+
+
+    if 'Image PhotometricInterpretation' in tags.keys():
+        photo_inter = tags['Image PhotometricInterpretation'].values[0]
+        if photo_inter not in SUPPORTED:
+            raise ValueError('The input images have a photometric interpretation '\
+                             'of type "{}", but only {} are supprted.'.format(
+                                 PHOTO_INTER[photo_inter], str([PHOTO_INTER[i] for i in SUPPORTED])))
+            
+    else:
+        warnings.warn('PhotometricInterpretation could not be found in image tags. '\
+                     'Please ensure that it is one of {}'.format(str([PHOTO_INTER[i] for i in SUPPORTED])))
+
 
     white_level = int(raw.white_level)  # there is only one white level
     # exifread method is inconsistent because camera manufacters can put
