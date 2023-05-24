@@ -111,7 +111,7 @@ def load_dng_burst(burst_path):
     if 'Image PhotometricInterpretation' in tags.keys():
         photo_inter = tags['Image PhotometricInterpretation'].values[0]
         if photo_inter not in SUPPORTED:
-            raise ValueError('The input images have a photometric interpretation '\
+            warnings.warn('The input images have a photometric interpretation '\
                              'of type "{}", but only {} are supprted.'.format(
                                  PHOTO_INTER[photo_inter], str([PHOTO_INTER[i] for i in SUPPORTED])))
             
