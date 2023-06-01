@@ -168,8 +168,10 @@ def load_dng_burst(burst_path):
     if 'Image Orientation' in tags.keys():
         ori = tags['Image Orientation'].values[0]
         ref_raw = apply_orientation(ref_raw, ori)
-        for i in range(raw_comp.shape[0]):
-            raw_comp[i] = apply_orientation(raw_comp[i], ori)
+        tmp = []
+        for im in raw_comp:
+            tmp.append(apply_orientation(im, ori))
+        raw_comp = np.array(tmp)
         
     else:
         warnings.warns('The Image Orientation EXIF tag could not be found. \
