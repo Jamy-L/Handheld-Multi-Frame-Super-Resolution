@@ -16,13 +16,14 @@ This script contains :
 
 import os
 import time
+import warnings
 
 from pathlib import Path
 import numpy as np
 from numba import cuda
 import rawpy
 
-from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame_count_denoising_median
+from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame_count_denoising_median, apply_orientation
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso
 from .block_matching import init_block_matching, align_image_block_matching
 from .params import check_params_validity, get_params, merge_params
@@ -494,7 +495,14 @@ def process(burst_path, options=None, custom_params=None):
     else:
         output_image = handheld_output.copy_to_host()
         
-
+    # Applying image orientation
+    if 'Image Orientation' in tags.keys():
+        ori = tags['Image Orientation'].values[0]
+    else:
+        ori = 1
+        warnings.warns('The Image Orientation EXIF tag could not be found. \
+                      The image may be mirrored or misoriented.')
+    output_image = apply_orientation(output_image, ori)
     
     if params['debug']:
         return output_image, debug_dict

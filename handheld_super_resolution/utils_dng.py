@@ -46,52 +46,6 @@ PHOTO_INTER = {
 # Supported Photometric Interpretations
 SUPPORTED = [1, 32803]
 
-def apply_orientation(img, ori):
-    """
-    Applies an orientation to an image
-
-    Parameters
-    ----------
-    img : numpy Array [ny, nx, c]
-        Image
-    ori : int
-        Exif orientation as defined here:
-            https://exiftool.org/TagNames/EXIF.html
-
-    Returns
-    -------
-    Oriented image
-
-    """
-    
-    if ori == 1:
-        pass
-    elif ori == 2:
-        # Mirrored horizontal
-        img = np.flip(img, axis=1)
-    elif ori == 3:
-        # Rotate 180
-        img = np.rot90(img, k=2, axes=(0, 1))
-    elif ori == 4:
-        # Mirror vertical
-        img = np.flip(img, axis=0)
-    elif ori == 5:
-        # Mirror horizontal and rotate 270 CW
-        img = np.flip(img, axis=1)
-        img = np.rot90(img, k=-3, axes=(0, 1))
-    elif ori == 6:
-        # Rotate 90 CW
-        img = np.rot90(img, k=-1, axes=(0, 1))
-    elif ori == 7:
-        # Mirror horizontal and rotate 90 CW
-        img = np.flip(img, axis=1)
-        img = np.rot90(img, k=-1, axes=(0, 1))
-    elif ori == 8:
-        # Rotate 270 CW
-        img = np.rot90(img, k=-3, axes=(0, 1))
-    
-    return img
-
 def load_dng_burst(burst_path):
     """
     Loads a dng burst into numpy arrays, and their exif tags.
@@ -164,16 +118,6 @@ def load_dng_burst(burst_path):
         warnings.warn('PhotometricInterpretation could not be found in image tags. '\
                      'Please ensure that it is one of {}'.format(str([PHOTO_INTER[i] for i in SUPPORTED])))
             
-            
-    if 'Image Orientation' in tags.keys():
-        ori = tags['Image Orientation'].values[0]
-        ref_raw = apply_orientation(ref_raw, ori)
-        for i in range(raw_comp.shape[0]):
-            raw_comp[i] = apply_orientation(raw_comp[i], ori)
-        
-    else:
-        warnings.warns('The Image Orientation EXIF tag could not be found. \
-                      The image may be mirrored or misoriented.')
 
     white_level = int(raw.white_level)  # there is only one white level
     # exifread method is inconsistent because camera manufacters can put

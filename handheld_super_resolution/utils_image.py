@@ -9,6 +9,52 @@ import torch.nn.functional as F
 
 from .utils import getSigned, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
 
+def apply_orientation(img, ori):
+    """
+    Applies an orientation to an image
+
+    Parameters
+    ----------
+    img : numpy Array [ny, nx, c]
+        Image
+    ori : int
+        Exif orientation as defined here:
+            https://exiftool.org/TagNames/EXIF.html
+
+    Returns
+    -------
+    Oriented image
+
+    """
+    
+    if ori == 1:
+        pass
+    elif ori == 2:
+        # Mirrored horizontal
+        img = np.flip(img, axis=1)
+    elif ori == 3:
+        # Rotate 180
+        img = np.rot90(img, k=2, axes=(0, 1))
+    elif ori == 4:
+        # Mirror vertical
+        img = np.flip(img, axis=0)
+    elif ori == 5:
+        # Mirror horizontal and rotate 270 CW
+        img = np.flip(img, axis=1)
+        img = np.rot90(img, k=-3, axes=(0, 1))
+    elif ori == 6:
+        # Rotate 90 CW
+        img = np.rot90(img, k=-1, axes=(0, 1))
+    elif ori == 7:
+        # Mirror horizontal and rotate 90 CW
+        img = np.flip(img, axis=1)
+        img = np.rot90(img, k=-1, axes=(0, 1))
+    elif ori == 8:
+        # Rotate 270 CW
+        img = np.rot90(img, k=-3, axes=(0, 1))
+    
+    return img
+
 def compute_grey_images(img, method):
     """
     This function converts a raw image to a grey image, using the decimation or
