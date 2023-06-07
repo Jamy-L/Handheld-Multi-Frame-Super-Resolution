@@ -503,6 +503,10 @@ def process(burst_path, options=None, custom_params=None):
         warnings.warns('The Image Orientation EXIF tag could not be found. \
                       The image may be mirrored or misoriented.')
     output_image = apply_orientation(output_image, ori)
+    if 'accumulated robustness' in debug_dict['accumulated robustness']:
+        debug_dict['accumulated robustness'] = apply_orientation(debug_dict['accumulated robustness'], ori)
+    
+    
     
     if params['debug']:
         return output_image, debug_dict
