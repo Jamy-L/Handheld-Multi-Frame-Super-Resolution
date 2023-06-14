@@ -127,10 +127,10 @@ def main(ref_img, comp_imgs, options, params):
         current_time = time.perf_counter()
         print("\nEstimating ref image local stats")
         
-    ref_local_stats = init_robustness(cuda_ref_img,options, params['robustness'])
+    ref_local_means, ref_local_stds = init_robustness(cuda_ref_img,options, params['robustness'])
     
     if accumulate_r:
-        accumulated_r = cuda.to_device(np.zeros(ref_local_stats.shape[:2]))
+        accumulated_r = cuda.to_device(np.zeros(ref_local_means.shape[:2]))
 
     
     
@@ -208,7 +208,7 @@ def main(ref_img, comp_imgs, options, params):
             current_time = time.perf_counter()
             print('\nEstimating robustness')
             
-        cuda_robustness = compute_robustness(cuda_img, ref_local_stats, cuda_final_alignment,
+        cuda_robustness = compute_robustness(cuda_img, ref_local_means, ref_local_stds, cuda_final_alignment,
                                              options, params['robustness'])
         if accumulate_r:
             add(accumulated_r, cuda_robustness)
@@ -338,17 +338,17 @@ def process(burst_path, options=None, custom_params=None):
         beta = sum([x[0] for x in tags['Image Tag 0xC761'].values[1::2]])/3
     
     #### Packing noise model related to picture ISO
-    # curve_iso = round_iso(ISO) # Rounds non standart ISO to regular ISO (100, 200, 400, ...)
-    # std_noise_model_label = 'noise_model_std_ISO_{}'.format(curve_iso)
-    # diff_noise_model_label = 'noise_model_diff_ISO_{}'.format(curve_iso)
-    # std_noise_model_path = (NOISE_MODEL_PATH / std_noise_model_label).with_suffix('.npy')
-    # diff_noise_model_path = (NOISE_MODEL_PATH / diff_noise_model_label).with_suffix('.npy')
+    curve_iso = round_iso(ISO) # Rounds non standart ISO to regular ISO (100, 200, 400, ...)
+    std_noise_model_label = 'noise_model_std_ISO_{}'.format(curve_iso)
+    diff_noise_model_label = 'noise_model_diff_ISO_{}'.format(curve_iso)
+    std_noise_model_path = (NOISE_MODEL_PATH / std_noise_model_label).with_suffix('.npy')
+    diff_noise_model_path = (NOISE_MODEL_PATH / diff_noise_model_label).with_suffix('.npy')
     
-    # std_curve = np.load(std_noise_model_path)
-    # diff_curve = np.load(diff_noise_model_path)
+    std_curve = np.load(std_noise_model_path)
+    diff_curve = np.load(diff_noise_model_path)
     
     ## Use this to compute noise curves on the fly
-    std_curve, diff_curve = run_fast_MC(alpha, beta)
+    # std_curve, diff_curve = run_fast_MC(alpha, beta)
     
     
     if verbose_2:

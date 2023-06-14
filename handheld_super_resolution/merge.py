@@ -40,7 +40,7 @@ def merge_ref(ref_img, kernels, num, den, options, params, acc_rob=None):
         verbose options.
     params : dict
         parameters (containing the zoom s).
-    acc_rob : [imshape_y//2, imshape_x//2], optional
+    acc_rob : [imshape_y, imshape_x], optional
         accumulated robustness mask. The default is None.
 
     Returns
@@ -198,10 +198,11 @@ def accumulate_ref(ref_img, covs, bayer_mode, iso_kernel, scale, CFA_pattern,
             
     
     # fetching acc robustness if required
-    # The robustness of the center of the patch is picked through neirest neigbhoor interpolation
+    # Acc robustness is known for each raw pixel. An implicit interpolation done
+    # from LR to HR using nearest neighbor. 
     if robustness_denoise : 
-        local_acc_r = acc_rob[min(round(grey_pos[0]), acc_rob.shape[0]-1),
-                              min(round(grey_pos[1]), acc_rob.shape[1]-1)]
+        local_acc_r = acc_rob[min(round(coarse_ref_sub_pos[0]), acc_rob.shape[0]-1),
+                              min(round(coarse_ref_sub_pos[1]), acc_rob.shape[1]-1)]
         
         additional_denoise_power = denoise_power_merge(local_acc_r, max_multiplier, max_frame_count)
         rad = denoise_range_merge(local_acc_r, rad_max, max_frame_count)
@@ -288,7 +289,7 @@ def merge(comp_img, alignments, covs, r, num, den,
         The final estimation of the tiles' alignment V_n(p)
     covs : device array[imsize_y//2, imsize_x//2, 2, 2]
         covariance matrices Omega_n
-    r : Device_Array[imsize_y//2, imsize_x//2]
+    r : Device_Array[imsize_y, imsize_x]
         Robustness mask r_n
     num : device Array[s*imshape_y, s*imshape_x]
         Numerator of the accumulator
@@ -414,15 +415,11 @@ def accumulate(comp_img, alignments, covs, r,
 
 
     # fetching robustness
-    # The robustness of the center of the patch is picked through neirest neigbhoor interpolation
-
-    if bayer_mode :
-        y_r = clamp(round((coarse_ref_sub_pos[0] - 0.5)/2), 0, r.shape[0])
-        x_r = clamp(round((coarse_ref_sub_pos[1] - 0.5)/2), 0, r.shape[1])
-
-    else:
-        y_r = clamp(round(coarse_ref_sub_pos[0]), 0, r.shape[0]-1)
-        x_r = clamp(round(coarse_ref_sub_pos[1]), 0, r.shape[1]-1)
+    # The robustness coefficient is known for every raw pixel, and implicitely
+    # interpolated to HR using nearest neighboor interpolations.
+    
+    y_r = clamp(round(coarse_ref_sub_pos[0]), 0, r.shape[0]-1)
+    x_r = clamp(round(coarse_ref_sub_pos[1]), 0, r.shape[1]-1)
     local_r = r[y_r, x_r]
         
     patch_center_pos[1] = coarse_ref_sub_pos[1] + local_optical_flow[0]

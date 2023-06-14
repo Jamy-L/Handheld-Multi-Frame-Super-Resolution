@@ -394,6 +394,21 @@ def cuda_downsample(th_img, kernel='gaussian', factor=2):
 
     return th_filteredImage[:, :, :h2 * factor:factor, :w2 * factor:factor]
 
+
+@cuda.jit(device=True)
+def dogson_biquadratic_kernel(x, y):
+    return dogson_quadratic_kernel(x) * dogson_quadratic_kernel(y)
+
+@cuda.jit(device=True)
+def dogson_quadratic_kernel(x):
+    abs_x = abs(x)
+    if abs_x <= 0.5:
+        return -2 * abs_x*abs_x +1
+    elif abs_x <= 1.5:
+        return abs_x*abs_x - 5/2 * abs_x + 1.5
+    else:
+        return 0
+
 def computeRMSE(image1, image2):
     '''computes the Root Mean Square Error between two images'''
     assert np.array_equal(image1.shape, image2.shape), 'images have different sizes'
