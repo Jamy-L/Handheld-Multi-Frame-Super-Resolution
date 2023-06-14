@@ -32,9 +32,9 @@ def merge_ref(ref_img, kernels, num, den, options, params, acc_rob=None):
         Reference image J_1
     kernels : device Array[imshape_y//2, imshape_x//2, 2, 2]
         Covariance Matrices Omega_1
-    num : device Array[s*imshape_y, s*imshape_x]
+    num : device Array[s*imshape_y, s*imshape_x, c]
         Numerator of the accumulator
-    den : device Array[s*imshape_y, s*imshape_x]
+    den : device Array[s*imshape_y, s*imshape_x, c]
         Denominator of the accumulator
     options : dict
         verbose options.
@@ -86,33 +86,7 @@ def merge_ref(ref_img, kernels, num, den, options, params, acc_rob=None):
 def accumulate_ref(ref_img, covs, bayer_mode, iso_kernel, scale, CFA_pattern,
                    num, den, acc_rob,
                    robustness_denoise, max_frame_count, rad_max, max_multiplier):
-    """
-
-
-
-    Parameters
-    ----------
-    ref_img : Array[imsize_y, imsize_x]
-        The reference image
-    covs : device array[grey_imsize_y, grey_imsize_x, 2, 2]
-        covariance matrices sampled at the center of each grey pixel.
-    bayer_mode : bool
-        Whether the burst is raw or grey
-    iso_kernel : bool
-        Whether isotropic kernels should be used, or handhled's kernels.
-    scale : float
-        scaling factor
-    CFA_pattern : Array[2, 2]
-        CFA pattern of the burst
-    output_img : Array[SCALE*imsize_y, SCALE_imsize_x]
-        The empty output image
-
-    Returns
-    -------
-    None.
-
-    """
-
+    
     output_pixel_idx, output_pixel_idy = cuda.grid(2)
     output_size_y, output_size_x, _ = num.shape
     input_size_y, input_size_x = ref_img.shape
@@ -290,9 +264,9 @@ def merge(comp_img, alignments, covs, r, num, den,
         covariance matrices Omega_n
     r : Device_Array[imsize_y, imsize_x]
         Robustness mask r_n
-    num : device Array[s*imshape_y, s*imshape_x]
+    num : device Array[s*imshape_y, s*imshape_x, c]
         Numerator of the accumulator
-    den : device Array[s*imshape_y, s*imshape_x]
+    den : device Array[s*imshape_y, s*imshape_x, c]
         Denominator of the accumulator
         
     options : Dict
@@ -334,38 +308,6 @@ def merge(comp_img, alignments, covs, r, num, den,
 def accumulate(comp_img, alignments, covs, r,
                bayer_mode, iso_kernel, scale, tile_size, CFA_pattern,
                num, den):
-    """
-
-
-
-    Parameters
-    ----------
-    comp_imgs : Array[imsize_y, imsize_x]
-        The compared image
-    alignements : Array[n_tiles_y, n_tiles_x, 2]
-        The alignemnt vectors for each tile of the image
-    covs : device array[imsize_y/2, imsize_x/2, 2, 2]
-        covariance matrices sampled at the center of each bayer quad.
-    r : Device_Array[imsize_y/2, imsize_x/2, 3]
-            Robustness of the moving images
-    bayer_mode : bool
-        Whether the burst is raw or grey
-    iso_kernel : bool
-        Whether isotropic kernels should be used, or handhled's kernels.
-    scale : float
-        scaling factor
-    tile_size : int
-        tile size used for alignment (on the raw scale !)
-    CFA_pattern : device Array[2, 2]
-        CFA pattern of the burst
-    output_img : Array[SCALE*imsize_y, SCALE_imsize_x]
-        The empty output image
-
-    Returns
-    -------
-    None.
-
-    """
 
     output_pixel_idx, output_pixel_idy = cuda.grid(2)
 

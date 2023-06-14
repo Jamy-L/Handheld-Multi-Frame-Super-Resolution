@@ -17,7 +17,7 @@ from numba import cuda
 import torch as th
 import torch.nn.functional as F
 
-from .linalg import get_eighen_elmts_2x2
+from .linalg import get_eigen_elmts_2x2
 from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS, getTime
 from .utils_image import compute_grey_images, GAT
 
@@ -172,7 +172,7 @@ def cuda_estimate_kernel(full_grads,
     e2 = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
     k = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
-    get_eighen_elmts_2x2(structure_tensor, l, e1, e2)
+    get_eigen_elmts_2x2(structure_tensor, l, e1, e2)
 
     compute_k(l[0], l[1], k, k_detail, k_denoise, D_th, D_tr, k_stretch,
     k_shrink)
@@ -195,23 +195,19 @@ def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
     Parameters
     ----------
     l1 : float
-        lambda1 (dominant eighen value)
+        lambda1 (dominant eigen value)
     l2 : float
-        lambda2
+        lambda2 : second eigenvalue
     k : Array[2]
         empty vector where k_1 and k_2 will be stored
-    k_detail : TYPE
-        DESCRIPTION.
-    k_denoise : TYPE
-        DESCRIPTION.
-    D_th : TYPE
-        DESCRIPTION.
-    D_tr : TYPE
-        DESCRIPTION.
-    k_stretch : TYPE
-        DESCRIPTION.
-    k_shrink : TYPE
-        DESCRIPTION.
+    k_detail : float
+    k_denoise : float
+    D_th : float
+    D_tr : float
+    k_stretch : float
+    k_shrink : float
+        Parameters to compute k_1 and k_2, all detailed in the article.
+        
 
 
     """

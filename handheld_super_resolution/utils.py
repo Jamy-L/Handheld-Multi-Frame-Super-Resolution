@@ -66,9 +66,8 @@ def divide(num, den):
     Parameters
     ----------
     num : device array[ny, nx, n_channels]
-        DESCRIPTION.
+    
     den : device array[ny, nx, n_channels]
-        DESCRIPTION.
 
 
     """

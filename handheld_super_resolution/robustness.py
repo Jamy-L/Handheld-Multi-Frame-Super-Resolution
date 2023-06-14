@@ -22,7 +22,7 @@ from .utils_image import dogson_biquadratic_kernel
 
 def init_robustness(ref_img, options, params):
     """
-    Initialiazes the robustness etimation procesdure by
+    Initialiazes the robustness etimation procedure by
     computing the local stats of the reference image
 
     Parameters
@@ -40,7 +40,7 @@ def init_robustness(ref_img, options, params):
         local means of the reference image.
         
     local_stds : device Array[imshape_y, imshape_x, channels]
-        local standart deviations of the reference image.
+        local standard deviations of the reference image.
 
     """
     imshape_y, imshape_x = ref_img.shape
@@ -100,7 +100,7 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, options
     ref_local_means : device Array[imsize_y, imsize_x, c]
         Local means of the reference image
     ref_local_stds : device Array[imsize_y, imsize_x, c]
-        Local standart deviations of the reference image
+        Local standard deviations of the reference image
     flows : device Array[n_patchs_y, n_patchs_y, 2]
         patch-wise optical flows of the compared image V_n(p)
     options : dict
@@ -342,7 +342,7 @@ def cuda_compute_local_stats(guide_img, local_means, local_stds):
 
 def upscale_warp_stats(local_stats, tile_size=None, flow=None):
     """
-    Upscales and warps a map of local stats using Dogson's biquadratic approximation 
+    Upscales and warps a map of local statistics using Dogson's biquadratic approximation 
 
     Parameters
     ----------

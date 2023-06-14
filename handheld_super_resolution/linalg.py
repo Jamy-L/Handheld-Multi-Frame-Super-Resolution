@@ -120,22 +120,22 @@ def get_real_polyroots_2(a, b, c, roots):
 
 
 @cuda.jit(device=True)
-def get_eighen_val_2x2(M, l):
+def get_eigen_val_2x2(M, l):
     a = 1
     b = -(M[0,0] + M[1, 1])
     c = M[0,0]*M[1,1] - M[0,1]*M[1,0]
     get_real_polyroots_2(a, b, c, l)
 
 @cuda.jit(device=True)
-def get_eighen_vect_2x2(M, l, e1, e2):
+def get_eigen_vect_2x2(M, l, e1, e2):
     """
-    return the eighen vectors with norm 1 for the eighen values l
+    return the eigen vectors with norm 1 for the eigen values l
     M.e1 = l1.e1 ; M.e2 = l2.e2
 
     Parameters
     ----------
     M : Array[2,2]
-      Real Symmetric array for which eighen values are to be determined
+      Real Symmetric array for which eigen values are to be determined
     l : Array[2]
     e1, e2 : Array[2]
         sorted Eigenvalues
@@ -149,7 +149,7 @@ def get_eighen_vect_2x2(M, l, e1, e2):
     """
     # 2x2 algorithm : https://en.wikipedia.org/wiki/Eigenvalue_algorithm (9 August 2022 version)
     if M[0, 1] == 0 and M[0, 0] == M[1, 1]:
-        # M is multiple of identity, picking 2 ortogonal eighen vectors.
+        # M is multiple of identity, picking 2 ortogonal eigen vectors.
         e1[0] = 1; e1[1] = 0
         e2[0] = 0; e2[0] = 1
         
@@ -176,10 +176,10 @@ def get_eighen_vect_2x2(M, l, e1, e2):
     
     
 @cuda.jit(device=True)
-def get_eighen_elmts_2x2(M, l, e1, e2):
+def get_eigen_elmts_2x2(M, l, e1, e2):
     
-    get_eighen_val_2x2(M, l)
-    get_eighen_vect_2x2(M, l, e1, e2)
+    get_eigen_val_2x2(M, l)
+    get_eigen_vect_2x2(M, l, e1, e2)
     
     
      
