@@ -15,7 +15,7 @@ import math
 
 from numba import uint8, cuda
 
-from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, EPSILON_DIV, DEFAULT_THREADS
+from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS
 from .utils_image import denoise_power_merge, denoise_range_merge
 from .linalg import quad_mat_prod, invert_2x2, interpolate_cov
 
@@ -160,14 +160,8 @@ def accumulate_ref(ref_img, covs, bayer_mode, iso_kernel, scale, CFA_pattern,
         # interpolating covs
         interpolate_cov(close_covs, grey_pos, interpolated_cov)
         
-        if abs(interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0]) > EPSILON_DIV: # checking if cov is invertible
-            invert_2x2(interpolated_cov, cov_i)
+        invert_2x2(interpolated_cov, cov_i)
 
-        else: # if not invertible, identity matrix
-            cov_i[0, 0] = 1
-            cov_i[0, 1] = 0
-            cov_i[1, 0] = 0
-            cov_i[1, 1] = 1
             
     
     # fetching acc robustness if required
@@ -407,14 +401,9 @@ def accumulate(comp_img, alignments, covs, r,
         # interpolating covs at the desired spot
         interpolate_cov(close_covs, grey_pos, interpolated_cov)
 
-        if abs(interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0]) > EPSILON_DIV: # checking if cov is invertible
-            invert_2x2(interpolated_cov, cov_i)
+        invert_2x2(interpolated_cov, cov_i)
 
-        else: # if not invertible, identity matrix
-            cov_i[0, 0] = 1
-            cov_i[0, 1] = 0
-            cov_i[1, 0] = 0
-            cov_i[1, 1] = 1
+
     
     
     center_x = round(patch_center_pos[1])

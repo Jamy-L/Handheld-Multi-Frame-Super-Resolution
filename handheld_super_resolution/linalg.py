@@ -9,6 +9,8 @@ import math
 
 from numba import cuda
 
+from.utils import EPSILON_DIV
+
 @cuda.jit(device=True)
 def solve_2x2(A, B, X):
     """
@@ -48,17 +50,18 @@ def invert_2x2(M, M_i):
     None.
 
     """
-    det_i = 1/(M[0,0]*M[1,1] - M[0,1]*M[1,0])
-    if math.isinf(det_i):
-        M_i[0, 0] = 1
-        M_i[0, 1] = 0
-        M_i[1, 0] = 0
-        M_i[1, 1] = 1
-    else:
+    det = M[0, 0]*M[1, 1] - M[0, 1]*M[1, 0]
+    if abs(det) > EPSILON_DIV:
+        det_i = 1/det
         M_i[0, 0] = M[1,1]*det_i
         M_i[0, 1] = -M[0, 1]*det_i
         M_i[1, 0] = -M[1, 0]*det_i
         M_i[1, 1] = M[0, 0]*det_i
+    else:
+        M_i[0, 0] = 1
+        M_i[0, 1] = 0
+        M_i[1, 0] = 0
+        M_i[1, 1] = 1
     
 @cuda.jit(device=True)
 def quad_mat_prod(A, X1, X2):
