@@ -66,6 +66,14 @@ def estimate_kernels(img, options, params):
         cuda.synchronize()
         t1 = time.perf_counter()
     
+    #__ Performing Variance Stabilization Transform
+    
+    img = GAT(img, alpha, beta)
+    
+    if verbose_3:
+        cuda.synchronize()
+        t1 = getTime(t1, "- Variance Stabilized")
+        
     #__ Decimate to grey
     if bayer_mode : 
         img_grey = compute_grey_images(img, method="decimating")
@@ -78,13 +86,6 @@ def estimate_kernels(img, options, params):
         
     grey_imshape_y, grey_imshape_x = grey_imshape = img_grey.shape
     
-    #__ Performing Variance Stabilization Transform
-    
-    img_grey = GAT(img_grey, alpha, beta)
-    
-    if verbose_3:
-        cuda.synchronize()
-        t1 = getTime(t1, "- Variance Stabilized")
         
     #__ Computing grads
     th_grey_img = th.as_tensor(img_grey, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
