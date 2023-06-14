@@ -132,7 +132,6 @@ def accumulate_ref(ref_img, covs, bayer_mode, iso_kernel, scale, CFA_pattern,
         val = cuda.local.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
     # Copying CFA locally. We will read that 9 times, so it's worth it
-    # TODO threads could cooperate to read that
     local_CFA = cuda.local.array((2,2), uint8)
     for i in range(2):
         for j in range(2):
@@ -149,7 +148,7 @@ def accumulate_ref(ref_img, covs, bayer_mode, iso_kernel, scale, CFA_pattern,
 
     
     # computing kernel
-    # TODO this is rather slow and could probably be sped up
+    # this is rather slow and could probably be sped up
     if not iso_kernel:
         interpolated_cov = cuda.local.array((2, 2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
         cov_i = cuda.local.array((2, 2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
@@ -388,7 +387,6 @@ def accumulate(comp_img, alignments, covs, r,
         val = cuda.local.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
     # Copying CFA locally. We will read that 9 times, so it's worth it
-    # TODO threads could cooperate to read that
     local_CFA = cuda.local.array((2,2), uint8)
     for i in range(2):
         for j in range(2):

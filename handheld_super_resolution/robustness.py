@@ -49,7 +49,7 @@ def init_robustness(ref_img, options, params):
     verbose_3 = options['verbose'] >= 3
     r_on = params['on']
     
-    # TODO we may move the CFA to GPU as soon as it is read (in process() )
+
     CFA_pattern = cuda.to_device(params['exif']['CFA Pattern'])
     
 
@@ -215,9 +215,6 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, options
             current_time = getTime(
                 current_time, ' - Robustness locally minimized')
     else: 
-        # TODO maybe it would be faster to initalize r on gpu
-        # and write a cuda kernel to fill it with 1. The algorithm
-        # is meant to run with r_on anyways
         temp = np.ones(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
         r = cuda.to_device(temp)
     return r

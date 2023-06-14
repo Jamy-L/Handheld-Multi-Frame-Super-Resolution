@@ -28,7 +28,7 @@ from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso
 from .block_matching import init_block_matching, align_image_block_matching
 from .params import check_params_validity, get_params, merge_params
 from .robustness import init_robustness, compute_robustness
-from .utils_dng import save_as_dng, load_dng_burst
+from .utils_dng import load_dng_burst
 from .ICA import ICA_optical_flow, init_ICA
 from .fast_monte_carlo import run_fast_MC
 from .kernels import estimate_kernels

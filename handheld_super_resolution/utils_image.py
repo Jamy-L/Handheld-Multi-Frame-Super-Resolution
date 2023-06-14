@@ -171,7 +171,6 @@ def cuda_GAT(image, VST_image, alpha, beta):
     
 
 def frame_count_denoising_gauss(image, r_acc, params):
-    # TODO it may be useless to bother defining this function for grey images
     denoised = cuda.device_array(image.shape, DEFAULT_NUMPY_FLOAT_TYPE)
     
     grey_mode = params['mode'] == 'grey'
@@ -236,7 +235,6 @@ def denoise_power_gauss(r_acc, sigma_max, r_max):
     return sigma_max * (r_max - r)/r_max
 
 def frame_count_denoising_median(image, r_acc, params):
-    # TODO it may be useless to bother defining this function for grey images
     denoised = cuda.device_array(image.shape, DEFAULT_NUMPY_FLOAT_TYPE)
     
     grey_mode = params['mode'] == 'grey'
