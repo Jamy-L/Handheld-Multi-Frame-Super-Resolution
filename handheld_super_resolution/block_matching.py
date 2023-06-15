@@ -314,7 +314,7 @@ def cuda_upsample_alignments(referencePyramidLevel, alternatePyramidLevel, upsam
     subtile_pos_x = subtile_x*tileSize
     
     # copying ref patch into local memory, because it needs to be read 3 times
-    # TODO this should be rewritten to allow patchs bigger than 32
+    # this should be rewritten to allow patchs bigger than 32
     local_ref = cuda.local.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
     for i in range(tileSize):
         for j in range(tileSize):
@@ -456,7 +456,7 @@ def cuda_L1_local_search(referencePyramidLevel, alternatePyramidLevel,
     patch_pos_x = tile_x * tileSize
     patch_pos_y = tile_y * tileSize
     
-    # TODO this should be rewritten to allow patchs bigger than 32
+    # this should be rewritten to allow patchs bigger than 32
     local_ref = cuda.local.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
     for i in range(tileSize):
         for j in range(tileSize):
@@ -511,7 +511,7 @@ def cuda_L2_local_search(referencePyramidLevel, alternatePyramidLevel,
     patch_pos_x = tile_x * tileSize
     patch_pos_y = tile_y * tileSize
     
-    # TODO this should be rewritten to allow patchs bigger than 32
+    # this should be rewritten to allow patchs bigger than 32
     local_ref = cuda.local.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
     for i in range(tileSize):
         for j in range(tileSize):

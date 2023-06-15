@@ -15,7 +15,7 @@ import math
 
 from numba import uint8, cuda
 
-from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, EPSILON_DIV, DEFAULT_THREADS
+from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS
 from .utils_image import denoise_power_merge, denoise_range_merge
 from .linalg import quad_mat_prod, invert_2x2, interpolate_cov
 
@@ -32,15 +32,15 @@ def merge_ref(ref_img, kernels, num, den, options, params, acc_rob=None):
         Reference image J_1
     kernels : device Array[imshape_y//2, imshape_x//2, 2, 2]
         Covariance Matrices Omega_1
-    num : device Array[s*imshape_y, s*imshape_x]
+    num : device Array[s*imshape_y, s*imshape_x, c]
         Numerator of the accumulator
-    den : device Array[s*imshape_y, s*imshape_x]
+    den : device Array[s*imshape_y, s*imshape_x, c]
         Denominator of the accumulator
     options : dict
         verbose options.
     params : dict
         parameters (containing the zoom s).
-    acc_rob : [imshape_y//2, imshape_x//2], optional
+    acc_rob : [imshape_y, imshape_x], optional
         accumulated robustness mask. The default is None.
 
     Returns
@@ -86,33 +86,7 @@ def merge_ref(ref_img, kernels, num, den, options, params, acc_rob=None):
 def accumulate_ref(ref_img, covs, bayer_mode, iso_kernel, scale, CFA_pattern,
                    num, den, acc_rob,
                    robustness_denoise, max_frame_count, rad_max, max_multiplier):
-    """
-
-
-
-    Parameters
-    ----------
-    ref_img : Array[imsize_y, imsize_x]
-        The reference image
-    covs : device array[grey_imsize_y, grey_imsize_x, 2, 2]
-        covariance matrices sampled at the center of each grey pixel.
-    bayer_mode : bool
-        Whether the burst is raw or grey
-    iso_kernel : bool
-        Whether isotropic kernels should be used, or handhled's kernels.
-    scale : float
-        scaling factor
-    CFA_pattern : Array[2, 2]
-        CFA pattern of the burst
-    output_img : Array[SCALE*imsize_y, SCALE_imsize_x]
-        The empty output image
-
-    Returns
-    -------
-    None.
-
-    """
-
+    
     output_pixel_idx, output_pixel_idy = cuda.grid(2)
     output_size_y, output_size_x, _ = num.shape
     input_size_y, input_size_x = ref_img.shape
@@ -132,7 +106,6 @@ def accumulate_ref(ref_img, covs, bayer_mode, iso_kernel, scale, CFA_pattern,
         val = cuda.local.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
     # Copying CFA locally. We will read that 9 times, so it's worth it
-    # TODO threads could cooperate to read that
     local_CFA = cuda.local.array((2,2), uint8)
     for i in range(2):
         for j in range(2):
@@ -149,7 +122,7 @@ def accumulate_ref(ref_img, covs, bayer_mode, iso_kernel, scale, CFA_pattern,
 
     
     # computing kernel
-    # TODO this is rather slow and could probably be sped up
+    # this is rather slow and could probably be sped up
     if not iso_kernel:
         interpolated_cov = cuda.local.array((2, 2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
         cov_i = cuda.local.array((2, 2), dtype=DEFAULT_CUDA_FLOAT_TYPE)
@@ -187,21 +160,16 @@ def accumulate_ref(ref_img, covs, bayer_mode, iso_kernel, scale, CFA_pattern,
         # interpolating covs
         interpolate_cov(close_covs, grey_pos, interpolated_cov)
         
-        if abs(interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0]) > EPSILON_DIV: # checking if cov is invertible
-            invert_2x2(interpolated_cov, cov_i)
+        invert_2x2(interpolated_cov, cov_i)
 
-        else: # if not invertible, identity matrix
-            cov_i[0, 0] = 1
-            cov_i[0, 1] = 0
-            cov_i[1, 0] = 0
-            cov_i[1, 1] = 1
             
     
     # fetching acc robustness if required
-    # The robustness of the center of the patch is picked through neirest neigbhoor interpolation
+    # Acc robustness is known for each raw pixel. An implicit interpolation done
+    # from LR to HR using nearest neighbor. 
     if robustness_denoise : 
-        local_acc_r = acc_rob[min(round(grey_pos[0]), acc_rob.shape[0]-1),
-                              min(round(grey_pos[1]), acc_rob.shape[1]-1)]
+        local_acc_r = acc_rob[min(round(coarse_ref_sub_pos[0]), acc_rob.shape[0]-1),
+                              min(round(coarse_ref_sub_pos[1]), acc_rob.shape[1]-1)]
         
         additional_denoise_power = denoise_power_merge(local_acc_r, max_multiplier, max_frame_count)
         rad = denoise_range_merge(local_acc_r, rad_max, max_frame_count)
@@ -288,11 +256,11 @@ def merge(comp_img, alignments, covs, r, num, den,
         The final estimation of the tiles' alignment V_n(p)
     covs : device array[imsize_y//2, imsize_x//2, 2, 2]
         covariance matrices Omega_n
-    r : Device_Array[imsize_y//2, imsize_x//2]
+    r : Device_Array[imsize_y, imsize_x]
         Robustness mask r_n
-    num : device Array[s*imshape_y, s*imshape_x]
+    num : device Array[s*imshape_y, s*imshape_x, c]
         Numerator of the accumulator
-    den : device Array[s*imshape_y, s*imshape_x]
+    den : device Array[s*imshape_y, s*imshape_x, c]
         Denominator of the accumulator
         
     options : Dict
@@ -334,38 +302,6 @@ def merge(comp_img, alignments, covs, r, num, den,
 def accumulate(comp_img, alignments, covs, r,
                bayer_mode, iso_kernel, scale, tile_size, CFA_pattern,
                num, den):
-    """
-
-
-
-    Parameters
-    ----------
-    comp_imgs : Array[imsize_y, imsize_x]
-        The compared image
-    alignements : Array[n_tiles_y, n_tiles_x, 2]
-        The alignemnt vectors for each tile of the image
-    covs : device array[imsize_y/2, imsize_x/2, 2, 2]
-        covariance matrices sampled at the center of each bayer quad.
-    r : Device_Array[imsize_y/2, imsize_x/2, 3]
-            Robustness of the moving images
-    bayer_mode : bool
-        Whether the burst is raw or grey
-    iso_kernel : bool
-        Whether isotropic kernels should be used, or handhled's kernels.
-    scale : float
-        scaling factor
-    tile_size : int
-        tile size used for alignment (on the raw scale !)
-    CFA_pattern : device Array[2, 2]
-        CFA pattern of the burst
-    output_img : Array[SCALE*imsize_y, SCALE_imsize_x]
-        The empty output image
-
-    Returns
-    -------
-    None.
-
-    """
 
     output_pixel_idx, output_pixel_idy = cuda.grid(2)
 
@@ -387,7 +323,6 @@ def accumulate(comp_img, alignments, covs, r,
         val = cuda.local.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
     # Copying CFA locally. We will read that 9 times, so it's worth it
-    # TODO threads could cooperate to read that
     local_CFA = cuda.local.array((2,2), uint8)
     for i in range(2):
         for j in range(2):
@@ -414,15 +349,11 @@ def accumulate(comp_img, alignments, covs, r,
 
 
     # fetching robustness
-    # The robustness of the center of the patch is picked through neirest neigbhoor interpolation
-
-    if bayer_mode :
-        y_r = clamp(round((coarse_ref_sub_pos[0] - 0.5)/2), 0, r.shape[0])
-        x_r = clamp(round((coarse_ref_sub_pos[1] - 0.5)/2), 0, r.shape[1])
-
-    else:
-        y_r = clamp(round(coarse_ref_sub_pos[0]), 0, r.shape[0]-1)
-        x_r = clamp(round(coarse_ref_sub_pos[1]), 0, r.shape[1]-1)
+    # The robustness coefficient is known for every raw pixel, and implicitely
+    # interpolated to HR using nearest neighboor interpolations.
+    
+    y_r = clamp(round(coarse_ref_sub_pos[0]), 0, r.shape[0]-1)
+    x_r = clamp(round(coarse_ref_sub_pos[1]), 0, r.shape[1]-1)
     local_r = r[y_r, x_r]
         
     patch_center_pos[1] = coarse_ref_sub_pos[1] + local_optical_flow[0]
@@ -470,14 +401,9 @@ def accumulate(comp_img, alignments, covs, r,
         # interpolating covs at the desired spot
         interpolate_cov(close_covs, grey_pos, interpolated_cov)
 
-        if abs(interpolated_cov[0, 0]*interpolated_cov[1, 1] - interpolated_cov[0, 1]*interpolated_cov[1, 0]) > EPSILON_DIV: # checking if cov is invertible
-            invert_2x2(interpolated_cov, cov_i)
+        invert_2x2(interpolated_cov, cov_i)
 
-        else: # if not invertible, identity matrix
-            cov_i[0, 0] = 1
-            cov_i[0, 1] = 0
-            cov_i[1, 0] = 0
-            cov_i[1, 1] = 1
+
     
     
     center_x = round(patch_center_pos[1])

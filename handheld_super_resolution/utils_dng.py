@@ -67,13 +67,13 @@ def load_dng_burst(burst_path):
         Tags of the reference frame
     CFA : numpy array [2, 2]
         Bayer pattern of the stack
-    xyz2cam : TYPE
-        DESCRIPTION.
-    TYPE
-        DESCRIPTION.
+    xyz2cam : Array
+        The xyz to camera color matrix
+    reference_path
+        Path of the reference image.
 
     """
-    ref_id = 0  # TODO Select ref id based on HDR+ method
+    ref_id = 0
     raw_comp = []
 
     # This ensures that burst_path is a Path object

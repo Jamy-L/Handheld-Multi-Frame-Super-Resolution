@@ -17,8 +17,8 @@ from numba import cuda
 import torch as th
 import torch.nn.functional as F
 
-from .linalg import get_eighen_elmts_2x2
-from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS, getTime
+from .linalg import get_eigen_elmts_2x2
+from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS, getTime, timer
 from .utils_image import compute_grey_images, GAT
 
 
@@ -52,6 +52,9 @@ def estimate_kernels(img, options, params):
     bayer_mode = params['mode']=='bayer'
     verbose_3 = options['verbose'] >= 3
     
+    GAT_ = timer(GAT, verbose_3, end_s="- Variance Stabilized")
+    compute_grey_images_ = timer(compute_grey_images, verbose_3, end_s="- Decimated Image")
+    
     k_detail = params['tuning']['k_detail']
     k_denoise = params['tuning']['k_denoise']
     D_th = params['tuning']['D_th']
@@ -66,27 +69,22 @@ def estimate_kernels(img, options, params):
         cuda.synchronize()
         t1 = time.perf_counter()
     
+    #__ Performing Variance Stabilization Transform
+    
+    img = GAT_(img, alpha, beta)
+        
     #__ Decimate to grey
     if bayer_mode : 
-        img_grey = compute_grey_images(img, method="decimating")
-        
-        if verbose_3:
-            cuda.synchronize()
-            t1 = getTime(t1, "- Decimated Image")
+        img_grey = compute_grey_images_(img, method="decimating")
+    
     else :
         img_grey = img # no need to copy now, they will be copied to gpu later.
         
     grey_imshape_y, grey_imshape_x = grey_imshape = img_grey.shape
     
-    #__ Performing Variance Stabilization Transform
-    
-    img_grey = GAT(img_grey, alpha, beta)
-    
-    if verbose_3:
-        cuda.synchronize()
-        t1 = getTime(t1, "- Variance Stabilized")
         
     #__ Computing grads
+    # Horizontal filters
     th_grey_img = th.as_tensor(img_grey, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
     
     
@@ -95,6 +93,7 @@ def estimate_kernels(img, options, params):
                               [[[ 0.5, 0.5]]]])
     grad_kernel1 = th.as_tensor(grad_kernel1, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
     
+    # Vertical filters
     grad_kernel2 = np.array([[[[0.5], 
                                 [0.5]]],
                               
@@ -171,7 +170,7 @@ def cuda_estimate_kernel(full_grads,
     e2 = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
     k = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
-    get_eighen_elmts_2x2(structure_tensor, l, e1, e2)
+    get_eigen_elmts_2x2(structure_tensor, l, e1, e2)
 
     compute_k(l[0], l[1], k, k_detail, k_denoise, D_th, D_tr, k_stretch,
     k_shrink)
@@ -194,23 +193,19 @@ def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch,
     Parameters
     ----------
     l1 : float
-        lambda1 (dominant eighen value)
+        lambda1 (dominant eigen value)
     l2 : float
-        lambda2
+        lambda2 : second eigenvalue
     k : Array[2]
         empty vector where k_1 and k_2 will be stored
-    k_detail : TYPE
-        DESCRIPTION.
-    k_denoise : TYPE
-        DESCRIPTION.
-    D_th : TYPE
-        DESCRIPTION.
-    D_tr : TYPE
-        DESCRIPTION.
-    k_stretch : TYPE
-        DESCRIPTION.
-    k_shrink : TYPE
-        DESCRIPTION.
+    k_detail : float
+    k_denoise : float
+    D_th : float
+    D_tr : float
+    k_stretch : float
+    k_shrink : float
+        Parameters to compute k_1 and k_2, all detailed in the article.
+        
 
 
     """

@@ -171,7 +171,6 @@ def cuda_GAT(image, VST_image, alpha, beta):
     
 
 def frame_count_denoising_gauss(image, r_acc, params):
-    # TODO it may be useless to bother defining this function for grey images
     denoised = cuda.device_array(image.shape, DEFAULT_NUMPY_FLOAT_TYPE)
     
     grey_mode = params['mode'] == 'grey'
@@ -236,7 +235,6 @@ def denoise_power_gauss(r_acc, sigma_max, r_max):
     return sigma_max * (r_max - r)/r_max
 
 def frame_count_denoising_median(image, r_acc, params):
-    # TODO it may be useless to bother defining this function for grey images
     denoised = cuda.device_array(image.shape, DEFAULT_NUMPY_FLOAT_TYPE)
     
     grey_mode = params['mode'] == 'grey'
@@ -393,6 +391,21 @@ def cuda_downsample(th_img, kernel='gaussian', factor=2):
     h2, w2 = np.floor(np.array(th_filteredImage.shape[2:]) / float(factor)).astype(np.int)
 
     return th_filteredImage[:, :, :h2 * factor:factor, :w2 * factor:factor]
+
+
+@cuda.jit(device=True)
+def dogson_biquadratic_kernel(x, y):
+    return dogson_quadratic_kernel(x) * dogson_quadratic_kernel(y)
+
+@cuda.jit(device=True)
+def dogson_quadratic_kernel(x):
+    abs_x = abs(x)
+    if abs_x <= 0.5:
+        return -2 * abs_x*abs_x +1
+    elif abs_x <= 1.5:
+        return abs_x*abs_x - 5/2 * abs_x + 1.5
+    else:
+        return 0
 
 def computeRMSE(image1, image2):
     '''computes the Root Mean Square Error between two images'''
