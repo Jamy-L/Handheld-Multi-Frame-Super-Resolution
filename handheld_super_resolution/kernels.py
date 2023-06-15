@@ -18,7 +18,7 @@ import torch as th
 import torch.nn.functional as F
 
 from .linalg import get_eigen_elmts_2x2
-from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS, getTime
+from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS, getTime, timer
 from .utils_image import compute_grey_images, GAT
 
 
@@ -52,6 +52,9 @@ def estimate_kernels(img, options, params):
     bayer_mode = params['mode']=='bayer'
     verbose_3 = options['verbose'] >= 3
     
+    GAT_ = timer(GAT, verbose_3, end_s="- Variance Stabilized")
+    compute_grey_images_ = timer(compute_grey_images, verbose_3, end_s="- Decimated Image")
+    
     k_detail = params['tuning']['k_detail']
     k_denoise = params['tuning']['k_denoise']
     D_th = params['tuning']['D_th']
@@ -68,19 +71,12 @@ def estimate_kernels(img, options, params):
     
     #__ Performing Variance Stabilization Transform
     
-    img = GAT(img, alpha, beta)
-    
-    if verbose_3:
-        cuda.synchronize()
-        t1 = getTime(t1, "- Variance Stabilized")
+    img = GAT_(img, alpha, beta)
         
     #__ Decimate to grey
     if bayer_mode : 
-        img_grey = compute_grey_images(img, method="decimating")
-        
-        if verbose_3:
-            cuda.synchronize()
-            t1 = getTime(t1, "- Decimated Image")
+        img_grey = compute_grey_images_(img, method="decimating")
+    
     else :
         img_grey = img # no need to copy now, they will be copied to gpu later.
         
@@ -88,6 +84,7 @@ def estimate_kernels(img, options, params):
     
         
     #__ Computing grads
+    # Horizontal filters
     th_grey_img = th.as_tensor(img_grey, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
     
     
@@ -96,6 +93,7 @@ def estimate_kernels(img, options, params):
                               [[[ 0.5, 0.5]]]])
     grad_kernel1 = th.as_tensor(grad_kernel1, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
     
+    # Vertical filters
     grad_kernel2 = np.array([[[[0.5], 
                                 [0.5]]],
                               

@@ -24,7 +24,7 @@ from numba import cuda
 import rawpy
 
 from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame_count_denoising_median, apply_orientation
-from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso
+from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso, timer
 from .block_matching import init_block_matching, align_image_block_matching
 from .params import check_params_validity, get_params, merge_params
 from .robustness import init_robustness, compute_robustness
@@ -63,9 +63,27 @@ def main(ref_img, comp_imgs, options, params):
         Contains (if debugging is enabled) some debugging infos.
 
     """
+    
+    grey_method = params['grey method']
+    
+    ### verbose and timing related stuff
     verbose = options['verbose'] >= 1
     verbose_2 = options['verbose'] >= 2
     verbose_3 = options['verbose'] >= 3
+    
+    compute_grey_images_ = timer(compute_grey_images, verbose_3, end_s="- Ref grey image estimated by {}".format(grey_method))
+    init_block_matching_ = timer(init_block_matching, verbose_2, '\nBeginning Block Matching initialisation', 'Block Matching initialised (Total)')
+    init_ICA_ = timer(init_ICA, verbose_2, '\nBeginning ICA initialisation', 'ICA initialised (Total)')
+    init_robustness_ = timer(init_robustness, verbose_2, "\nEstimating ref image local stats", 'Local stats estimated (Total)')
+    compute_grey_images_ = timer(compute_grey_images, verbose_3, end_s="- grey images estimated by {}".format(grey_method))
+    align_image_block_matching_ = timer(align_image_block_matching, verbose_2, 'Beginning block matching', 'Block Matching (Total)')
+    ICA_optical_flow_ = timer(ICA_optical_flow, verbose_2, '\nBeginning ICA alignment', 'Image aligned using ICA (Total)')
+    compute_robustness_ = timer(compute_robustness, verbose_2, '\nEstimating robustness', 'Robustness estimated (Total)')
+    estimate_kernels_ = timer(estimate_kernels, verbose_2, '\nEstimating kernels', 'Kernels estimated (Total)')
+    merge_ = timer(merge, verbose_2, '\nAccumulating Image', 'Image accumulated (Total)')
+    merge_ref_ = timer(merge_ref, verbose_2, '\nAccumulating ref Img', 'Ref Img accumulated (Total)')    
+    divide_ = timer(divide, verbose_2, end_s='\n------------------------\nImage normalized (Total)')
+    
     
     bayer_mode = params['mode']=='bayer'
     
@@ -85,58 +103,27 @@ def main(ref_img, comp_imgs, options, params):
     
     
     #### Raw to grey
-    grey_method = params['grey method']
     
     if bayer_mode :
-        cuda_ref_grey = compute_grey_images(cuda_ref_img, grey_method)
-        if verbose_3 :
-            cuda.synchronize()
-            getTime(t1, "- Ref grey image estimated by {}".format(grey_method))
+        cuda_ref_grey = compute_grey_images_(cuda_ref_img, grey_method)
+
     else:
         cuda_ref_grey = cuda_ref_img
         
     #### Block Matching
-    if verbose_2 :
-        cuda.synchronize()
-        current_time = time.perf_counter()
-        print('\nBeginning Block Matching initialisation')
         
-    reference_pyramid = init_block_matching(cuda_ref_grey, options, params['block matching'])
-    
-    if verbose_2 :
-        cuda.synchronize()
-        current_time = getTime(current_time, 'Block Matching initialised (Total)')
-        
+    reference_pyramid = init_block_matching_(cuda_ref_grey, options, params['block matching'])
     
     #### ICA : compute grad and hessian    
-    if verbose_2 :
-        cuda.synchronize()
-        current_time = time.perf_counter()
-        print('\nBeginning ICA initialisation')
-        
-    ref_gradx, ref_grady, hessian = init_ICA(cuda_ref_grey, options, params['kanade'])
     
-    if verbose_2 :
-        cuda.synchronize()
-        current_time = getTime(current_time, 'ICA initialised (Total)')
-    
+    ref_gradx, ref_grady, hessian = init_ICA_(cuda_ref_grey, options, params['kanade'])
     
     #### Local stats estimation
-    if verbose_2:
-        cuda.synchronize()
-        current_time = time.perf_counter()
-        print("\nEstimating ref image local stats")
-        
-    ref_local_means, ref_local_stds = init_robustness(cuda_ref_img,options, params['robustness'])
+    
+    ref_local_means, ref_local_stds = init_robustness_(cuda_ref_img,options, params['robustness'])
     
     if accumulate_r:
         accumulated_r = cuda.to_device(np.zeros(ref_local_means.shape[:2]))
-
-    
-    
-    if verbose_2 :
-        cuda.synchronize()
-        current_time = getTime(current_time, 'Local stats estimated (Total)')
 
     # zeros init of num and den
     scale = params["scale"]
@@ -159,89 +146,46 @@ def main(ref_img, comp_imgs, options, params):
         
         #### Moving to GPU
         cuda_img = cuda.to_device(comp_imgs[im_id])
-        if verbose_3 : 
-            cuda.synchronize()
-            current_time = getTime(im_time, 'Arrays moved to GPU')
         
         #### Compute Grey Images
         if bayer_mode:
             cuda_im_grey = compute_grey_images(comp_imgs[im_id], grey_method)
-            if verbose_3 :
-                cuda.synchronize()
-                current_time = getTime(current_time, "- grey images estimated by {}".format(grey_method))
+
         else:
             cuda_im_grey = cuda_img
         
         #### Block Matching
-        if verbose_2 :
-            cuda.synchronize()
-            current_time = time.perf_counter()
-            print('Beginning block matching')
         
-        pre_alignment = align_image_block_matching(cuda_im_grey, reference_pyramid, options, params['block matching'])
+        pre_alignment = align_image_block_matching_(cuda_im_grey, reference_pyramid, options, params['block matching'])
         
-        if verbose_2 :
-            cuda.synchronize()
-            current_time = getTime(current_time, 'Block Matching (Total)')
-            
-            
         #### ICA
-        if verbose_2 :
-            cuda.synchronize()
-            current_time = time.perf_counter()
-            print('\nBeginning ICA alignment')
         
-        cuda_final_alignment = ICA_optical_flow(
-            cuda_im_grey, cuda_ref_grey, ref_gradx, ref_grady, hessian, pre_alignment, options, params['kanade'])
+        cuda_final_alignment = ICA_optical_flow_(cuda_im_grey, cuda_ref_grey,
+                                                 ref_gradx, ref_grady,
+                                                 hessian, pre_alignment,
+                                                 options, params['kanade'])
         
         if debug_mode:
             debug_dict["flow"].append(cuda_final_alignment.copy_to_host())
             
-        if verbose_2 : 
-            cuda.synchronize()
-            current_time = getTime(current_time, 'Image aligned using ICA (Total)')
-            
             
         #### Robustness
-        if verbose_2 :
-            cuda.synchronize()
-            current_time = time.perf_counter()
-            print('\nEstimating robustness')
-            
-        cuda_robustness = compute_robustness(cuda_img, ref_local_means, ref_local_stds, cuda_final_alignment,
-                                             options, params['robustness'])
+          
+        cuda_robustness = compute_robustness_(cuda_img, ref_local_means, ref_local_stds, cuda_final_alignment,
+                                              options, params['robustness'])
         if accumulate_r:
             add(accumulated_r, cuda_robustness)
         
-        if verbose_2 :
-            cuda.synchronize()
-            current_time = getTime(current_time, 'Robustness estimated (Total)')
 
-            
         #### Kernel estimation
-        if verbose_2 :
-            cuda.synchronize()
-            current_time = time.perf_counter()
-            print('\nEstimating kernels')
-            
-        cuda_kernels = estimate_kernels(cuda_img, options, params['merging'])
         
-        if verbose_2 :
-            cuda.synchronize()
-            current_time = getTime(current_time, 'Kernels estimated (Total)')
-            
-            
+        cuda_kernels = estimate_kernels_(cuda_img, options, params['merging'])
+        
         #### Merging
-        if verbose_2 : 
-            current_time = time.perf_counter()
-            print('\nAccumulating Image')
-            
-        merge(cuda_img, cuda_final_alignment, cuda_kernels, cuda_robustness, num, den,
-              options, params['merging'])
         
-        if verbose_2 :
-            cuda.synchronize()
-            current_time = getTime(current_time, 'Image accumulated (Total)')
+        merge_(cuda_img, cuda_final_alignment, cuda_kernels, cuda_robustness, num, den,
+               options, params['merging'])
+        
         if verbose :
             cuda.synchronize()
             getTime(im_time, '\nImage processed (Total)')
@@ -250,45 +194,28 @@ def main(ref_img, comp_imgs, options, params):
             debug_dict['robustness'].append(cuda_robustness.copy_to_host())
     
     #### Ref kernel estimation
-    if verbose_2 : 
-        cuda.synchronize()
-        current_time = time.perf_counter()
-        print('\nEstimating kernels')
         
-    cuda_kernels = estimate_kernels(cuda_ref_img, options, params['merging'])
-    
-    if verbose_2 : 
-        cuda.synchronize()
-        current_time = getTime(current_time, 'Kernels estimated (Total)')
+    cuda_kernels = estimate_kernels_(cuda_ref_img, options, params['merging'])
     
     #### Merge ref
-    if verbose_2 :
-        cuda.synchronize()
-        print('\nAccumulating ref Img')
-    
+
     if accumulate_r:     
-        merge_ref(cuda_ref_img, cuda_kernels,
-                  num, den,
-                  options, params["merging"], accumulated_r)
+        merge_ref_(cuda_ref_img, cuda_kernels,
+                   num, den,
+                   options, params["merging"], accumulated_r)
     else:
-        merge_ref(cuda_ref_img, cuda_kernels,
-                  num, den,
-                  options, params["merging"])
+        merge_ref_(cuda_ref_img, cuda_kernels,
+                   num, den,
+                   options, params["merging"])
     
-    if verbose_2 : 
-        cuda.synchronize()
-        getTime(current_time, 'Ref Img accumulated (Total)')
+
         
     # num is outwritten into num/den
-    divide(num, den)
-    
-    if verbose_2 :
-        print('\n------------------------')
-        cuda.synchronize()
-        current_time = getTime(current_time, 'Image normalized (Total)')
+    divide_(num, den)
     
     if verbose :
-        print('\nTotal ellapsed time : ', time.perf_counter() - t1)
+        s = '\nTotal ellapsed time : '
+        print(s, ' ' * (50 - len(s)), ': ', round((time.perf_counter() - t1), 2), 'seconds')
     
     if accumulate_r :
         debug_dict['accumulated robustness'] = accumulated_r
@@ -338,17 +265,17 @@ def process(burst_path, options=None, custom_params=None):
         beta = sum([x[0] for x in tags['Image Tag 0xC761'].values[1::2]])/3
     
     #### Packing noise model related to picture ISO
-    curve_iso = round_iso(ISO) # Rounds non standart ISO to regular ISO (100, 200, 400, ...)
-    std_noise_model_label = 'noise_model_std_ISO_{}'.format(curve_iso)
-    diff_noise_model_label = 'noise_model_diff_ISO_{}'.format(curve_iso)
-    std_noise_model_path = (NOISE_MODEL_PATH / std_noise_model_label).with_suffix('.npy')
-    diff_noise_model_path = (NOISE_MODEL_PATH / diff_noise_model_label).with_suffix('.npy')
+    # curve_iso = round_iso(ISO) # Rounds non standart ISO to regular ISO (100, 200, 400, ...)
+    # std_noise_model_label = 'noise_model_std_ISO_{}'.format(curve_iso)
+    # diff_noise_model_label = 'noise_model_diff_ISO_{}'.format(curve_iso)
+    # std_noise_model_path = (NOISE_MODEL_PATH / std_noise_model_label).with_suffix('.npy')
+    # diff_noise_model_path = (NOISE_MODEL_PATH / diff_noise_model_label).with_suffix('.npy')
     
-    std_curve = np.load(std_noise_model_path)
-    diff_curve = np.load(diff_noise_model_path)
+    # std_curve = np.load(std_noise_model_path)
+    # diff_curve = np.load(diff_noise_model_path)
     
-    ## Use this to compute noise curves on the fly
-    # std_curve, diff_curve = run_fast_MC(alpha, beta)
+    # Use this to compute noise curves on the fly
+    std_curve, diff_curve = run_fast_MC(alpha, beta)
     
     
     if verbose_2:

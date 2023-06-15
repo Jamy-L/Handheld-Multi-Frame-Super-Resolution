@@ -17,7 +17,7 @@ import math
 import numpy as np
 from numba import cuda, uint8
 
-from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE,DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS, clamp
+from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE,DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS, clamp, timer
 from .utils_image import dogson_biquadratic_kernel
 
 def init_robustness(ref_img, options, params):
@@ -43,10 +43,15 @@ def init_robustness(ref_img, options, params):
         local standard deviations of the reference image.
 
     """
+    verbose_3 = options['verbose'] >= 3
+    
+    compute_guide_image_ = timer(compute_guide_image, verbose_3, " - Decimating images to RGB", ' - Image decimated')
+    compute_local_stats_ = timer(compute_local_stats, verbose_3, end_s=' - Local stats estimated')
+    upscale_warp_stats_ = timer(upscale_warp_stats, verbose_3, ' - Local stats warped upscaled')
+    
     imshape_y, imshape_x = ref_img.shape
     
     bayer_mode = params['mode']=='bayer'
-    verbose_3 = options['verbose'] >= 3
     r_on = params['on']
     
 
@@ -54,33 +59,19 @@ def init_robustness(ref_img, options, params):
     
 
     if r_on :         
-        if verbose_3:
-            print(" - Decimating images to RGB")
-            current_time = time.perf_counter()
-
         # Computing guide image
 
         if bayer_mode:
-            guide_ref_img = compute_guide_image(ref_img, CFA_pattern)
+            guide_ref_img = compute_guide_image_(ref_img, CFA_pattern)
         else:
             # Numba friendly code to add 1 channel
             guide_ref_img = ref_img.reshape((imshape_y, imshape_x, 1)) 
-
-        
-        if verbose_3 :
-            cuda.synchronize()
-            current_time = getTime(
-                current_time, ' - Image decimated')
             
-        local_means, local_stds = compute_local_stats(guide_ref_img)
-        
-        if verbose_3 :
-            cuda.synchronize()
-            current_time = getTime(current_time, ' - Local stats estimated')
+        local_means, local_stds = compute_local_stats_(guide_ref_img)
         
         # Upscale stats to raw coarse scale
         local_means = upscale_warp_stats(local_means)
-        local_stds = upscale_warp_stats(local_stds)
+        local_stds = upscale_warp_stats_(local_stds)
         
         return local_means, local_stds
     else:
@@ -114,11 +105,20 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, options
         Locally minimized Robustness map, sampled at the center of
         every bayer quad
     """
+    current_time, verbose_3 = time.perf_counter(), options['verbose'] >= 3
+    
+    compute_guide_image_ = timer(compute_guide_image, verbose_3, " - Decimating images to RGB", ' - Image decimated')
+    compute_local_stats_ = timer(compute_local_stats, verbose_3, end_s=' - Local stats estimated')
+    upscale_warp_stats_ = timer(upscale_warp_stats, verbose_3, end_s=' - Local stats warped and upscaled')
+    compute_dist_ = timer(compute_dist, verbose_3, end_s=' - Estimated color distances')
+    apply_noise_model_ = timer(apply_noise_model, verbose_3, end_s=' - Applied noise model')
+    compute_s_ = timer(compute_s, verbose_3, end_s=' - Flow irregularities registered')
+    robustness_threshold_ = timer(robustness_threshold, verbose_3, end_s=' - Robustness Estimated')
+    local_min_ = timer(local_min, verbose_3, end_s=' - Robustness locally minimized')
     
     imshape_y, imshape_x = comp_img.shape
 
     bayer_mode = params['mode']=='bayer'
-    current_time, verbose_3 = time.perf_counter(), options['verbose'] >= 3
     r_on = params['on']
     
     CFA_pattern = cuda.to_device(params['exif']['CFA Pattern'])
@@ -150,70 +150,34 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, options
             
         # Computing guide image
         if bayer_mode:
-            guide_img = compute_guide_image(comp_img, CFA_pattern)
+            guide_img = compute_guide_image_(comp_img, CFA_pattern)
         else:
             guide_img = comp_img.reshape((imshape_y, imshape_x, 1)) # Adding 1 channel
             
 
         # Computing local stats (before applying optical flow)
-        # 2 channels for mu, sigma
-        
-        if verbose_3:
-            cuda.synchronize()
-            current_time = getTime(current_time, ' - Image decimated to rgb')
             
-        comp_local_means, _ = compute_local_stats(guide_img)
-        
-        if verbose_3 :
-            cuda.synchronize()
-            current_time = getTime(
-                current_time, ' - Local stats estimated')
+        comp_local_means, _ = compute_local_stats_(guide_img)
         
         # Upscale and warp local means
-        comp_local_means = upscale_warp_stats(comp_local_means, 
+        comp_local_means = upscale_warp_stats_(comp_local_means, 
                                              tile_size, flows)
         
-        
         # computing d
-        d_p = compute_dist(ref_local_means, comp_local_means)
+        d_p = compute_dist_(ref_local_means, comp_local_means)
         
-        if verbose_3 :
-            cuda.synchronize()
-            current_time = getTime(
-                current_time, ' - Estimated color distances')
         
         # leveraging the noise model
-        d_sq, sigma_sq = apply_noise_model(d_p, ref_local_means, ref_local_stds,
-                                           cuda_std_curve, cuda_diff_curve)
-        
-        if verbose_3 :
-            cuda.synchronize()
-            current_time = getTime(
-                current_time, ' - Applied noise model')
+        d_sq, sigma_sq = apply_noise_model_(d_p, ref_local_means, ref_local_stds,
+                                            cuda_std_curve, cuda_diff_curve)
         
         # applying flow discontinuity penalty
-        S = cuda.device_array((n_patch_y, n_patch_x), DEFAULT_NUMPY_FLOAT_TYPE)
-        S = compute_s(flows, Mt, s1, s2)
+        S = compute_s_(flows, Mt, s1, s2)
         
-        
-        if verbose_3 :
-            cuda.synchronize()
-            current_time = getTime(
-                current_time, ' - Flow irregularities registered')
-        
-        R = robustness_threshold(d_sq, sigma_sq, S, t, tile_size, bayer_mode)
-        
-        if verbose_3:
-            cuda.synchronize()
-            current_time = getTime(
-                current_time, ' - Robustness Estimated')
+        R = robustness_threshold_(d_sq, sigma_sq, S, t, tile_size, bayer_mode)
 
-        r = local_min(R)
+        r = local_min_(R)
         
-        if verbose_3:
-            cuda.synchronize()
-            current_time = getTime(
-                current_time, ' - Robustness locally minimized')
     else: 
         temp = np.ones(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
         r = cuda.to_device(temp)
