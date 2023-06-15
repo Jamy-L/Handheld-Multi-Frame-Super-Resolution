@@ -161,7 +161,7 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, options
         
         # Upscale and warp local means
         comp_local_means = upscale_warp_stats_(comp_local_means, 
-                                             tile_size, flows)
+                                               tile_size, flows)
         
         # computing d
         d_p = compute_dist_(ref_local_means, comp_local_means)
@@ -396,7 +396,7 @@ def cuda_uspcale_dogson(LR, s, is_ref, flow, tile_size, HR):
     if not (0 <= LR_y < LR_ny and
             0 <= LR_x < LR_nx):
         for c in range(n_channels):
-            HR[y, x, c] = 1/0 # infinte will imply R = 0
+            HR[y, x, c] = 1/0 # infinity will imply R = 0
         return
     
     center_y = round(LR_y)
@@ -416,7 +416,7 @@ def cuda_uspcale_dogson(LR, s, is_ref, flow, tile_size, HR):
             dy = y_ - LR_y
             dx = x_ - LR_x
             
-            w = dogson_biquadratic_kernel(dx,dy) + 1e-6 # 1 e-6 to avoid divinding by zeros
+            w = dogson_biquadratic_kernel(dx,dy) + 1e-6 # 1 e-6 to avoid dividing by zeros
             
             for c in range(n_channels):
                 buffer[c] += LR[y_, x_, c] * w
