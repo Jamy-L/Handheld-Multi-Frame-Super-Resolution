@@ -388,7 +388,7 @@ def cuda_downsample(th_img, kernel='gaussian', factor=2):
         raise ValueError("please use gaussian kernel")
 
     # Shape of the downsampled image
-    h2, w2 = np.floor(np.array(th_filteredImage.shape[2:]) / float(factor)).astype(np.int)
+    h2, w2 = np.floor(np.array(th_filteredImage.shape[2:]) / float(factor)).astype(int)
 
     return th_filteredImage[:, :, :h2 * factor:factor, :w2 * factor:factor]
 
