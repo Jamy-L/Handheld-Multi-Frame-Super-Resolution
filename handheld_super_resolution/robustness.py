@@ -75,7 +75,7 @@ def init_robustness(ref_img, options, params):
         
         return local_means, local_stds
     else:
-        return None
+        return None, None
     
     
 def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, options, params):
