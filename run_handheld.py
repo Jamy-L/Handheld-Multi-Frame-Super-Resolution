@@ -144,15 +144,16 @@ if __name__ == "__main__":
                                       's2' : args.s2,        
                                       'Mt' : args.Mt,       
                                       }
-    
+   
+    params['merging'] = {'tuning' : {'k_stretch' : args.k_stretch,
+                                     'k_shrink' : args.k_shrink
+                                     }}
+
     if args.k_detail is not None:
         params['merging']['tuning']['k_detail'] = args.k_detail
     if args.k_denoise is not None:
         params['merging']['tuning']['k_denoise'] = args.k_denoise
     
-    params['merging'] = {'tuning' : {'k_stretch' : args.k_stretch,
-                                     'k_shrink' : args.k_shrink
-                                     }}
     params['accumulated robustness denoiser'] = {'on': args.R_denoising_on}
     
     outpath = Path(args.outpath)
