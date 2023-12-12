@@ -428,16 +428,14 @@ def accumulate(comp_img, alignments, covs, r,
                 c = comp_img[pixel_idy, pixel_idx]
             
                 # computing distance
-                dist_x = pixel_idx - patch_center_pos[1]
-                dist_y = pixel_idy - patch_center_pos[0]
+                dist_x = abs(pixel_idx - patch_center_pos[1])
+                dist_y = abs(pixel_idy - patch_center_pos[0])
             
                 ### Computing w
                 if iso_kernel : 
-                    y = max(0, 2*(dist_x*dist_x + dist_y*dist_y))
+                    y = 2*(dist_x*dist_x + dist_y*dist_y)
                 else:
-                    y = max(0, quad_mat_prod(cov_i, dist_x, dist_y))
-                    # y can be slightly negative because of numerical precision.
-                    # I clamp it to not explode the error with exp
+                    y = quad_mat_prod(cov_i, dist_x, dist_y)
  
                 w = math.exp(-0.5*y)
 
