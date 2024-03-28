@@ -154,7 +154,7 @@ def get_eigen_vect_2x2(M, l, e1, e2):
     if M[0, 1] == 0 and M[0, 0] == M[1, 1]:
         # M is multiple of identity, picking 2 ortogonal eigen vectors.
         e1[0] = 1; e1[1] = 0
-        e2[0] = 0; e2[0] = 1
+        e2[0] = 0; e2[1] = 1
         
     else:
         # averaging 2 for increased reliability
