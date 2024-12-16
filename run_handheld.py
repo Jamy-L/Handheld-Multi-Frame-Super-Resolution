@@ -59,9 +59,9 @@ if __name__ == "__main__":
     parser.add_argument('--do_sharpening', type=str2bool,  default=True, help='Whether sharpening should be applied during post processing')
     parser.add_argument('--radius', type=float,  default=3, help='If sharpening is applied, radius of the unsharp mask')
     parser.add_argument('--amount', type=float,  default=1.5, help='If sharpening is applied, amount of the unsharp mask')
-    parser.add_argument('--do_tonemapping', type=str2bool,  default=False, help='Whether tonnemaping should be applied during post processing')
-    parser.add_argument('--do_gamma', type=str2bool,  default=False, help='Whether gamma curve should be applied during post processing')
-    parser.add_argument('--do_color_correction', type=str2bool,  default=False, help='Whether color correction should be applied during post processing')
+    parser.add_argument('--do_tonemapping', type=str2bool,  default=True, help='Whether tonnemaping should be applied during post processing')
+    parser.add_argument('--do_gamma', type=str2bool,  default=True, help='Whether gamma curve should be applied during post processing')
+    parser.add_argument('--do_color_correction', type=str2bool,  default=True, help='Whether color correction should be applied during post processing')
     
     
     ## Merging (advanced)
