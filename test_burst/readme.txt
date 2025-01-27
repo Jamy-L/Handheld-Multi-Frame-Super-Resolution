@@ -1,1 +1,2 @@
-Download and unzip the test burst of 13 images taken with the Samsung S8 camera at https://drive.google.com/file/d/1ot0E6guY5AacM-I6-GffHqFzykVb22wV/view?usp=share_link
+Download and unzip the lates release here: https://github.com/Jamy-L/Handheld-Multi-Frame-Super-Resolution/releases
+The test bursts are packed inside.
