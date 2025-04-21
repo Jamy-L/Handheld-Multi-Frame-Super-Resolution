@@ -185,6 +185,9 @@ def run_fast_MC(alpha, beta):
     imin = int(np.ceil(xmin * n_brightness_levels)) + 1
     imax = int(np.floor(xmax * n_brightness_levels)) - 1
 
+    if imin > n_brightness_levels:
+        print("Fast MC impossible, falling back to regular MC")
+        return regular_MC(np.linspace(0, 1, n_brightness_levels+1), alpha, beta)
 
     sigmas = np.empty(n_brightness_levels+1)
     diffs = np.empty(n_brightness_levels+1)
