@@ -252,15 +252,17 @@ def process(burst_path, options=None, custom_params=None):
     # reading image stack
     ref_raw, raw_comp, ISO, tags, CFA, xyz2cam, ref_path = load_dng_burst(burst_path)
     
-    # if the algorithm had to be run on a specific sensor,
-    # the precise values of alpha and beta could be used instead
-    if 'mode' in custom_params and custom_params['mode'] == 'grey':
+    if custom_params.get("alpha", None) is not None:
+        # User provided custom values.
+        print("Using user provided alpha and beta values")
+        alpha = custom_params["alpha"]
+        beta = custom_params["beta"]
+    ## IMPORTANT NOTE : the noise model exif are NOT for nominal ISO 100
+    ## But are already scaled for the image ISO.
+    elif custom_params.get("mode", None) == 'grey':
         alpha = tags['Image Tag 0xC761'].values[0][0]
         beta = tags['Image Tag 0xC761'].values[1][0]
     else:
-        # Averaging RGB noise values
-        ## IMPORTANT NOTE : the noise model exif already are NOT for nominal ISO 100
-        ## But are already scaled for the image ISO.
         alpha = sum([x[0] for x in tags['Image Tag 0xC761'].values[::2]])/3
         beta = sum([x[0] for x in tags['Image Tag 0xC761'].values[1::2]])/3
     

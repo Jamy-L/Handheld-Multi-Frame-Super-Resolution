@@ -158,5 +158,8 @@ cython_debug/
 # VIM
 **/*.swp
 
-#numba cache
+# numba cache
 numba_cache
+
+# test_bursts
+test_burst/

@@ -19,6 +19,48 @@ import rawpy
 from handheld_super_resolution import process
 from handheld_super_resolution.utils_dng import save_as_dng 
 
+def print_parameters(args):
+    print('\nParameters:\n')
+
+    print(f'  Upscaling factor:       {args.scale}\n')
+    if args.scale == 1:
+        print('    Demosaicking mode')
+    else:
+        print('    Super-resolution mode.')
+        if args.scale > 2:
+            print('    WARNING: Since the optics and the integration on the sensor limit the aliasing,')
+            print('             do not expect more details than that obtained at x2 (refer to our paper).')
+
+    print()
+    
+    if args.R_on:
+        print('  Robustness:             enabled')
+        print('  ------------------------------')
+        print(f'  t:                      {args.t:.2f}')
+        print(f'  s1:                     {args.s1:.2f}')
+        print(f'  s2:                     {args.s2:.2f}')
+        print(f'  Mt:                     {args.Mt:.2f}')
+        print(f'  Robustness denoising:   {"enabled" if args.R_denoising_on else "disabled"}')
+    else:
+        print('  Robustness:             disabled')
+    
+    print('\n  Alignment:')
+    print('  ------------------------------')
+    print(f'  ICA Iterations:         {args.ICA_iter}')
+
+    print('\n  Fusion:')
+    print('  ------------------------------')
+    print(f'  Kernel shape:           {args.kernel_shape}')
+    print(f'  k_stretch:              {args.k_stretch:.2f}')
+    print(f'  k_shrink:               {args.k_shrink:.2f}')
+    print(f'  k_detail:               {args.k_detail:.2f}' if args.k_detail is not None else '  k_detail:               SNR based')
+    print(f'  k_denoise:              {args.k_denoise:.2f}' if args.k_denoise is not None else '  k_denoise:              SNR based')
+    
+    if args.alpha is not None:
+        print(f'  alpha:                  {args.alpha:.2f}')
+        print(f'  beta:                   {args.beta:.2f}')
+    
+    print()
 
 if __name__ == "__main__":
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -43,6 +85,10 @@ if __name__ == "__main__":
     parser.add_argument('--outpath', type=str, help='out image')
     parser.add_argument('--scale', type=int, default=2, help='Scaling factor')
     parser.add_argument('--verbose', type=int, default=1, help='Verbose option (0 to 4)')
+
+    ## Override metadata noise profile
+    parser.add_argument('--alpha', type=float, default=None, help='alpha value (Noise profile)')
+    parser.add_argument('--beta', type=float, default=None, help='beta value (Noise profile)')
     
     ## Robustness
     parser.add_argument('--t', type=float,  default=0.12, help='Threshold for robustness')
@@ -78,55 +124,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     
-    
-    print('Parameters:')
-    print('')
-    print('  Upscaling factor:       %d' % args.scale)
-    print('')
-    if args.scale == 1:
-        print('    Demosaicking mode')
-    else:
-        print('    Super-resolution mode.')
-        if args.scale > 2:
-            print('    WARNING: Since the optics and the integration on the sensor limit the aliasing, do not expect more details than that obtained at x2 (refer to our paper and the original publication).')
-    print('')
-    if args.R_on:
-        print('  Robustness:       enabled')
-        print('  -------------------------')
-        print('  t:                      %1.2f' % args.t)
-        print('  s1:                     %1.2f' % args.s1)
-        print('  s2:                     %1.2f' % args.s2)
-        print('  Mt:                     %1.2f' % args.Mt)
-        if args.R_denoising_on:
-            print('  Robustness denoising:   enabled')
-        else:
-            print('  Robustness denoising:   disabled')
-        print('                            ' )
-    else:
-        print('  Robustness:      disabled')
-        print('                            ' )
-    
-    print('  Alignment:')
-    print('  -------------------------')
-    print('  ICA Iterations:         %d' % args.ICA_iter)
-    print('')
-    print('  Fusion:')
-    print('  -------------------------')
-    print('  Kernel shape:           %s' % args.kernel_shape)
-    print('  k_stretch:              %1.2f' % args.k_stretch)
-    print('  k_shrink:               %1.2f' % args.k_shrink)
-    if args.k_detail is not None:
-        print('  k_detail:               %1.2f' % args.k_detail)
-    else:
-        print('  k_detail:               SNR based' )
-    if args.k_denoise is not None:
-        print('  k_denoise:              %1.2f' % args.k_denoise)
-    else:
-        print('  k_denoise:              SNR based' )
-    print('')
-    
-    
-    
+    print_parameters(args)    
     
     
     #### Handheld ####
@@ -137,6 +135,11 @@ if __name__ == "__main__":
             "robustness":{"on":args.R_on},
             "kanade": {"tuning": {"kanadeIter":args.ICA_iter}}
             }
+    
+    if args.alpha or args.beta:
+        assert args.beta and args.alpha, 'Both alpha and beta should be provided'
+        params['alpha'] = args.alpha
+        params['beta'] = args.beta
     
     
     params['robustness']['tuning'] = {'t' : args.t,
