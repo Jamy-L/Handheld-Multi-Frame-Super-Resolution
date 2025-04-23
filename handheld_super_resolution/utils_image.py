@@ -138,6 +138,7 @@ def GAT(image, alpha, beta):
 
     """
     assert len(image.shape) == 2
+    assert alpha > 0, f"alpha should be positive, got {alpha} (VST is ill defined and kernels would be wrong)"
     imshape_y, imshape_x = image.shape
     
     VST_image = cuda.device_array(image.shape, DEFAULT_NUMPY_FLOAT_TYPE)
