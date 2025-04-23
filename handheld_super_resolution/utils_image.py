@@ -1,5 +1,9 @@
+import os
+import glob
+from pathlib import Path
 import math
 
+import cv2
 import numpy as np
 from scipy.ndimage._filters import _gaussian_kernel1d
 from numba import cuda
@@ -437,3 +441,62 @@ def computePSNR(image, noisyImage):
     else:
         print('WARNING: images have different sizes: {}, {}. Returning None'.format(image.shape, noisyImage.shape))
         return None
+    
+def load_png_burst(burst_path, n_images):
+    """
+    Loads a png burst into numpy arrays, and their exif tags.
+
+    Parameters
+    ----------
+    burst_path : Path or str
+        Path of the folder containing the .dngs
+
+    Returns
+    -------
+    ref_raw : numpy Array[H, W]
+        Reference frame
+    raw_comp : numpy Array[n, H, W]
+        Stack of non-reference frame
+    tags : dict
+        Tags of the reference frame
+    reference_path
+        Path of the reference image.
+
+    """
+    ref_id = 0
+    raw_comp = []
+
+    # This ensures that burst_path is a Path object
+    burst_path = Path(burst_path)
+
+
+    #### Read dng as numpy arrays
+    # Get the list of raw images in the burst path
+    raw_path_list = glob.glob(os.path.join(burst_path.as_posix(), '*.png'))
+    assert len(raw_path_list) != 0, 'At least one .png file must be present in the burst folder.'
+    raw_path_list = sorted(raw_path_list)
+    for index, img_path in enumerate(raw_path_list):
+        if index == ref_id:
+            continue
+        if index >= n_images:
+            break
+        img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)  # Use IMREAD_UNCHANGED to keep original bit depth/channels
+        if img is None:
+            raise ValueError(f"Could not read image at path: {img_path}")
+        raw_comp.append(img)
+    raw_comp = np.array(raw_comp)
+
+    # Reference image selection and metadata
+    ref_raw = cv2.imread(raw_path_list[ref_id], cv2.IMREAD_UNCHANGED)
+
+    #### Performing whitebalance and normalizing into 0, 1
+    assert ref_raw.dtype == np.uint8, NotImplementedError('Only uint8 png files are supported for now.')
+
+    if np.issubdtype(type(ref_raw[0, 0]), np.integer):
+        ref_raw = ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE)
+        raw_comp = raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE)
+
+        ref_raw = ref_raw / 255.0
+        raw_comp = raw_comp / 255.0
+
+    return ref_raw, raw_comp, raw_path_list

@@ -11,6 +11,7 @@ where the merge kernels are estimated
 
 import time
 import math
+import warnings
 
 import numpy as np
 from numba import cuda
@@ -64,7 +65,11 @@ def estimate_kernels(img, options, params):
     
     alpha = params['noise']['alpha']
     beta = params['noise']['beta']
-    
+    if alpha is None:
+        warnings.warn("Alpha is None, using default value of 2e-4 and setting beta to 0 for the GAT")
+        alpha = 2e-4
+        beta = 0.0
+
     if verbose_3:
         cuda.synchronize()
         t1 = time.perf_counter()

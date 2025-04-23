@@ -22,15 +22,17 @@ from pathlib import Path
 import numpy as np
 from numba import cuda
 import rawpy
+from skimage import img_as_ubyte
+import cv2
 
-from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame_count_denoising_median, apply_orientation
+from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame_count_denoising_median, apply_orientation, load_png_burst
+from .utils_dng import load_dng_burst
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso, timer
 from .block_matching import init_block_matching, align_image_block_matching
 from .params import check_params_validity, get_params, merge_params
 from .robustness import init_robustness, compute_robustness
-from .utils_dng import load_dng_burst
 from .ICA import ICA_optical_flow, init_ICA
-from .fast_monte_carlo import run_fast_MC
+from .fast_monte_carlo import run_fast_MC, n_brightness_levels
 from .kernels import estimate_kernels
 from .merge import merge, merge_ref
 from . import raw2rgb
@@ -441,5 +443,282 @@ def process(burst_path, options=None, custom_params=None):
         return output_image, debug_dict
     else:
         return output_image
+
+def process_grey_video(burst_path, options=None, custom_params=None, save_ref=False, save_rob=False):
+    """
+    Processes the burst
+
+    Parameters
+    ----------
+    burst_path : str or Path
+        Path of the folder where the .dng burst is located
+    options : dict
+        
+    params : Parameters
+        See params.py for more details.
+
+    Returns
+    -------
+    Array
+        The processed image
+
+    """
+    if options is None:
+        options = {'verbose' : 0}
+    currentTime, verbose_1, verbose_2 = (time.perf_counter(),
+                                         options['verbose'] >= 1,
+                                         options['verbose'] >= 2)
+    params = {}
+    custom_params['mode']='grey'
+    
+    # reading image stack
+    n_images = 15 # Use 15 images for sr
+    print("Loading burst...")
+    ref_raw, raw_comp, path_list = load_png_burst(burst_path, n_images)
+    ISO = None
+    CFA = np.zeros((2, 2))
+    tags = {}
+    
+    if custom_params.get("alpha", None) is not None:
+        # User provided custom values.
+        print("Using user provided alpha and beta values")
+        alpha = custom_params["alpha"]
+        beta = custom_params["beta"]
+    else:
+        alpha = None
+        beta = None
+
+    
+    #### Packing noise model related to picture ISO
+    # curve_iso = round_iso(ISO) # Rounds non standart ISO to regular ISO (100, 200, 400, ...)
+    # std_noise_model_label = 'noise_model_std_ISO_{}'.format(curve_iso)
+    # diff_noise_model_label = 'noise_model_diff_ISO_{}'.format(curve_iso)
+    # std_noise_model_path = (NOISE_MODEL_PATH / std_noise_model_label).with_suffix('.npy')
+    # diff_noise_model_path = (NOISE_MODEL_PATH / diff_noise_model_label).with_suffix('.npy')
+    
+    # std_curve = np.load(std_noise_model_path)
+    # diff_curve = np.load(diff_noise_model_path)
+    
+    # Use this to compute noise curves on the fly
+    if custom_params["robustness"]["on"] and alpha is not None:
+        std_curve, diff_curve = run_fast_MC(alpha, beta)
+    else:
+        # Dummy values : Note that setting these to 0 is equivalent to not using the noise profile because:
+        # max(o, x) = x
+        # y^2/(y^2 + 0^2) * y = y
+        diff_curve = np.zeros(n_brightness_levels+1)
+        std_curve = np.zeros(n_brightness_levels+1)
     
     
+    if verbose_2:
+        currentTime = getTime(currentTime, ' -- Read raw files')
+
+
+
+    
+    #### Estimating ref image SNR
+    brightness = np.mean(ref_raw)
+    
+    id_noise = round(1000*brightness)
+    std = std_curve[id_noise]
+    
+    SNR = brightness/std
+    if verbose_1:
+        print(" ",10*"-")
+        print('|ISO : {}'.format(ISO))
+        print('|Image brightness : {:.2f}'.format(brightness))
+        print('|expected noise std : {:.2e}'.format(std))
+        print('|Estimated SNR : {:.2f}'.format(SNR))
+    
+    SNR_params = get_params(SNR)
+    
+    #### Merging params dictionnaries
+    
+    # checking (just in case !)
+    check_params_validity(SNR_params, ref_raw.shape)
+    
+    if custom_params is not None :
+        params = merge_params(dominant=custom_params, recessive=SNR_params)
+        check_params_validity(params, ref_raw.shape)
+        
+    #### adding metadatas to dict 
+    if not 'noise' in params['merging'].keys(): 
+        params['merging']['noise'] = {}
+
+        
+    params['merging']['noise']['alpha'] = alpha
+    params['merging']['noise']['beta'] = beta
+    
+    ## Writing exifs data into parameters
+    if not 'exif' in params['merging'].keys(): 
+        params['merging']['exif'] = {}
+    if not 'exif' in params['robustness'].keys(): 
+        params['robustness']['exif'] = {}
+        
+    params['merging']['exif']['CFA Pattern'] = CFA
+    params['robustness']['exif']['CFA Pattern'] = CFA
+    params['ISO'] = ISO
+    
+    params['robustness']['std_curve'] = std_curve
+    params['robustness']['diff_curve'] = diff_curve
+    
+    # copying parameters values in sub-dictionaries
+    if 'scale' not in params["merging"].keys() :
+        params["merging"]["scale"] = params["scale"]
+    if 'scale' not in params['accumulated robustness denoiser'].keys() :
+        params['accumulated robustness denoiser']["scale"] = params["scale"]
+    if 'tileSize' not in params["kanade"]["tuning"].keys():
+        params["kanade"]["tuning"]['tileSize'] = params['block matching']['tuning']['tileSizes'][0]
+    if 'tileSize' not in params["robustness"]["tuning"].keys():
+        params["robustness"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
+    if 'tileSize' not in params["merging"]["tuning"].keys():
+        params["merging"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
+
+
+    if 'mode' not in params["kanade"].keys():
+        params["kanade"]["mode"] = params['mode']
+    if 'mode' not in params["robustness"].keys():
+        params["robustness"]["mode"] = params['mode']
+    if 'mode' not in params["merging"].keys():
+        params["merging"]["mode"] = params['mode']
+    if 'mode' not in params['accumulated robustness denoiser'].keys():
+        params['accumulated robustness denoiser']["mode"] = params['mode']
+    
+    # deactivating robustness accumulation if robustness is disabled
+    params['accumulated robustness denoiser']['median']['on'] &= params['robustness']['on']
+    params['accumulated robustness denoiser']['gauss']['on'] &= params['robustness']['on']
+    params['accumulated robustness denoiser']['merge']['on'] &= params['robustness']['on']
+    
+    params['accumulated robustness denoiser']['on'] = \
+        (params['accumulated robustness denoiser']['gauss']['on'] or
+         params['accumulated robustness denoiser']['median']['on'] or
+         params['accumulated robustness denoiser']['merge']['on'])
+     
+    # if robustness aware denoiser is in merge mode, copy in merge params
+    if params['accumulated robustness denoiser']['merge']['on']:
+        params['merging']['accumulated robustness denoiser'] = params['accumulated robustness denoiser']['merge']
+    else:
+        params['merging']['accumulated robustness denoiser'] = {'on' : False}
+        
+        
+        
+    
+    
+    #### Running the handheld pipeline
+    iter_ = 0
+    # Ensure that outpath is a folder (not a file)
+    if os.path.isfile(options['outpath']):
+        raise ValueError(f"Output path should be a folder, not a file : {options['outpath']}")
+    os.makedirs(options['outpath'], exist_ok=True)
+
+    ####
+    import matplotlib.pyplot as plt
+    ####
+    while iter_+n_images < len(path_list):
+        handheld_output, debug_dict = main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), options, params)
+        if np.isnan(handheld_output.copy_to_host()[..., 0]).any():
+            breakpoint()
+        
+        
+        #### Performing frame count aware denoising if enabled
+        median_params = params['accumulated robustness denoiser']['median']
+        gauss_params = params['accumulated robustness denoiser']['gauss']
+        
+        median = median_params['on']
+        gauss = gauss_params['on']
+        post_frame_count_denoise = (median or gauss)
+        
+        params_pp = params['post processing']
+        post_processing_enabled = params_pp['on']
+        
+        if post_frame_count_denoise or post_processing_enabled:
+            if verbose_1:
+                print('Beginning post processing')
+        
+        if post_frame_count_denoise : 
+            if verbose_2:
+                print('-- Robustness aware bluring')
+            
+            if median:
+                handheld_output = frame_count_denoising_median(handheld_output, debug_dict['accumulated robustness'],
+                                                            median_params)
+            if gauss:
+                handheld_output = frame_count_denoising_gauss(handheld_output, debug_dict['accumulated robustness'],
+                                                            gauss_params)
+
+
+        #### post processing
+        handheld_output = handheld_output.copy_to_host()
+        handheld_output = np.repeat(handheld_output[..., :1], 3, axis=-1) # Force single channel to 3 channels
+        ref_raw_ = np.repeat(ref_raw[..., None].astype(DEFAULT_NUMPY_FLOAT_TYPE), 3, axis=-1)
+
+        if post_processing_enabled:
+            if verbose_2:
+                print('-- Post processing image')
+            
+            raw = ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE)
+            output_image = raw2rgb.postprocess(raw, handheld_output,
+                                            do_color_correction=False,
+                                            do_tonemapping=params_pp['do tonemapping'],
+                                            do_gamma=params_pp['do gamma'],
+                                            do_sharpening=params_pp['do sharpening'],
+                                            do_devignette=False,
+                                            xyz2cam=None,
+                                            sharpening_params=params_pp['sharpening'],
+                                            )
+            ref_raw_ = raw2rgb.postprocess(ref_raw_, handheld_output,
+                                            do_color_correction=False,
+                                            do_tonemapping=params_pp['do tonemapping'],
+                                            do_gamma=params_pp['do gamma'],
+                                            do_sharpening=params_pp['do sharpening'],
+                                            do_devignette=False,
+                                            xyz2cam=None,
+                                            sharpening_params=params_pp['sharpening'],
+                                            ) 
+        else:
+            output_image = handheld_output
+            
+        # Applying image orientation
+        if 'Image Orientation' in tags.keys():
+            ori = tags['Image Orientation'].values[0]
+        else:
+            ori = 1
+            warnings.warn('The Image Orientation EXIF tag could not be found. \
+                        The image may be mirrored or misoriented.')
+        output_image = apply_orientation(output_image, ori)
+        ref_raw_ = apply_orientation(ref_raw_, ori)
+        if 'accumulated robustness' in debug_dict.keys():
+            debug_dict['accumulated robustness'] = apply_orientation(debug_dict['accumulated robustness'], ori)
+        
+        handheld_output = np.nan_to_num(handheld_output)
+        handheld_output = np.clip(handheld_output, 0, 1)
+        
+        # Asynchronous save
+        # Keep the filename only
+        # future = imsave_async(options['outpath'] + f'/{os.path.basename(path_list[iter_])}', img_as_ubyte(handheld_output))
+        imsave(options['outpath'] + f'/{os.path.basename(path_list[iter_])}', img_as_ubyte(handheld_output))
+        if 'accumulated robustness' in debug_dict.keys() and save_rob:
+            rob = debug_dict['accumulated robustness'].copy_to_host()/(n_images-1)
+            rob = np.repeat(rob[..., None], 3, axis=-1)
+            # upscale nn x2
+            rob = np.repeat(rob, params['scale'], axis=0)
+            rob = np.repeat(rob, params['scale'], axis=1)
+            imsave(options['outpath'] + f'/rob_{os.path.basename(path_list[iter_])}', img_as_ubyte(rob))
+        if save_ref:
+            upscaled = np.repeat(ref_raw, params['scale'], axis=0)
+            upscaled = np.repeat(upscaled, params['scale'], axis=1)
+            imsave(options['outpath'] + f'/ref_{os.path.basename(path_list[iter_])}', img_as_ubyte(upscaled))
+
+        ref_raw = raw_comp[0]
+        new = cv2.imread(path_list[iter_ + n_images], cv2.IMREAD_UNCHANGED)[None]
+        if np.issubdtype(type(new[0, 0, 0]), np.integer):
+            new = new.astype(DEFAULT_NUMPY_FLOAT_TYPE)
+            new = new / 255.0
+
+        raw_comp = np.concatenate((raw_comp[1:], new), axis=0)
+        iter_ += 1
+
+
+def imsave(fname, rgb_8bit_data):
+    return cv2.imwrite(fname,  cv2.cvtColor(rgb_8bit_data, cv2.COLOR_RGB2BGR ))
+
