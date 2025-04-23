@@ -217,10 +217,7 @@ def accumulate_ref(ref_img, covs, bayer_mode, iso_kernel, scale, CFA_pattern,
                 # but at the cost of one scalar operation (instead of 4)
                 y/= additional_denoise_power
                 
-                if bayer_mode : 
-                    w = math.exp(-0.5*y)
-                else:
-                    w = math.exp(-0.5*4*y) # original kernel constants are designed for bayer distances, not greys, Hence x4
+                w = math.exp(-0.5*y)
                 ############
                 
                 val[channel] += c*w
