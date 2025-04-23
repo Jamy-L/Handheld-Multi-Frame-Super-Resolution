@@ -1,0 +1,14 @@
+name: handheld
+channels:
+  - nvidia
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - pytorch=1.13.1
+  - pytorch-cuda=11.6
+  - numba
+  - pip
+  - pip:
+      - -r requirements.txt

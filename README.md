@@ -21,9 +21,10 @@ In the examples above and in our IPOL paper, we used the post-processing approac
 Check also our publicly available implementation of **Polyblur** in this [repo](https://github.com/teboli/polyblur) to sharpen the result you get with this super-resolution code.
 
 ## Get started
-First of all, install the requirements by running (PyTorch is solely used for the GPU-based FFT as there is none in Numba):
+We provide a conda environment containing appropriate pytorch, cuda and numba version:
 ```bash
-pip install -r requirements.txt
+conda env create -f environment.yaml
+conda activate handheld
 ```
 
 (OPTIONAL) We have provided in `./data` the noise curve for the correction of the robustness ratio for the Google Pixel 4a camera by taking the affine noise coefficients from the EXIF tags, and subsequently run
