@@ -437,9 +437,7 @@ def process(burst_path, options=None, custom_params=None):
     
     
     
-    if params['debug']:
-        return output_image, debug_dict
-    else:
-        return output_image
+    return output_image, debug_dict
+
     
     

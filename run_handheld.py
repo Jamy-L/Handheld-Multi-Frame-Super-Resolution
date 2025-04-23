@@ -85,6 +85,7 @@ if __name__ == "__main__":
     parser.add_argument('--outpath', type=str, help='out image')
     parser.add_argument('--scale', type=int, default=2, help='Scaling factor')
     parser.add_argument('--verbose', type=int, default=1, help='Verbose option (0 to 4)')
+    parser.add_argument('--save_rob', type=str2bool, default=False, help='Save the accumulated robustness mask')
 
     ## Override metadata noise profile
     parser.add_argument('--alpha', type=float, default=None, help='alpha value (Noise profile)')
@@ -176,8 +177,7 @@ if __name__ == "__main__":
                                         'ammount': args.amount}
                         }
     
-    
-    handheld_output = process(args.impath, options, params)
+    handheld_output, debug_dict = process(args.impath, options, params)
     handheld_output = np.nan_to_num(handheld_output)
     handheld_output = np.clip(handheld_output, 0, 1)
     
@@ -197,3 +197,11 @@ if __name__ == "__main__":
         
     else:
         imsave(args.outpath, img_as_ubyte(handheld_output))
+    
+    if args.save_rob and debug_dict.get('accumulated robustness', None) is not None:
+        n_images = len(glob.glob(os.path.join(args.impath, '*.dng')))
+        rob = debug_dict['accumulated robustness'].copy_to_host()/(n_images-1)
+        rob = np.repeat(rob[..., None], 3, axis=-1)
+        # Upscale NN to output scale
+        rob = cv2.resize(rob, (handheld_output.shape[1], handheld_output.shape[0]), interpolation=cv2.INTER_NEAREST)
+        imsave(Path(args.outpath).with_suffix('.rob.png'), img_as_ubyte(rob))
