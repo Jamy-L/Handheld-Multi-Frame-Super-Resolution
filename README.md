@@ -21,6 +21,8 @@ In the examples above and in our IPOL paper, we used the post-processing approac
 Check also our publicly available implementation of **Polyblur** in this [repo](https://github.com/teboli/polyblur) to sharpen the result you get with this super-resolution code.
 
 ## Get started
+>⚠️ For windows users, we recommend to perform the install using WSL to avoid potential issues that can be encountered with numba (see issue [#48](https://github.com/Jamy-L/Handheld-Multi-Frame-Super-Resolution/issues/48)).
+
 We provide a conda environment containing appropriate pytorch, cuda and numba version:
 ```bash
 conda env create -f environment.yaml
