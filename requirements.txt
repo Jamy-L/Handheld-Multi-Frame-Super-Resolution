@@ -1,9 +1,0 @@
-numpy
-rawpy
-exifread
-scipy
-opencv-python
-colour-demosaicing
-matplotlib
-scikit-image
-tqdm

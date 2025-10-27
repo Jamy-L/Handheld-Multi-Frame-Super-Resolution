@@ -23,18 +23,33 @@ Check also our publicly available implementation of **Polyblur** in this [repo](
 ## Get started
 >⚠️ For windows users, we recommend to perform the install using WSL to avoid potential issues that can be encountered with numba (see issue [#48](https://github.com/Jamy-L/Handheld-Multi-Frame-Super-Resolution/issues/48)).
 
-We provide a conda environment containing appropriate pytorch, cuda and numba version:
+Start by creating a the following conda environment and activate it. Notice that numba can be tricky to install correctly, and you may need to adjust the `"cuda-version"` part based on your setup.
 ```bash
-conda env create -f environment.yaml
+conda create -n handheld -y -c conda-forge -c pytorch \
+  python=3.9 numpy=1.26.4 \
+  numba-cuda "cuda-version=12" \
+  rawpy exifread scipy scikit-image opencv colour-demosaicing matplotlib tqdm
 conda activate handheld
 ```
+You will need a cuda toolkit. Again, please adapt the cuda version:
+```
+conda install -c nvidia "cuda-toolkit=12.8"
+```
+Lastly, install pytorch (you need to ensure that the installed versio support cuda). This is a minimal example but may not work for everyone:
+```
+pip install torch
+```
+### Setting noise profile (OPTIONAL)
+Note that the latest releases of the code automatically run `fast_monte_carlo.py` everytime you launch the program, which basically computes the noise curves on-the-fly using a fast approximation. You can therefore ignore this section.
 
-(OPTIONAL) We have provided in `./data` the noise curve for the correction of the robustness ratio for the Google Pixel 4a camera by taking the affine noise coefficients from the EXIF tags, and subsequently run
+We have provided in `./data` the noise curves for the correction of the robustness ratio for the Google Pixel 4a camera by taking the affine noise coefficients from the EXIF tags, and subsequently ran
 ```bash
 python monte_carlo_simulation.py
 ```
-Please replace `alpha` and `beta` with the coefficients of your camera, and run the MC simulator to generate the correction curves at several ISO levels tailored for you specific device. Our curves may work for you camera but it might be sub-optimal as the noise models of the Google Pixel 4a camera and yours may diverge.
+If you want to precompute your own curves taylored to your device, please replace `alpha` and `beta` in this script with the coefficients of your camera, and run the MC simulator to generate the correction curves at several ISO levels tailored for you specific device. Our curves may work for you camera but it might be sub-optimal as the noise models of the Google Pixel 4a camera and yours may diverge.
 
+
+### Running the code
 Place your .dng image burst in the `./test_burst/` folder. You can download some dng bursts [here](https://github.com/goutamgmb/deep-rep), or download the latest release of the code already containing test bursts. Now, simply run the code for x2 super-resolution with:
 ```
 python run_handheld.py --impath test_burst --outpath output.png
