@@ -86,31 +86,62 @@ To obtain the bursts used in the publication, please download the latest release
 ## Generating DNG
 
 Saving images as DNG requires extra-dependencies and steps:
-1. Install imageio using pip:
+### 1. Install imageio using pip:
 
     ```bash
     pip install imageio
     ```
 
-2. Install exiftool. You can download the appropriate version for your operating system from the [exiftool website](https://exiftool.org/).
+### 2. Install exiftool. On linux:
+```
+sudo apt update
+sudo apt install -y libimage-exiftool-perl
+exiftool -ver  # Should show version 12.40 or higher
+```
+You can download the appropriate version for your operating system from the [exiftool website](https://exiftool.org/).
 
-3. Download the DNG SDK from the [Adobe website](https://helpx.adobe.com/camera-raw/digital-negative.html#dng_sdk_download).
+### 3. Compile dng_validate (Adobe DNG SDK)
+The `dng_validate` tool is required to finalize DNG files. Adobe provides source code but no longer pre-compiled binaries.
+You need build dependencies:
+```
+sudo apt install -y build-essential gcc g++ make unzip libjpeg-dev
+```
+We will compile using the community makefile from a`bworrall/go-dng` which provides Linux build support:
+```
+cd ~/projects  # or your preferred location
 
-4. Follow the instructions in the `DNG_ReadMe.txt` file included in the downloaded DNG SDK to complete the installation.
+# Download DNG SDK with community makefile
+git clone https://github.com/abworrall/go-dng.git
+cd go-dng/sdk
+```
+Before compiling, we need to disable JPEG thumbnails, that doesn't work for big images and would prevent from generating them (we get the "No JPEG encoder" error. If you have another solution, please open an issue).
+#### Patch the source code
+During compilation, the normal process would be to unzip `dng_sdk_1_6.zip` and compile. We need to manually unzip, change a line in the source, then compile with the modified source.
+```
+cd go-dng/sdk
+unzip dng_sdk_1_6.zip
+cd dng_sdk/source
 
-5. Set the paths to the exiftool and DNG validate executables in the `utils_dng.py` script. Open the `utils_dng.py` file located in the project directory, and modify the values of the `EXIFTOOL_PATH` and `DNG_VALIDATE_PATH` variables to match the paths to the exiftool and DNG validate executables on your system.
+# Edit dng_validate.cpp line 401
+# Change: for (uint32 previewIndex = 0; previewIndex < 2; previewIndex++)
+# To:     for (uint32 previewIndex = 0; previewIndex < 0; previewIndex++)
 
-    ```python
-    # utils_dng.py
+# Using sed:
+sed -i 's/previewIndex < 2/previewIndex < 0/' dng_validate.cpp
 
-    # Set the path to the exiftool executable
-    EXIFTOOL_PATH = "/path/to/exiftool"
+cd ../../
+```
 
-    # Set the path to the DNG validate executable
-    DNG_VALIDATE_PATH = "/path/to/dng_validate"
-    ```
+We can now compile
 
-    Note that you may need to adjust the paths based on the location where you installed exiftool and DNG validate on your system.
+```
+# Compile dng_validate
+make CC=g++ CXX=g++ # Use system compiler, and not conda's (to use apt installed packages)
+# Say NO when prompted to replace the dezipped files
+# Verify compilation
+ls -lh bin/dng_validate  # Should show ~25MB binary
+./bin/dng_validate        # Should show usage information
+```
 
 That's it! Once you've completed these steps you should be able to save the output as DNG, for example by running:
 ```

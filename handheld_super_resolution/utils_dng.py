@@ -7,6 +7,7 @@ Created on Tue Mar 21 16:44:36 2023
 
 import os
 import glob
+import subprocess
 
 import numpy as np
 from pathlib import Path
@@ -19,8 +20,8 @@ from . import raw2rgb
 from .utils import DEFAULT_NUMPY_FLOAT_TYPE
 
 # Paths of exiftool and dng validate. Only necessary to output dng.
-EXIFTOOL_PATH = 'path/to/exiftool.exe'
-DNG_VALIDATE_PATH = 'path/to/dng_validate.exe'
+EXIFTOOL_PATH = 'exiftool' # Assumes exiftool is in PATH, but you can also paste the path here
+DNG_VALIDATE_PATH = 'dng_validate' # Same applies here
 
 
 # See "PhotometricInterpretation in" https://exiftool.org/TagNames/EXIF.html
@@ -243,55 +244,86 @@ def save_as_dng(np_img, ref_dng_path, outpath):
 
     #### Overwritting the tiff tags with dng tags, and replacing the .tif extension
     # by .dng
-    cmd = '''
-        {} -n\
-        -IFD0:SubfileType#=0\
-        -IFD0:PhotometricInterpretation#=34892\
-        -SamplesPerPixel#=3\
-        -overwrite_original -tagsfromfile {}\
-        "-all:all>all:all"\
-        -DNGVersion\
-        -DNGBackwardVersion\
-        -ColorMatrix1 -ColorMatrix2\
-        "-IFD0:BlackLevelRepeatDim<SubIFD:BlackLevelRepeatDim"\
-        "-IFD0:CalibrationIlluminant1<SubIFD:CalibrationIlluminant1"\
-        "-IFD0:CalibrationIlluminant2<SubIFD:CalibrationIlluminant2"\
-        "-IFD0:CFARepeatPatternDim<SubIFD:CFARepeatPatternDim"\
-        "-IFD0:CFAPattern2<SubIFD:CFAPattern2"\
-        -AsShotNeutral\
-        "-IFD0:ActiveArea<SubIFD:ActiveArea"\
-        "-IFD0:DefaultScale<SubIFD:DefaultScale"\
-        "-IFD0:DefaultCropOrigin<SubIFD:DefaultCropOrigin"\
-        "-IFD0:DefaultCropSize<SubIFD:DefaultCropSize"\
-        "-IFD0:OpcodeList1<SubIFD:OpcodeList1"\
-        "-IFD0:OpcodeList2<SubIFD:OpcodeList2"\
-        "-IFD0:OpcodeList3<SubIFD:OpcodeList3"\
-         -o {} {}
-        '''.format(EXIFTOOL_PATH, ref_dng_path,
-                   tmp_path.as_posix(),
-                   outpath.with_suffix('.tif').as_posix())
-    os.system(cmd)
+    cmd = [
+        EXIFTOOL_PATH,
+        "-n",
+        "-IFD0:SubfileType#=0",
+        "-IFD0:PhotometricInterpretation#=34892",
+        "-SamplesPerPixel#=3",
+        "-overwrite_original",
+        "-tagsfromfile", ref_dng_path,
+        "-all:all>all:all",
+        "-DNGVersion",
+        "-DNGBackwardVersion",
+        "-ColorMatrix1",
+        "-ColorMatrix2",
+        "-IFD0:BlackLevelRepeatDim<SubIFD:BlackLevelRepeatDim",
+        "-IFD0:CalibrationIlluminant1<SubIFD:CalibrationIlluminant1",
+        "-IFD0:CalibrationIlluminant2<SubIFD:CalibrationIlluminant2",
+        "-IFD0:CFARepeatPatternDim<SubIFD:CFARepeatPatternDim",
+        "-IFD0:CFAPattern2<SubIFD:CFAPattern2",
+        "-AsShotNeutral",
+        "-IFD0:ActiveArea<SubIFD:ActiveArea",
+        "-IFD0:DefaultScale<SubIFD:DefaultScale",
+        "-IFD0:DefaultCropOrigin<SubIFD:DefaultCropOrigin",
+        "-IFD0:DefaultCropSize<SubIFD:DefaultCropSize",
+        "-IFD0:OpcodeList1<SubIFD:OpcodeList1",
+        "-IFD0:OpcodeList2<SubIFD:OpcodeList2",
+        "-IFD0:OpcodeList3<SubIFD:OpcodeList3",
+        "-o", tmp_path.as_posix(),
+        outpath.with_suffix('.tif').as_posix()
+    ]
+
+    # Run the command safely
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ExifTool command failed: {result.stderr}")
+    else:
+        print("ExifTool succeeded")
+        print(result.stdout)
 
     # adding further dng tags
-    cmd = """
-        {} -n -overwrite_original -tagsfromfile {}\
-        "-IFD0:AnalogBalance"\
-        "-IFD0:ColorMatrix1" "-IFD0:ColorMatrix2"\
-        "-IFD0:CameraCalibration1" "-IFD0:CameraCalibration2"\
-        "-IFD0:AsShotNeutral" "-IFD0:BaselineExposure"\
-        "-IFD0:CalibrationIlluminant1" "-IFD0:CalibrationIlluminant2"\
-        "-IFD0:ForwardMatrix1" "-IFD0:ForwardMatrix2"\
-        {}\
-        """.format(EXIFTOOL_PATH, ref_dng_path, tmp_path.as_posix())
-    os.system(cmd)
+    exiftool_args = [
+        EXIFTOOL_PATH,
+        "-n",
+        "-overwrite_original",
+        "-tagsfromfile", ref_dng_path,
+        "-IFD0:AnalogBalance",
+        "-IFD0:ColorMatrix1",
+        "-IFD0:ColorMatrix2",
+        "-IFD0:CameraCalibration1",
+        "-IFD0:CameraCalibration2",
+        "-IFD0:AsShotNeutral",
+        "-IFD0:BaselineExposure",
+        "-IFD0:CalibrationIlluminant1",
+        "-IFD0:CalibrationIlluminant2",
+        "-IFD0:ForwardMatrix1",
+        "-IFD0:ForwardMatrix2",
+        tmp_path.as_posix(),
+    ]
+
+    result = subprocess.run(exiftool_args, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ExifTool failed:\n{result.stderr}")
+    else:
+        print(result.stdout)
 
     # Running DNG_validate
-    cmd = """
-    {} -16 -dng\
-    {}\
-    {}\
-    """.format(DNG_VALIDATE_PATH, outpath.with_suffix('.dng').as_posix(), tmp_path.as_posix())
-    os.system(cmd)
+    cmd = [
+        DNG_VALIDATE_PATH,
+        "-16",
+        "-dng",
+        outpath.with_suffix(".dng").as_posix(),
+        tmp_path.as_posix(),
+    ]
+
+    # Use Popen to stream output in real-time
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as proc:
+        for line in proc.stdout:
+            print(line, end="")  # print each line as it arrives
+        proc.wait()  # wait for completion
+        if proc.returncode != 0:
+            raise RuntimeError(f"DNG_validate failed with return code {proc.returncode}")
 
     os.remove(tmp_path)
 
@@ -300,4 +332,15 @@ def save_as_tiff(int_im, outpath):
     # 16 bits uncompressed by default
     # Imageio is the only module I could find to save 16 bits RGB tiffs without compression (cv2 does LZW).
     # It is vital to have uncompressed image, because validate_dng cannot work if the tiff is compressed.
-    imageio.imwrite(outpath.with_suffix('.tif').as_posix(), int_im, bigtiff=False)
+    # imageio.imwrite(outpath.with_suffix('.tif').as_posix(), int_im, bigtiff=False)
+    try:
+        # Try to write as classic TIFF
+        with imageio.imopen(outpath.with_suffix('.tif').as_posix(), 'w', bigtiff=False) as img_file: # Cant put bigtiff=True, else exiftool wont work to write tags...
+            img_file.write(int_im)
+    except ValueError as e:
+        # ImageIO raises ValueError if data too large for classic TIFF (> 4GB)
+        raise RuntimeError(
+            f"Failed to write '{outpath.name}' as a classic TIFF. "
+            f"The image is too large for bigtiff=False. "
+            f"Raise an issue on github if you need support for bigtiff."
+        ) from e
