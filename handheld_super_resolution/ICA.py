@@ -30,9 +30,7 @@ def init_ICA(ref_img, config):
     ----------
     ref_img : device Array[imshape_y, imshape_x]
         Reference image J_1
-    options : dict
-        verbose options.
-    params : dict
+    config : OmegaConf object
         parameters.
 
     Returns
@@ -190,18 +188,8 @@ def ICA_optical_flow(cuda_im_grey, cuda_ref_grey,
         optical flow for each tile of each image, outputed by bloc matching : V_n
         pre_alignment[0] must be the horizontal flow oriented towards the right if positive.
         pre_alignment[1] must be the vertical flow oriented towards the bottom if positive.
-    options : dict
-        options
-    params : dict
-        ['tuning']['kanadeIter'] : int
-            Number of iterations.
-        params['tuning']['tileSize'] : int
-            Size of the tiles.
-        params["mode"] : {"bayer", "grey"}
-            Mode of the pipeline : whether the original burst is grey or raw
-            
-        params['tuning']['sigma blur'] : float
-            If non zero, applies a gaussian blur before computing gradients.
+    config : OmegaConf object
+        parameters.
             
     debug : bool, optional
         If True, this function returns a list containing the flow at each iteration.
@@ -250,10 +238,10 @@ def ICA_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, hes
         The image to rearrange and compare to the reference (grey images)
     alignment : Array[n_tiles_y, n_tiles_x, 2]
         The inial alignment of the tiles
-    options : Dict
-        Options to pass
-    params : Dict
-        parameters
+    hessian : Array[n_tiles_y, n_tiles_x, 2, 2]
+        The hessian matrix of the ref image
+    config : OmegaConf object
+        parameters.
     iter_index : int
         The iteration index (for printing evolution when verbose >2,
                              and for clearing memory)

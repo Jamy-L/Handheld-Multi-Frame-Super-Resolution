@@ -29,10 +29,8 @@ def init_robustness(ref_img, config):
     ----------
     ref_img : device Array[imshape_y, imshape_x]
         Raw reference image J_1
-    options : dict
-        options.
-    params : dict
-        parameters.
+    config : OmegaConf object
+        parameters. 
 
     Returns
     -------
@@ -93,10 +91,8 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, config)
         Local standard deviations of the reference image
     flows : device Array[n_patchs_y, n_patchs_y, 2]
         patch-wise optical flows of the compared image V_n(p)
-    options : dict
-        options
-    params : dict
-        parameters
+    config : OmegaConf object
+        parameters.
 
     Returns
     -------

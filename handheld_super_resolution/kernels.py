@@ -35,13 +35,8 @@ def estimate_kernels(img, config):
         Raw image J_n
     options : dict
         options
-    params : dict
-        params['mode'] : {"bayer", "grey"}
-            Wether the burst is raw or grey
-        params['tuning'] : dict
-            parameters driving the kernel shape
-        params['noise'] : dict
-            cointain noise model informations
+    config : OmegaConf object
+        parameters.
 
     Returns
     -------

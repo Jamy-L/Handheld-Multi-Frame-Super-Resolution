@@ -33,9 +33,8 @@ def init_block_matching(ref_img, config):
         Reference image J_1
     options : dict
         options.
-    params : dict
+    config : OmegaConf object
         parameters.
-
     Returns
     -------
     referencePyramid : list [device Array]
@@ -95,10 +94,7 @@ def align_image_block_matching(img, referencePyramid, config, debug=False):
         Image to be compared J_i (i>1)
     referencePyramid : list [device Array]
         Pyramid representation of the ref image J_1
-    options : dict
-        options.
-    params : dict
-        parameters.
+    config : OmegaConf object
     debug : Bool, optional
         When True, a list with the alignment at each step is returned. The default is False.
 

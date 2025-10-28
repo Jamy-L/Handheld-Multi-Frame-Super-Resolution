@@ -51,10 +51,8 @@ def main(ref_img, comp_imgs, config):
     comp_imgs : Array[N-1, imshape_y, imshape_x]
         Remaining frames of the burst J_2, ..., J_N
         
-    options : dict
-        verbose options.
-    params : dict
-        paramters.
+    config : OmegaConf object
+        parameters.
 
     Returns
     -------
@@ -229,10 +227,8 @@ def process(burst_path, config):
     ----------
     burst_path : str or Path
         Path of the folder where the .dng burst is located
-    options : dict
-        
-    params : Parameters
-        See params.py for more details.
+    config : OmegaConf object
+        parameters.
 
     Returns
     -------
