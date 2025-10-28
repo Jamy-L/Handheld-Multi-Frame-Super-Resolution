@@ -22,7 +22,7 @@ from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEF
 from .utils_image import compute_grey_images, GAT
 
 
-def estimate_kernels(img, options, params):
+def estimate_kernels(img, config):
     """
     Implementation of Alg. 5: ComputeKernelCovariance
     Returns the kernels covariance matrices for the frame J_n, sampled at the
@@ -49,22 +49,22 @@ def estimate_kernels(img, options, params):
         Covariance matrices Omega_n, sampled at the center of each bayer quad.
 
     """    
-    bayer_mode = params['mode']=='bayer'
-    verbose_3 = options['verbose'] >= 3
-    
+    bayer_mode = config.mode=='bayer'
+    verbose_3 = config.verbose >= 3
+
     GAT_ = timer(GAT, verbose_3, end_s="- Variance Stabilized")
     compute_grey_images_ = timer(compute_grey_images, verbose_3, end_s="- Decimated Image")
-    
-    k_detail = params['tuning']['k_detail']
-    k_denoise = params['tuning']['k_denoise']
-    D_th = params['tuning']['D_th']
-    D_tr = params['tuning']['D_tr']
-    k_stretch = params['tuning']['k_stretch']
-    k_shrink = params['tuning']['k_shrink']
-    
-    alpha = params['noise']['alpha']
-    beta = params['noise']['beta']
-    
+
+    k_detail = config.merging.tuning.k_detail
+    k_denoise = config.merging.tuning.k_denoise
+    D_th = config.merging.tuning.D_th
+    D_tr = config.merging.tuning.D_tr
+    k_stretch = config.merging.tuning.k_stretch
+    k_shrink = config.merging.tuning.k_shrink
+
+    alpha = config.noise_model.alpha
+    beta = config.noise_model.beta
+
     if verbose_3:
         cuda.synchronize()
         t1 = time.perf_counter()

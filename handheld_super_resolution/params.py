@@ -10,127 +10,38 @@ SNR.
 import warnings
 import numpy as np
 
-def get_params(SNR):
-    SNR = np.clip(SNR, 6, 30)
-    if SNR <= 14:
-        Ts = 64
-    elif SNR <= 22:
-        Ts = 32
-    else:
-        Ts = 16
-        
-    # TODO this could be adressed by reworking the block matching module
-    if Ts > 32:
-        Ts = 32
-        warnings.warn("Warning.... Tile sizes of more than 32 cannot be \
-                      processed by the bloc matching module at the moment.\
-                      Falling back to Ts=32") 
-        
-    
-    params = {'scale' : 1, # upscaling factor ( >=1 )
-              'mode' : 'bayer', # 'bayer' or 'grey' (input image type)
-              'grey method' : 'FFT', # method to compute grey image for alignment. Only FFT is supported !
-              'debug': False, # when True, a dict is returned with debug infos.
-              'block matching': {
-                    'tuning': {
-                        # WARNING: these parameters are defined fine-to-coarse!
-                        'factors': [1, 2, 4, 4],
-                        'tileSizes': [Ts, Ts, Ts, Ts//2],
-                        'searchRadia': [1, 4, 4, 4],
-                        'distances': ['L1', 'L2', 'L2', 'L2'],
-                        }},
-                'kanade' : {
-                    'tuning' : {
-                        'kanadeIter': 3, # 3
-                        # gaussian blur before computing grads. If 0, no blur is applied
-                        'sigma blur': 0, # grayscale by FFT already induces low pass filtering 
-                        }},
-                'robustness' : {
-                    'on':True,
-                    'tuning' : {
-                        't' : 0.12,       # 0.12
-                        's1' : 2,         # 2
-                        's2' : 12,        # 12
-                        'Mt' : 0.8,       # 0.8
-                        }
-                    },
-                'merging': {
-                    'kernel' : 'handheld', # 'iso' for isotropic kernel, 'handheld' for handhel kernel
-                    'tuning': {
-                        'k_detail' : 0.25 + (0.33 - 0.25)*(30 - SNR)/(30 - 6), # [0.25, ..., 0.33]
-                        'k_denoise': 3 + (5 - 3)*(30 - SNR)/(30 - 6),    # [3.0, ...,5.0]
-                        'D_th': 0.71 + (0.81 - 0.71)*(30 - SNR)/(30 - 6),      # [0.001, ..., 0.010]
-                        'D_tr': 1 + (1.24 - 1)*(30 - SNR)/(30 - 6),     # [0.006, ..., 0.020]
-                        'k_stretch' : 4,   # 4
-                        'k_shrink' : 2,    # 2
-                        }
-                    },
-                
-                'accumulated robustness denoiser' : {
-                    'median':{'on':False, # post process median filter
-                              'radius max':3,  # maximum radius of the median filter. Tt cannot be more than 14. for memory purpose
-                              'max frame count': 8},
-                    
-                    'gauss':{'on':False, # post process gaussian filter
-                             'sigma max' : 1.5, # std of the gaussian blur applied when only 1 frame is merged
-                             'max frame count' : 8}, # number of merged frames above which no blur is applied
-                    
-                    'merge':{'on':True, # filter for the ref frame accumulation
-                             'rad max': 2,# max radius of the accumulation neighborhod
-                             'max multiplier': 8, # Multiplier of the covariance for single frame SR
-                             'max frame count' : 8} # # number of merged frames above which no blur is applied
-                    },
-                'post processing' : {
-                    'on':True,
-                    'do color correction':True,
-                    'do tonemapping':True,
-                    'do gamma' : True,
-                    'do sharpening' : True,
-                    'do devignette' : False,
-                    
-                    'sharpening':{
-                        'radius':3,
-                        'amount':1.5
-                        }
-                    }
-                }
-
-    return params
-
-def check_params_validity(params, imshape):
-    if params["grey method"] != "FFT":
+def check_params_validity(config, imshape):
+    if config.mode == "grey" and config.grey_method != "FFT":
         raise NotImplementedError("Grey level images should be obtained with FFT")
         
-    assert params['scale'] >= 1
-    if params['scale'] > 3:
-        warnings.warn("Warning.... The required scale is superior to 3, but the algorighm can hardly go above.")
-    
-    if (not params['robustness']['on']) and (params['accumulated robustness denoiser']['median']['on'] or
-                                             params['accumulated robustness denoiser']['gauss']['on'] or
-                                             params['accumulated robustness denoiser']['merge']['on']):
-        warnings.warn("Warning.... Robustness based denoising is enabled, "
-                      "but robustness is disabled. No further denoising will be done.")
-        
-    assert params['merging']['kernel'] in ['handheld', 'iso']
-    assert params['mode'] in ["bayer", 'grey']
-    
-    if (params['accumulated robustness denoiser']['median']['on'] and
-        params['accumulated robustness denoiser']['gauss']['on']):
-        warnings.warn("Warning.... 2 post processing blurrings are enabled. Is it a mistake?")
+    assert config.scale >= 1
 
-    assert params['kanade']['tuning']['kanadeIter'] > 0
-    assert params['kanade']['tuning']['sigma blur'] >= 0
-    
-    assert len(imshape) == 2
-    
-    Ts = params['block matching']['tuning']['tileSizes'][0]
-    
+    if not config.robustness.enabled and (config.accumulated_robustness_denoiser.median.enabled or
+                                             config.accumulated_robustness_denoiser.gauss.enabled or
+                                             config.accumulated_robustness_denoiser.merge.enabled):
+        raise ValueError("Accumulated robustness denoiser cannot be enabled if robustness is disabled.")
+
+    assert config.merging.kernel in ['steerable', 'iso'], f"Unknown kernel type {config.merging.kernel}"
+    assert config.mode in ["bayer", 'grey'], f"Unknown mode {config.mode}"
+
+    if sum([1 if x.enabled else 0 for x in [config.accumulated_robustness_denoiser.median,
+                                            config.accumulated_robustness_denoiser.gauss,
+                                            config.accumulated_robustness_denoiser.merge]]) > 1:
+        raise ValueError("Only one accumulated robustness denoiser can be enabled at a time.")
+
+    assert config.ica.tuning.n_iter > 0, "Number of ICA iterations should be positive."
+    assert config.ica.tuning.sigma_blur >= 0, f"Invalid sigma blur {config.ica.tuning.sigma_blur}."
+
+    assert len(imshape) == 2, f"Input image shape should be 2D, got {imshape}."
+
+    Ts = config.block_matching.tuning.tile_size
+
     # Checking if block matching is possible
     padded_imshape_x = Ts*(int(np.ceil(imshape[1]/Ts)))
     padded_imshape_y = Ts*(int(np.ceil(imshape[0]/Ts)))
     
     lvl_imshape_y, lvl_imshape_x = padded_imshape_y, padded_imshape_x
-    for lvl, (factor, ts) in enumerate(zip(params['block matching']['tuning']['factors'], params['block matching']['tuning']['tileSizes'])):
+    for lvl, (factor, ts) in enumerate(zip(config.block_matching.tuning.factors, config.block_matching.tuning.tile_sizes)):
         lvl_imshape_y, lvl_imshape_x = np.floor(lvl_imshape_y/factor), np.floor(lvl_imshape_x/factor)
         
         n_tiles_y = lvl_imshape_y/ts
@@ -145,17 +56,45 @@ def check_params_validity(params, imshape):
                                  (lvl_imshape_y, lvl_imshape_x),
                                  ts))
     
-def merge_params(dominant, recessive):
-    """
-    Merges 2 sets of parameters, one being dominant (= overwrittes the recessive
-                                                     when a value a specified)
-    """
-    recessive_ = recessive.copy()
-    for dom_key in dominant.keys():
-        if (dom_key in recessive_.keys()) and type(dominant[dom_key]) is dict:
-            recessive_[dom_key] = merge_params(dominant[dom_key], recessive_[dom_key])
-        else:
-            recessive_[dom_key] = dominant[dom_key]
-    return recessive_
+def update_snr_config(config, SNR):
+    SNR = np.clip(SNR, 6, 30)
+    SNR = float(SNR)
+    if SNR <= 14:
+        Ts = 64
+    elif SNR <= 22:
+        Ts = 32
+    else:
+        Ts = 16
 
+    # TODO this could be adressed by reworking the block matching module
+    if Ts > 32:
+        Ts = 32
+        warnings.warn("Warning.... Tile sizes of more than 32 cannot be \
+                      processed by the block matching module at the moment.\
+                      Falling back to Ts=32")
     
+    if config.block_matching.tuning.tile_size != "SNR_based":
+        assert isinstance(config.block_matching.tuning.tile_size, int), "tile_size should be an integer or 'SNR_based'"
+        Ts = config.block_matching.tuning.tile_size
+    else:
+        config.block_matching.tuning.tile_size = Ts
+        
+    sizes = [int(Ts * s) for s in config.block_matching.tuning.tile_size_factors]
+    config.block_matching.tuning.tile_sizes = sizes
+
+    if config.merging.tuning.k_detail == "SNR_based":
+        config.merging.tuning.k_detail = 0.25 + (0.33 - 0.25)*(30 - SNR)/(30 - 6)  # [0.25, ..., 0.33]
+    else:
+        assert isinstance(config.merging.tuning.k_detail, float), "k_detail should be a float or 'SNR_based'"
+    if config.merging.tuning.k_denoise == "SNR_based":
+        config.merging.tuning.k_denoise = 3 + (5 - 3)*(30 - SNR)/(30 - 6)    # [3.0, ...,5.0]
+    else:
+        assert isinstance(config.merging.tuning.k_denoise, float), "k_denoise should be a float or 'SNR_based'"
+    if config.merging.tuning.D_th == "SNR_based":
+        config.merging.tuning.D_th = 0.71 + (0.81 - 0.71)*(30 - SNR)/(30 - 6)      # [0.001, ..., 0.010]
+    else:
+        assert isinstance(config.merging.tuning.D_th, float), "D_th should be a float or 'SNR_based'"
+    if config.merging.tuning.D_tr == "SNR_based":
+        config.merging.tuning.D_tr = 1 + (1.24 - 1)*(30 - SNR)/(30 - 6)     # [0.006, ..., 0.020]
+    else:
+        assert isinstance(config.merging.tuning.D_tr, float), "D_tr should be a float or 'SNR_based'"

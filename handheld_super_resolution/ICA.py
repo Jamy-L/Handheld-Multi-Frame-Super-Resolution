@@ -21,7 +21,7 @@ from .linalg import bilinear_interpolation
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
 from .linalg import solve_2x2
     
-def init_ICA(ref_img, options, params):
+def init_ICA(ref_img, config):
     """
     Initializes the ICa algorithm by computing the gradients of the reference
     image, and the hessian matrix.
@@ -45,10 +45,10 @@ def init_ICA(ref_img, options, params):
         hessian matrix defined for each patch of the reference image.
 
     """
-    current_time, verbose_3 = time.perf_counter(),  options['verbose'] >= 3
+    current_time, verbose_3 = time.perf_counter(),  config.verbose >= 3
 
-    sigma_blur = params['tuning']['sigma blur']
-    tile_size = params['tuning']['tileSize']
+    sigma_blur = config.ica.tuning.sigma_blur
+    tile_size = config.block_matching.tuning.tile_size
     
     imsize_y, imsize_x = ref_img.shape
     
@@ -167,7 +167,7 @@ def compute_hessian(gradx, grady, tile_size, hessian):
 def ICA_optical_flow(cuda_im_grey, cuda_ref_grey,
                      cuda_gradx, cuda_grady,
                      hessian, cuda_pre_alignment,
-                     options, params, debug = False):
+                     config, debug = False):
     """ Computes optical flow between the ref_img and all images of comp_imgs 
     based on the ICA method http://www.ipol.im/pub/art/2016/153/
     The optical flow follows a translation per patch model, such that :
@@ -216,14 +216,14 @@ def ICA_optical_flow(cuda_im_grey, cuda_ref_grey,
     if debug : 
         debug_list = []
 
-    n_iter = params['tuning']['kanadeIter']
+    n_iter = config.ica.tuning.n_iter
         
     cuda_alignment = cuda_pre_alignment
     
     for iter_index in range(n_iter):
         ICA_optical_flow_iteration(
             cuda_ref_grey, cuda_gradx, cuda_grady, cuda_im_grey, cuda_alignment, hessian,
-            options, params, iter_index)
+            config, iter_index)
         
         if debug :
             debug_list.append(cuda_alignment.copy_to_host())
@@ -233,7 +233,7 @@ def ICA_optical_flow(cuda_im_grey, cuda_ref_grey,
     return cuda_alignment
 
     
-def ICA_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, hessian, options, params,
+def ICA_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, hessian, config,
                                iter_index):
     """
     Computes one iteration of the Lucas-Kanade optical flow
@@ -259,8 +259,8 @@ def ICA_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, hes
                              and for clearing memory)
 
     """
-    verbose_3 = options['verbose'] >= 3
-    tile_size = params['tuning']['tileSize']
+    verbose_3 = config.verbose >= 3
+    tile_size = config.block_matching.tuning.tile_size
 
     n_patch_y, n_patch_x, _ = alignment.shape
     

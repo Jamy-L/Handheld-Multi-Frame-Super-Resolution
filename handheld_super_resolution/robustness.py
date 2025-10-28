@@ -20,7 +20,7 @@ from numba import cuda, uint8
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE,DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS, clamp, timer
 from .utils_image import dogson_biquadratic_kernel
 
-def init_robustness(ref_img, options, params):
+def init_robustness(ref_img, config):
     """
     Initialiazes the robustness etimation procedure by
     computing the local stats of the reference image
@@ -43,20 +43,19 @@ def init_robustness(ref_img, options, params):
         local standard deviations of the reference image.
 
     """
-    verbose_3 = options['verbose'] >= 3
+    verbose_3 = config.verbose >= 3
     
     compute_guide_image_ = timer(compute_guide_image, verbose_3, " - Decimating images to RGB", ' - Image decimated')
     compute_local_stats_ = timer(compute_local_stats, verbose_3, end_s=' - Local stats estimated')
     upscale_warp_stats_ = timer(upscale_warp_stats, verbose_3, ' - Local stats warped upscaled')
     
     imshape_y, imshape_x = ref_img.shape
-    
-    bayer_mode = params['mode']=='bayer'
-    r_on = params['on']
-    
 
-    CFA_pattern = cuda.to_device(params['exif']['CFA Pattern'])
-    
+    bayer_mode = config.mode=='bayer'
+    r_on = config.robustness.enabled
+
+    CFA_pattern = cuda.to_device(config.exif.cfa_pattern)
+
 
     if r_on :         
         # Computing guide image
@@ -78,7 +77,7 @@ def init_robustness(ref_img, options, params):
         return None, None
     
     
-def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, options, params):
+def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, config):
     """
     this is the implementation of Algorithm 6: ComputeRobustness
     Returns the robustnesses of the compared image J_n (n>1), based on the
@@ -105,7 +104,7 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, options
         Locally minimized Robustness map, sampled at the center of
         every bayer quad
     """
-    current_time, verbose_3 = time.perf_counter(), options['verbose'] >= 3
+    current_time, verbose_3 = time.perf_counter(), config.verbose >= 3
     
     compute_guide_image_ = timer(compute_guide_image, verbose_3, " - Decimating images to RGB", ' - Image decimated')
     compute_local_stats_ = timer(compute_local_stats, verbose_3, end_s=' - Local stats estimated')
@@ -118,17 +117,17 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, options
     
     imshape_y, imshape_x = comp_img.shape
 
-    bayer_mode = params['mode']=='bayer'
-    r_on = params['on']
-    
-    CFA_pattern = cuda.to_device(params['exif']['CFA Pattern'])
-    
-    tile_size = params['tuning']["tileSize"]
-    t = params['tuning']["t"]
-    s1 = params['tuning']["s1"]
-    s2 = params['tuning']["s2"]
-    Mt = params['tuning']["Mt"]
-    
+    bayer_mode = config.mode=='bayer'
+    r_on = config.robustness.enabled
+
+    CFA_pattern = cuda.to_device(config.exif.cfa_pattern)
+
+    tile_size = config.block_matching.tuning.tile_size
+    t = config.robustness.tuning.t
+    s1 = config.robustness.tuning.s1
+    s2 = config.robustness.tuning.s2
+    Mt = config.robustness.tuning.Mt
+
     n_patch_y, n_patch_x, _ = flows.shape
     
     if bayer_mode:
@@ -140,8 +139,8 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, options
         r = cuda.device_array(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
         
         # moving noise model to GPU
-        cuda_std_curve = cuda.to_device(params['std_curve'])
-        cuda_diff_curve = cuda.to_device(params['diff_curve'])
+        cuda_std_curve = cuda.to_device(np.array(config.noise_model.std_curve))
+        cuda_diff_curve = cuda.to_device(np.array(config.noise_model.diff_curve))
             
         if verbose_3:
             cuda.synchronize()

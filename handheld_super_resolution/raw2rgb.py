@@ -1,5 +1,6 @@
 import random
 import math
+import warnings
 
 import exifread
 import numpy as np
@@ -209,7 +210,7 @@ def devignette(image):
     return image_out
 
 def postprocess(raw, img=None, do_color_correction=True, do_tonemapping=True, 
-                do_gamma=True, do_sharpening=True, do_devignette=False, xyz2cam=None, sharpening_params=None):
+                do_gamma=True, sharpening_config=None, do_devignette=False, xyz2cam=None):
     """
     Convert a raw image to jpg image.
     """
@@ -225,13 +226,13 @@ def postprocess(raw, img=None, do_color_correction=True, do_tonemapping=True,
             img = apply_ccm(img, cam2rgb)
             img = np.clip(img, 0.0, 1.0)
         ## Sharpening
-        if do_sharpening:
-            ## TODO: polyblur instead
-            if sharpening_params is not None:
-                img = filters.unsharp_mask(img, radius=sharpening_params['radius'],
-                                           amount=sharpening_params['amount'],
+        if sharpening_config is not None and sharpening_config.enabled:
+            if "radius" in sharpening_config and "amount" in sharpening_config:
+                img = filters.unsharp_mask(img, radius=sharpening_config.radius,
+                                           amount=sharpening_config.amount,
                                            channel_axis=2, preserve_range=True)
             else:
+                warnings.warn('Sharpening config is missing radius or amount parameter, using default values.')
                 img = filters.unsharp_mask(img, radius=3,
                                            amount=0.5,
                                            channel_axis=2, preserve_range=True)

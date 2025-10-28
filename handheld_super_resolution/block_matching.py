@@ -22,7 +22,7 @@ from .utils import getTime, clamp, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_
 from .utils_image import cuda_downsample
 
 
-def init_block_matching(ref_img, options, params):
+def init_block_matching(ref_img, config):
     '''
     Returns the pyramid representation of ref_img, that will be used for 
     future block matching
@@ -44,9 +44,9 @@ def init_block_matching(ref_img, options, params):
     '''
     # Initialization.
     h, w = ref_img.shape  # height and width should be identical for all images
-    
-    tileSize = params['tuning']['tileSizes'][0]
-    
+
+    tileSize = config.block_matching.tuning.tile_size
+
     # if needed, pad images with zeros so that getTiles contains all image pixels
     paddingPatchesHeight = (tileSize - h % (tileSize)) * (h % (tileSize) != 0)
     paddingPatchesWidth = (tileSize - w % (tileSize)) * (w % (tileSize) != 0)
@@ -68,9 +68,9 @@ def init_block_matching(ref_img, options, params):
 
 
     # For convenience
-    currentTime, verbose = time.perf_counter(), options['verbose'] > 2
+    currentTime, verbose = time.perf_counter(), config.verbose > 2
     # factors, tileSizes, distances, searchRadia and subpixels are described fine-to-coarse
-    factors = params['tuning']['factors']
+    factors = config.block_matching.tuning.factors
 
 
     # construct 4-level coarse-to fine pyramid of the reference
@@ -82,7 +82,7 @@ def init_block_matching(ref_img, options, params):
     return referencePyramid
 
 
-def align_image_block_matching(img, referencePyramid, options, params, debug=False):
+def align_image_block_matching(img, referencePyramid, config, debug=False):
     """
     Align the reference image with the img : returns a patchwise flow such that
     for patches py, px :
@@ -111,7 +111,7 @@ def align_image_block_matching(img, referencePyramid, options, params, debug=Fal
     # Initialization.
     h, w = img.shape  # height and width should be identical for all images
     
-    tileSize = params['tuning']['tileSizes'][0]
+    tileSize = config.block_matching.tuning.tile_size
     # if needed, pad images with zeros so that getTiles contains all image pixels
     paddingPatchesHeight = (tileSize - h % (tileSize)) * (h % (tileSize) != 0)
     paddingPatchesWidth = (tileSize - w % (tileSize)) * (w % (tileSize) != 0)
@@ -132,12 +132,12 @@ def align_image_block_matching(img, referencePyramid, options, params, debug=Fal
     
 
     # For convenience
-    currentTime, verbose = time.perf_counter(), options['verbose'] > 2
+    currentTime, verbose = time.perf_counter(), config.verbose > 2
     # factors, tileSizes, distances, searchRadia and subpixels are described fine-to-coarse
-    factors = params['tuning']['factors']
-    tileSizes = params['tuning']['tileSizes']
-    distances = params['tuning']['distances']
-    searchRadia = params['tuning']['searchRadia']
+    factors = config.block_matching.tuning.factors
+    tileSizes = config.block_matching.tuning.tile_sizes
+    distances = config.block_matching.tuning.metrics
+    searchRadia = config.block_matching.tuning.search_radii
 
     upsamplingFactors = factors[1:] + [1]
     previousTileSizes = tileSizes[1:] + [None]
@@ -160,7 +160,7 @@ def align_image_block_matching(img, referencePyramid, options, params, debug=Fal
         alignments = align_on_a_level(
             referencePyramid[lv],
             alternatePyramid[lv],
-            options,
+            config,
             upsamplingFactors[-lv - 1],
             tileSizes[-lv - 1],
             previousTileSizes[-lv - 1],
@@ -204,7 +204,7 @@ def hdrplusPyramid(image, factors=[1, 2, 4, 4], kernel='gaussian'):
     # Reverse the pyramid to get it coarse-to-fine
     return pyramidLevels[::-1]
 
-def align_on_a_level(referencePyramidLevel, alternatePyramidLevel, options, upsamplingFactor, tileSize, 
+def align_on_a_level(referencePyramidLevel, alternatePyramidLevel, config, upsamplingFactor, tileSize, 
                      previousTileSize, searchRadius, distance, previousAlignments):
     """
     Alignment will always be an integer with this function, however it is 
@@ -217,7 +217,7 @@ def align_on_a_level(referencePyramidLevel, alternatePyramidLevel, options, upsa
     
     
     # For convenience
-    verbose = options['verbose'] > 3
+    verbose = config.verbose > 3
     if verbose :
         cuda.synchronize()
         currentTime = time.perf_counter()

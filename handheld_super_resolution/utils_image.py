@@ -171,14 +171,14 @@ def cuda_GAT(image, VST_image, alpha, beta):
     
     
 
-def frame_count_denoising_gauss(image, r_acc, params):
+def frame_count_denoising_gauss(image, r_acc, config):
     denoised = cuda.device_array(image.shape, DEFAULT_NUMPY_FLOAT_TYPE)
     
-    grey_mode = params['mode'] == 'grey'
-    scale = params['scale']
-    sigma_max = params['sigma max']
-    max_frame_count = params['max frame count']
-    
+    grey_mode = config.mode == 'grey'
+    scale = config.scale
+    sigma_max = config.sigma_max
+    max_frame_count = config.max_frame_count
+
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS, 1)
     blockspergrid_x = math.ceil(denoised.shape[1]/threadsperblock[1])
     blockspergrid_y = math.ceil(denoised.shape[0]/threadsperblock[0])
@@ -235,14 +235,14 @@ def denoise_power_gauss(r_acc, sigma_max, r_max):
     r = min(r_acc, r_max)
     return sigma_max * (r_max - r)/r_max
 
-def frame_count_denoising_median(image, r_acc, params):
+def frame_count_denoising_median(image, r_acc, config):
     denoised = cuda.device_array(image.shape, DEFAULT_NUMPY_FLOAT_TYPE)
-    
-    grey_mode = params['mode'] == 'grey'
-    scale = params['scale']
-    radius_max = params['radius max']
-    max_frame_count = params['max frame count']
-    
+
+    grey_mode = config.mode == 'grey'
+    scale = config.scale
+    radius_max = config.radius_max
+    max_frame_count = config.max_frame_count
+
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS, 1)
     blockspergrid_x = math.ceil(denoised.shape[1]/threadsperblock[1])
     blockspergrid_y = math.ceil(denoised.shape[0]/threadsperblock[0])
@@ -366,25 +366,22 @@ def cuda_downsample(th_img, kernel='gaussian', factor=2):
     '''
     # Special case
     if factor == 1:
-     	return th_img
-
-    # Filter the image before downsampling it
+        return th_img
+    
     if kernel is None:
-     	raise ValueError('use Kernel')
+        raise ValueError('use Kernel')
     elif kernel == 'gaussian':
-     	# gaussian kernel std is proportional to downsampling factor
-    	 # filteredImage = gaussian_filter(image, sigma=factor * 0.5, order=0, output=None, mode='reflect')
-         
-          # This is the default kernel of scipy gaussian_filter1d
-          # Note that pytorch Convolve is actually a correlation, hence the ::-1 flip.
-          # copy to avoid negative stride
-    	 gaussian_kernel = _gaussian_kernel1d(sigma=factor * 0.5, order=0, radius=int(4*factor * 0.5 + 0.5))[::-1].copy()
-    	 th_gaussian_kernel = torch.as_tensor(gaussian_kernel, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+        # gaussian kernel std is proportional to downsampling factor
+        # filteredImage = gaussian_filter(image, sigma=factor * 0.5, order=0, output=None, mode='reflect')
         
+        # This is the default kernel of scipy gaussian_filter1d
+        # Note that pytorch Convolve is actually a correlation, hence the ::-1 flip.
+        # copy to avoid negative stride
+        gaussian_kernel = _gaussian_kernel1d(sigma=factor * 0.5, order=0, radius=int(4*factor * 0.5 + 0.5))[::-1].copy()
+        th_gaussian_kernel = torch.as_tensor(gaussian_kernel, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
 
-        # 2 times gaussian 1d is faster than gaussian 2d
-    	 temp = F.conv2d(th_img, th_gaussian_kernel[None, None, :, None]) # convolve y
-    	 th_filteredImage = F.conv2d(temp, th_gaussian_kernel[None, None, None, :]) # convolve x
+        temp = F.conv2d(th_img, th_gaussian_kernel[None, None, :, None]) # convolve y
+        th_filteredImage = F.conv2d(temp, th_gaussian_kernel[None, None, None, :]) # convolve x
     else:
         raise ValueError("please use gaussian kernel")
 

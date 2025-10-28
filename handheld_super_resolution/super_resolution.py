@@ -20,13 +20,14 @@ import warnings
 
 from pathlib import Path
 import numpy as np
+from omegaconf import OmegaConf
 from numba import cuda
 import rawpy
 
 from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame_count_denoising_median, apply_orientation
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso, timer
 from .block_matching import init_block_matching, align_image_block_matching
-from .params import check_params_validity, get_params, merge_params
+from .params import check_params_validity, update_snr_config
 from .robustness import init_robustness, compute_robustness
 from .utils_dng import load_dng_burst
 from .ICA import ICA_optical_flow, init_ICA
@@ -38,7 +39,7 @@ from . import raw2rgb
 NOISE_MODEL_PATH = Path(os.path.dirname(__file__)).parent / 'data' 
         
 
-def main(ref_img, comp_imgs, options, params):
+def main(ref_img, comp_imgs, config):
     """
     This is the implementation of Alg. 1: HandheldBurstSuperResolution.
     Some part of Alg. 2: Registration are also integrated for optimisation.
@@ -64,13 +65,13 @@ def main(ref_img, comp_imgs, options, params):
 
     """
     
-    grey_method = params['grey method']
+    grey_method = config.grey_method
     
     ### verbose and timing related stuff
-    verbose = options['verbose'] >= 1
-    verbose_2 = options['verbose'] >= 2
-    verbose_3 = options['verbose'] >= 3
-    
+    verbose = config.verbose >= 1
+    verbose_2 = config.verbose >= 2
+    verbose_3 = config.verbose >= 3
+
     compute_grey_images_ = timer(compute_grey_images, verbose_3, end_s="- Ref grey image estimated by {}".format(grey_method))
     init_block_matching_ = timer(init_block_matching, verbose_2, '\nBeginning Block Matching initialisation', 'Block Matching initialised (Total)')
     init_ICA_ = timer(init_ICA, verbose_2, '\nBeginning ICA initialisation', 'ICA initialised (Total)')
@@ -83,15 +84,13 @@ def main(ref_img, comp_imgs, options, params):
     merge_ = timer(merge, verbose_2, '\nAccumulating Image', 'Image accumulated (Total)')
     merge_ref_ = timer(merge_ref, verbose_2, '\nAccumulating ref Img', 'Ref Img accumulated (Total)')    
     divide_ = timer(divide, verbose_2, end_s='\n------------------------\nImage normalized (Total)')
-    
-    
-    bayer_mode = params['mode']=='bayer'
-    
-    debug_mode = params['debug']
+
+    bayer_mode = config.mode=='bayer'
+    debug_mode = config.debug
     debug_dict = {"robustness":[],
                   "flow":[]}
-    
-    accumulate_r = params['accumulated robustness denoiser']['on']
+
+    accumulate_r = config.accumulated_robustness_denoiser.enabled
 
     #### Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
@@ -112,21 +111,21 @@ def main(ref_img, comp_imgs, options, params):
         
     #### Block Matching
         
-    reference_pyramid = init_block_matching_(cuda_ref_grey, options, params['block matching'])
-    
-    #### ICA : compute grad and hessian    
-    
-    ref_gradx, ref_grady, hessian = init_ICA_(cuda_ref_grey, options, params['kanade'])
-    
+    reference_pyramid = init_block_matching_(cuda_ref_grey, config)
+
+    #### ICA : compute grad and hessian
+
+    ref_gradx, ref_grady, hessian = init_ICA_(cuda_ref_grey, config)
+
     #### Local stats estimation
-    
-    ref_local_means, ref_local_stds = init_robustness_(cuda_ref_img,options, params['robustness'])
-    
+
+    ref_local_means, ref_local_stds = init_robustness_(cuda_ref_img, config)
+
     if accumulate_r:
         accumulated_r = cuda.to_device(np.zeros(ref_local_means.shape[:2]))
 
     # zeros init of num and den
-    scale = params["scale"]
+    scale = config.scale
     native_imshape_y, native_imshape_x = cuda_ref_img.shape
     output_size = (round(scale*native_imshape_y), round(scale*native_imshape_x))
     num = cuda.to_device(np.zeros(output_size+(3,), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
@@ -156,14 +155,14 @@ def main(ref_img, comp_imgs, options, params):
         
         #### Block Matching
         
-        pre_alignment = align_image_block_matching_(cuda_im_grey, reference_pyramid, options, params['block matching'])
+        pre_alignment = align_image_block_matching_(cuda_im_grey, reference_pyramid, config)
         
         #### ICA
         
         cuda_final_alignment = ICA_optical_flow_(cuda_im_grey, cuda_ref_grey,
                                                  ref_gradx, ref_grady,
                                                  hessian, pre_alignment,
-                                                 options, params['kanade'])
+                                                 config)
         
         if debug_mode:
             debug_dict["flow"].append(cuda_final_alignment.copy_to_host())
@@ -172,19 +171,18 @@ def main(ref_img, comp_imgs, options, params):
         #### Robustness
           
         cuda_robustness = compute_robustness_(cuda_img, ref_local_means, ref_local_stds, cuda_final_alignment,
-                                              options, params['robustness'])
+                                              config)
         if accumulate_r:
             add(accumulated_r, cuda_robustness)
         
 
         #### Kernel estimation
         
-        cuda_kernels = estimate_kernels_(cuda_img, options, params['merging'])
+        cuda_kernels = estimate_kernels_(cuda_img, config)
         
         #### Merging
         
-        merge_(cuda_img, cuda_final_alignment, cuda_kernels, cuda_robustness, num, den,
-               options, params['merging'])
+        merge_(cuda_img, cuda_final_alignment, cuda_kernels, cuda_robustness, num, den, config)
         
         if verbose :
             cuda.synchronize()
@@ -195,19 +193,19 @@ def main(ref_img, comp_imgs, options, params):
     
     #### Ref kernel estimation
         
-    cuda_kernels = estimate_kernels_(cuda_ref_img, options, params['merging'])
+    cuda_kernels = estimate_kernels_(cuda_ref_img, config)
     
     #### Merge ref
 
     if accumulate_r:     
         merge_ref_(cuda_ref_img, cuda_kernels,
                    num, den,
-                   options, params["merging"], accumulated_r)
+                   config, accumulated_r)
     else:
         merge_ref_(cuda_ref_img, cuda_kernels,
                    num, den,
-                   options, params["merging"])
-    
+                   config)
+
 
         
     # num is outwritten into num/den
@@ -223,7 +221,7 @@ def main(ref_img, comp_imgs, options, params):
     return num, debug_dict
 
 
-def process(burst_path, options=None, custom_params=None):
+def process(burst_path, config):
     """
     Processes the burst
 
@@ -242,30 +240,29 @@ def process(burst_path, options=None, custom_params=None):
         The processed image
 
     """
-    if options is None:
-        options = {'verbose' : 0}
     currentTime, verbose_1, verbose_2 = (time.perf_counter(),
-                                         options['verbose'] >= 1,
-                                         options['verbose'] >= 2)
-    params = {}
+                                         config.verbose >= 1,
+                                         config.verbose >= 2)
     
     # reading image stack
     ref_raw, raw_comp, ISO, tags, CFA, xyz2cam, ref_path = load_dng_burst(burst_path)
     
-    if custom_params.get("alpha", None) is not None:
+    if config.noise_model.get("alpha", None) is not None:
         # User provided custom values.
         print("Using user provided alpha and beta values")
-        alpha = custom_params["alpha"]
-        beta = custom_params["beta"]
-    ## IMPORTANT NOTE : the noise model exif are NOT for nominal ISO 100
-    ## But are already scaled for the image ISO.
-    elif custom_params.get("mode", None) == 'grey':
+        alpha = config.noise_model.alpha
+        beta = config.noise_model.beta
+    ## The noise model exif are already scaled for the image ISO.
+    elif config.mode == 'grey':
         alpha = tags['Image Tag 0xC761'].values[0][0]
         beta = tags['Image Tag 0xC761'].values[1][0]
     else:
         alpha = sum([x[0] for x in tags['Image Tag 0xC761'].values[::2]])/3
         beta = sum([x[0] for x in tags['Image Tag 0xC761'].values[1::2]])/3
-    
+    config.noise_model.update({
+        "alpha": alpha,
+        "beta": beta
+        })
     #### Packing noise model related to picture ISO
     # curve_iso = round_iso(ISO) # Rounds non standart ISO to regular ISO (100, 200, 400, ...)
     # std_noise_model_label = 'noise_model_std_ISO_{}'.format(curve_iso)
@@ -280,12 +277,9 @@ def process(burst_path, options=None, custom_params=None):
     std_curve, diff_curve = run_fast_MC(alpha, beta)
     
     
-    if verbose_2:
+    if verbose_2:   
         currentTime = getTime(currentTime, ' -- Read raw files')
 
-
-
-    
     #### Estimating ref image SNR
     brightness = np.mean(ref_raw)
     
@@ -300,95 +294,44 @@ def process(burst_path, options=None, custom_params=None):
         print('|expected noise std : {:.2e}'.format(std))
         print('|Estimated SNR : {:.2f}'.format(SNR))
     
-    SNR_params = get_params(SNR)
-    
-    #### Merging params dictionnaries
+    update_snr_config(config, SNR)
     
     # checking (just in case !)
-    check_params_validity(SNR_params, ref_raw.shape)
+    check_params_validity(config, ref_raw.shape)
     
-    if custom_params is not None :
-        params = merge_params(dominant=custom_params, recessive=SNR_params)
-        check_params_validity(params, ref_raw.shape)
-        
-    #### adding metadatas to dict 
-    if not 'noise' in params['merging'].keys(): 
-        params['merging']['noise'] = {}
 
-        
-    params['merging']['noise']['alpha'] = alpha
-    params['merging']['noise']['beta'] = beta
-    
-    ## Writing exifs data into parameters
-    if not 'exif' in params['merging'].keys(): 
-        params['merging']['exif'] = {}
-    if not 'exif' in params['robustness'].keys(): 
-        params['robustness']['exif'] = {}
-        
-    params['merging']['exif']['CFA Pattern'] = CFA
-    params['robustness']['exif']['CFA Pattern'] = CFA
-    params['ISO'] = ISO
-    
-    params['robustness']['std_curve'] = std_curve
-    params['robustness']['diff_curve'] = diff_curve
-    
-    # copying parameters values in sub-dictionaries
-    if 'scale' not in params["merging"].keys() :
-        params["merging"]["scale"] = params["scale"]
-    if 'scale' not in params['accumulated robustness denoiser'].keys() :
-        params['accumulated robustness denoiser']["scale"] = params["scale"]
-    if 'tileSize' not in params["kanade"]["tuning"].keys():
-        params["kanade"]["tuning"]['tileSize'] = params['block matching']['tuning']['tileSizes'][0]
-    if 'tileSize' not in params["robustness"]["tuning"].keys():
-        params["robustness"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
-    if 'tileSize' not in params["merging"]["tuning"].keys():
-        params["merging"]["tuning"]['tileSize'] = params['kanade']['tuning']['tileSize']
+    config.exif = OmegaConf.create({
+        "cfa_pattern": CFA.tolist(), # omegaconf doesnt like numpy...
+        "iso": ISO
+        })
 
+    config.noise_model.update({
+        "std_curve": std_curve.tolist(),
+        "diff_curve": diff_curve.tolist(),
+        })
 
-    if 'mode' not in params["kanade"].keys():
-        params["kanade"]["mode"] = params['mode']
-    if 'mode' not in params["robustness"].keys():
-        params["robustness"]["mode"] = params['mode']
-    if 'mode' not in params["merging"].keys():
-        params["merging"]["mode"] = params['mode']
-    if 'mode' not in params['accumulated robustness denoiser'].keys():
-        params['accumulated robustness denoiser']["mode"] = params['mode']
-    
-    # deactivating robustness accumulation if robustness is disabled
-    params['accumulated robustness denoiser']['median']['on'] &= params['robustness']['on']
-    params['accumulated robustness denoiser']['gauss']['on'] &= params['robustness']['on']
-    params['accumulated robustness denoiser']['merge']['on'] &= params['robustness']['on']
-    
-    params['accumulated robustness denoiser']['on'] = \
-        (params['accumulated robustness denoiser']['gauss']['on'] or
-         params['accumulated robustness denoiser']['median']['on'] or
-         params['accumulated robustness denoiser']['merge']['on'])
-     
-    # if robustness aware denoiser is in merge mode, copy in merge params
-    if params['accumulated robustness denoiser']['merge']['on']:
-        params['merging']['accumulated robustness denoiser'] = params['accumulated robustness denoiser']['merge']
+    if any([x.enabled for x in [config.accumulated_robustness_denoiser.median,
+                                config.accumulated_robustness_denoiser.gauss,
+                                config.accumulated_robustness_denoiser.merge]]):
+        config.accumulated_robustness_denoiser.enabled = True
     else:
-        params['merging']['accumulated robustness denoiser'] = {'on' : False}
-        
-        
-        
+        config.accumulated_robustness_denoiser.enabled = False
     
     
     #### Running the handheld pipeline
-    handheld_output, debug_dict = main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), options, params)
+    handheld_output, debug_dict = main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), config)
     
     
     #### Performing frame count aware denoising if enabled
-    median_params = params['accumulated robustness denoiser']['median']
-    gauss_params = params['accumulated robustness denoiser']['gauss']
-    
-    median = median_params['on']
-    gauss = gauss_params['on']
+    median_config = config.accumulated_robustness_denoiser.median
+    gauss_config = config.accumulated_robustness_denoiser.gauss
+
+    median = median_config.enabled
+    gauss = gauss_config.enabled
     post_frame_count_denoise = (median or gauss)
-    
-    params_pp = params['post processing']
-    post_processing_enabled = params_pp['on']
-    
+
+    post_processing_enabled = config.postprocessing.enabled
+
     if post_frame_count_denoise or post_processing_enabled:
         if verbose_1:
             print('Beginning post processing')
@@ -399,10 +342,10 @@ def process(burst_path, options=None, custom_params=None):
         
         if median:
             handheld_output = frame_count_denoising_median(handheld_output, debug_dict['accumulated robustness'],
-                                                           median_params)
+                                                           median_config)
         if gauss:
             handheld_output = frame_count_denoising_gauss(handheld_output, debug_dict['accumulated robustness'],
-                                                          gauss_params)
+                                                          gauss_config)
 
 
     #### post processing
@@ -413,13 +356,12 @@ def process(burst_path, options=None, custom_params=None):
         
         raw = rawpy.imread(ref_path)
         output_image = raw2rgb.postprocess(raw, handheld_output.copy_to_host(),
-                                           params_pp['do color correction'],
-                                           params_pp['do tonemapping'],
-                                           params_pp['do gamma'],
-                                           params_pp['do sharpening'],
-                                           params_pp['do devignette'],
+                                           config.postprocessing.do_color_correction,
+                                           config.postprocessing.do_tonemapping,
+                                           config.postprocessing.do_gamma_correction,
+                                           config.postprocessing.sharpening,
+                                           config.postprocessing.do_devignetting,
                                            xyz2cam,
-                                           params_pp['sharpening']
                                            ) 
     else:
         output_image = handheld_output.copy_to_host()

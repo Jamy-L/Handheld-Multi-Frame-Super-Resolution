@@ -19,7 +19,7 @@ from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEF
 from .utils_image import denoise_power_merge, denoise_range_merge
 from .linalg import quad_mat_prod, invert_2x2, interpolate_cov
 
-def merge_ref(ref_img, kernels, num, den, options, params, acc_rob=None):
+def merge_ref(ref_img, kernels, num, den, config, acc_rob=None):
     """
     Implementation of Alg. 11: AccumulationReference
     Accumulates the reference frame into num and den, while considering
@@ -48,19 +48,19 @@ def merge_ref(ref_img, kernels, num, den, options, params, acc_rob=None):
     None.
 
     """
-    scale = params['scale']
-    
-    CFA_pattern = cuda.to_device(params['exif']['CFA Pattern'])
-    bayer_mode = params['mode'] == 'bayer'
-    iso_kernel = params['kernel'] == 'iso'
-    
-    robustness_denoise = params['accumulated robustness denoiser']['on']
+    scale = config.scale
+
+    CFA_pattern = cuda.to_device(config.exif.cfa_pattern)
+    bayer_mode = config.mode == 'bayer'
+    iso_kernel = config.merging.kernel == 'iso'
+
+    robustness_denoise = config.accumulated_robustness_denoiser.enabled
     # numba is strict on types and dimension : let's use a consistent object
     # for acc_rob even when it is not used.
     if robustness_denoise:
-        rad_max = params['accumulated robustness denoiser']['rad max']
-        max_multiplier = params['accumulated robustness denoiser']['max multiplier']
-        max_frame_count = params['accumulated robustness denoiser']['max frame count']
+        rad_max = config.accumulated_robustness_denoiser.merge.rad_max
+        max_multiplier = config.accumulated_robustness_denoiser.merge.max_multiplier
+        max_frame_count = config.accumulated_robustness_denoiser.merge.max_frame_count
     else:
         acc_rob = cuda.device_array((1,1), DEFAULT_NUMPY_FLOAT_TYPE)
         rad_max = 0
@@ -236,8 +236,7 @@ def accumulate_ref(ref_img, covs, bayer_mode, iso_kernel, scale, CFA_pattern,
             den[output_pixel_idy, output_pixel_idx, chan] += acc[chan]
           
     
-def merge(comp_img, alignments, covs, r, num, den,
-          options, params):
+def merge(comp_img, alignments, covs, r, num, den, config):
     """
     Implementation of Alg. 4: Accumulation
     Accumulates comp_img (J_n, n>1) into num and den, based on the alignment
@@ -270,12 +269,12 @@ def merge(comp_img, alignments, covs, r, num, den,
     None
 
     """
-    scale = params['scale']
-    
-    CFA_pattern = cuda.to_device(params['exif']['CFA Pattern'])
-    bayer_mode = params['mode'] == 'bayer'
-    iso_kernel = params['kernel'] == 'iso'
-    tile_size = params['tuning']['tileSize']
+    scale = config.scale
+
+    CFA_pattern = cuda.to_device(config.exif.cfa_pattern)
+    bayer_mode = config.mode == 'bayer'
+    iso_kernel = config.merging.kernel == 'iso'
+    tile_size = config.block_matching.tuning.tile_size
 
     native_im_size = comp_img.shape
     # casting to integer to account for floating scale

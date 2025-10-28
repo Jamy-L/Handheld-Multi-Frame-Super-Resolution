@@ -1,0 +1,69 @@
+scale: 1
+mode: bayer
+debug: false
+verbose: 5
+grey_method: FFT
+noise_model:
+  alpha: 
+  beta:
+
+block_matching:
+  tuning:
+    # Defined fine-to-coarse
+    factors: [1, 2, 4, 4]
+    tile_size: "SNR_based"
+    tile_size_factors: [1, 1, 1, 0.5]
+    search_radii: [1, 4, 4, 4]
+    metrics: ['L1', 'L2', 'L2', 'L2']
+ica:
+  tuning:
+    n_iter: 3
+    sigma_blur: 0
+
+robustness:
+  enabled: true
+  save_mask: true
+  tuning:
+    t: 0.12
+    s1: 2
+    s2: 12
+    Mt: 0.8
+
+merging:
+  kernel: steerable
+  tuning:
+    k_detail: SNR_based
+    k_denoise: SNR_based
+    D_th: SNR_based
+    D_tr: SNR_based
+    k_stretch: 4
+    k_shrink: 2
+
+postprocessing:
+  enabled: true
+  do_color_correction: False
+  do_gamma_correction: true
+  do_tonemapping: false
+  sharpening:
+    enabled: true
+    amount: 1.5
+    radius: 3
+  do_devignetting: false
+
+accumulated_robustness_denoiser: 
+  median:
+    enabled: False
+    radius_max: 3
+    max_frame_count: 8
+  gauss:
+    enabled: False
+    sigma_max: 1.5
+    max_frame_count: 8
+    
+  merge:
+    enabled: True
+    rad_max: 2
+    max_multiplier: 8 # Multiplier of the covariance for single frame SR
+    max_frame_count: 8 # # number of merged frames above which no blur is applied
+
+
