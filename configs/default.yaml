@@ -1,7 +1,7 @@
 scale: 1
 mode: bayer
 debug: false
-verbose: 5
+verbose: 1
 grey_method: FFT
 noise_model:
   alpha: 
@@ -31,6 +31,7 @@ robustness:
 
 merging:
   kernel: steerable
+  selection_law: linear # options: hard_threshold, linear
   tuning:
     k_detail: SNR_based
     k_denoise: SNR_based
@@ -59,11 +60,8 @@ accumulated_robustness_denoiser:
     enabled: False
     sigma_max: 1.5
     max_frame_count: 8
-    
   merge:
-    enabled: True
+    enabled: False
     rad_max: 2
     max_multiplier: 8 # Multiplier of the covariance for single frame SR
     max_frame_count: 8 # # number of merged frames above which no blur is applied
-
-

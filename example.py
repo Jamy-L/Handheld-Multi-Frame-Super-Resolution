@@ -15,28 +15,27 @@ import os
 import matplotlib.pyplot as plt
 from handheld_super_resolution import process
 from skimage import img_as_ubyte
+from omegaconf import OmegaConf
 
-# Specify verbose options
-options = {'verbose' : 1}
+# Load the default configuration
+default_conf = OmegaConf.load("configs/default.yaml")
 
+# Set your config like that.
+my_custom_conf = OmegaConf.create({
+    "verbose": 2, 
+    "scale": 2,
+    "merging" : {'kernel': 'steerable'},
+    'post processing' : {'enabled':True}
+})
+# Alterbnatively, put this custom conf in a yaml file and load it with:
+# my_custom_conf = OmegaConf.load("path_to_your_custom_config.yaml")
 
-
-# Specify the scale as follows. All the parameters are automatically 
-# choosen but can be overwritten : check params.py to see the entire list
-# of configurable parameters.
-params={
-        "scale":2,
-        "merging" : {
-            'kernel': 'handheld'},
-        'post processing' : {'on':True}
-        # Post processing is enabled by default,
-        # but it can be turned off here
-        }
+# Merge user config over the default config
+config = OmegaConf.merge(default_conf, my_custom_conf)
 
 # calling the pipeline
 burst_path = './test_burst/Samsung/'
-output_img = process(burst_path, options, params)
-
+output_img = process(burst_path, config)[0]
 
 # saving the result
 os.makedirs('./results', exist_ok=True)
@@ -48,4 +47,5 @@ plt.figure("output")
 plt.imshow(output_img, interpolation = 'none')
 plt.xticks([])
 plt.yticks([])
+plt.show()
 

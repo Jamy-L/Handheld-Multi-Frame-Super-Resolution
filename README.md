@@ -58,20 +58,24 @@ python run_handheld.py --impath test_burst --outpath output.png
 You can also use the following canvas in your own scripts:
 ```python
 from handeld_super_resolution import process
+from omegaconf import OmegaConf
 
-# Set the verbose level.
-options = {'verbose': 1}
+# Load the default configuration
+default_conf = OmegaConf.load("configs/default.yaml")
 
-# Specify the scale (1 is demosaicking), the merging kernel, and if you want to postprocess the final image.
-params = {
-  "scale": 2,  # choose between 1 and 2 in practice.
-  "merging": {"kernel": "handheld"},  # keep unchanged.
-  "post processing": {"on": True}  # set it to False if you want to use your own ISP.
-  }
+# Set your config like that.
+my_custom_conf = OmegaConf.create({
+    "scale": 2,
+})
+# Alternatively, put this custom conf in a yaml file and load it with:
+# my_custom_conf = OmegaConf.load("path_to_your_custom_config.yaml")
 
-# Run the algorithm.
-burst_path = 'path/to/folder/containing/raw/files'
-output_img = process(burst_path, options, params)
+# Merge user config over the default config
+config = OmegaConf.merge(default_conf, my_custom_conf)
+
+# calling the pipeline
+burst_path = './test_burst/Samsung/'
+output_img = process(burst_path, config)[0]
 ```
 
 The core of the algorithm is in `handheld_super_resolution.process(burst_path, options, params)` where :
@@ -169,53 +173,92 @@ If this code or the implementation details of the companion IPOL publication are
 }
 ```
 
+## Parameters
+All the settings of the algorithm are tweakable. They are available in `configs/default.yaml` that is detailed below. If you want to use a different value for one of these settings, you can set it in a `custom.yaml` and run
+```
+python run_handheld.py --impath test_burst --outpath output.png --config custom.yaml
+```
+
+Alternatively, you can directly indicate it without yaml with the syntax:
+```
+python run_handheld.py --impath test_burst --outpath output.png scale=2 noise_model.alpha=0.0000123
+```
+
+```yaml
+scale: 1 # The upscaling factor, can be floating but should remain bewteen 1 and 3.
+mode: bayer # bayer or grey ; the pipeline can processe grey or color image.
+debug: false # If turned on, other debug informations can be returned
+verbose: 1 
+grey_method: FFT # The method to estimate grey images from raw
+noise_model: # You can specify alpha and beta here. If left empty, they will be read from the dng metadata
+  alpha: 
+  beta:
+
+block_matching:
+  tuning:
+    # Defined fine-to-coarse
+    factors: [1, 2, 4, 4] # the downsample factor between each scale
+    tile_size: "SNR_based" # The tile size (for the finest scale). You can also give an int here
+    tile_size_factors: [1, 1, 1, 0.5] # How the tile size shape evloves at each scale
+    search_radii: [1, 4, 4, 4] # The search radius for block matching
+    metrics: ['L1', 'L2', 'L2', 'L2'] # The metric to minimize during search at each scale
+
+ica:
+  tuning:
+    n_iter: 3 # Number of ICA iterations
+    sigma_blur: 0 # If > 0 a gaussian blur will be applied before compute the gradients for the hessian
+
+robustness:
+  enabled: true # enable or disable the robustness mask
+  save_mask: true # Save or not the accumulated robustness mask as a .png
+  tuning: # The threshold paramters described in the article
+    t: 0.12
+    s1: 2
+    s2: 12
+    Mt: 0.8
+
+merging:
+  kernel: steerable # iso or steerable. The sahpe of the kernel
+  selection_law: linear # options: hard_threshold, linear. How to compute k1 and k2 from A, k_strech and k_shrink. hard threshold sets k1=k2 if A < 1.95, else steerable. Linear is the original version with a linear stretch.
+  tuning: # The kernel settings
+    k_detail: SNR_based
+    k_denoise: SNR_based
+    D_th: SNR_based
+    D_tr: SNR_based
+    k_stretch: 4
+    k_shrink: 2
+
+postprocessing:
+  enabled: true
+  do_color_correction: true # Apply the color matrix to convert from camera space to sRGB space
+  do_gamma_correction: true # Apply gamma correction (sRGB)
+  do_tonemapping: false # Apply tonemapping (Reinhard)
+  sharpening:
+    enabled: true
+    amount: 1.5
+    radius: 3
+  do_devignetting: false
+
+accumulated_robustness_denoiser: # These are the accumulated robustness denoising options
+  median:
+    enabled: False
+    radius_max: 3
+    max_frame_count: 8
+  gauss:
+    enabled: False
+    sigma_max: 1.5
+    max_frame_count: 8
+    
+  merge:
+    enabled: True
+    rad_max: 2
+    max_multiplier: 8 # Multiplier of the covariance for single frame SR
+    max_frame_count: 8 # # number of merged frames above which no blur is applied
+```
+
 ## Troubleshooting
 If you encounter any bug, please open an issue and/or sent an email at jamy.lafenetre@ens-paris-saclay.fr and thomas.eboli@ens-paris-saclay.fr.
 
-## Parameters
-The list of all the parameters, their default values and their relation to the SNR can be found in `params.py`. Here are a few of them, grouped by category :
-
-### General parameters
-|Parameter|usage|
-|--|--|
-|scale|The upscaling factor, can be floating but should remain bewteen 1 and 3.|
-|Ts|Tile size for the ICA algorithm, and the block matching. Is fixed by the SNR.|
-|mode|bayer or grey ; the pipeline can processe grey or color image.|
-|debug|If turned on, other debug informations can be returned|
-
-### Block matching
-|Parameter|usage|
-|--|--|
-|factors|list of the downsampling factor to generate the Guassian pyramid|
-|tileSize|list of the tileSizes during local search. The last stage should always be Ts !|
-|searchRadia|The search radius for each stage|
-|distances|L1 or L2; the norm to minimize at each stage|
-
-### ICA
-|Parameter|usage|
-|--|--|
-|kanadeIter|Number of iterations of the ICA algorithm|
-|sigma blur|Std of the Gausian filter applied to the grey image before computing gradient. If 0, no filter is applied|
-
-### Robustness
-|Parameter|usage|
-|--|--|
-|on|Whether the robustness is activated or not|
-|t||
-|s1||
-|s2||
-|Mt||
-
-### Merging
-|Parameter|usage|
-|--|--|
-|kernel|handheld or iso; whether to use the steerable kernels or the isotropic constant ones (Experiment 3.5in the IPOL article)|
-|k_detail||
-|k_denoise||
-|D_tr||
-|D_th||
-|k_shrink||
-|k_stretch||
 
 ### Others
 The default floating number representation and the default threads per block number can be modified in <code>utils.py</code>.

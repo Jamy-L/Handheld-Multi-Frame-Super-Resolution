@@ -27,7 +27,7 @@ import rawpy
 from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame_count_denoising_median, apply_orientation
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso, timer
 from .block_matching import init_block_matching, align_image_block_matching
-from .params import check_params_validity, update_snr_config
+from .params import sanitize_config, update_snr_config
 from .robustness import init_robustness, compute_robustness
 from .utils_dng import load_dng_burst
 from .ICA import ICA_optical_flow, init_ICA
@@ -293,7 +293,7 @@ def process(burst_path, config):
     update_snr_config(config, SNR)
     
     # checking (just in case !)
-    check_params_validity(config, ref_raw.shape)
+    sanitize_config(config, ref_raw.shape)
     
 
     config.exif = OmegaConf.create({

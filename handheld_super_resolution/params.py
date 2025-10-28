@@ -1,16 +1,7 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Wed Oct 12 14:22:54 2022
-
-This scripts aims to fetch the appropriate parameters, based on the estimated
-SNR.
-
-@author: jamyl
-"""
 import warnings
 import numpy as np
 
-def check_params_validity(config, imshape):
+def sanitize_config(config, imshape):
     if config.mode == "grey" and config.grey_method != "FFT":
         raise NotImplementedError("Grey level images should be obtained with FFT")
         
