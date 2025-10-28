@@ -207,31 +207,22 @@ def save_as_dng(np_img, ref_dng_path, outpath):
     None.
 
     '''
-    assert np_img.shape[-1] == 3
+    assert np_img.ndim == 3 and np_img.shape[-1] == 3, f"Got {np_img.shape}, expected HxWx3 RGB image."
 
     np_int_img = np.copy(np_img)  # copying to avoid inplace-overwritting
-    #### Undo White balance and black level
-    # get tags
-    with open(ref_dng_path, 'rb') as raw_file:
-        tags = exifread.process_file(raw_file)
-
-    black_levels = tags['Image BlackLevel']
-    if isinstance(black_levels.values[0], int):
-        black_levels = np.array(black_levels.values)
-    else:  # Sometimes this tag is a fraction object for some reason. It seems that black levels are all integers anyway
-        black_levels = np.array([int(x.decimal()) for x in black_levels.values])
 
     raw = rawpy.imread(ref_dng_path)
     white_balance = raw.camera_whitebalance
+    white_balance = [x/white_balance[1] for x in white_balance]  # Normalize to green channel
 
-    # Reverse WB
+    # Quantize to 16 bits using full range
     new_white_level = 2**16 - 1
+    new_black_level = 0
 
-    for c in range(3):
-        np_int_img[:, :, c] /= white_balance[c] / white_balance[1]
-        np_int_img[:, :, c] = np_int_img[:, :, c] * (new_white_level - black_levels[c]) + black_levels[c]
+    np_int_img = np_int_img * (new_white_level - new_black_level) + new_black_level
+    np_int_img = np.round(np_int_img)
 
-    np_int_img = np.clip(np_int_img, 0, 2**16 - 1).astype(np.uint16)
+    np_int_img = np.clip(np_int_img, 0, new_white_level).astype(np.uint16)
 
     #### Saving the image as 16 bits RGB tiff
     save_as_tiff(np_int_img, outpath)
@@ -262,7 +253,7 @@ def save_as_dng(np_img, ref_dng_path, outpath):
         "-IFD0:CalibrationIlluminant2<SubIFD:CalibrationIlluminant2",
         "-IFD0:CFARepeatPatternDim<SubIFD:CFARepeatPatternDim",
         "-IFD0:CFAPattern2<SubIFD:CFAPattern2",
-        "-AsShotNeutral",
+        f"-AsShotNeutral=1 1 1",
         "-IFD0:ActiveArea<SubIFD:ActiveArea",
         "-IFD0:DefaultScale<SubIFD:DefaultScale",
         "-IFD0:DefaultCropOrigin<SubIFD:DefaultCropOrigin",
@@ -282,18 +273,22 @@ def save_as_dng(np_img, ref_dng_path, outpath):
         print("ExifTool succeeded")
         print(result.stdout)
 
-    # adding further dng tags
+    # Adding further tags that cant be set during first run (because it was a .tiff and now it's a .dng)
     exiftool_args = [
         EXIFTOOL_PATH,
         "-n",
         "-overwrite_original",
         "-tagsfromfile", ref_dng_path,
-        "-IFD0:AnalogBalance",
+        f"-IFD0:AnalogBalance={white_balance[0]} {white_balance[1]} {white_balance[2]}",
+        f"-AnalogBalance={white_balance[0]} {white_balance[1]} {white_balance[2]}",
         "-IFD0:ColorMatrix1",
         "-IFD0:ColorMatrix2",
         "-IFD0:CameraCalibration1",
         "-IFD0:CameraCalibration2",
-        "-IFD0:AsShotNeutral",
+        f"-IFD0:AsShotNeutral=1 1 1",
+        f"-AsShotNeutral=1 1 1",
+        f"-IFD0:BlackLevel={new_black_level} {new_black_level} {new_black_level}",
+        f"-BlackLevel={new_black_level} {new_black_level} {new_black_level}",
         "-IFD0:BaselineExposure",
         "-IFD0:CalibrationIlluminant1",
         "-IFD0:CalibrationIlluminant2",
@@ -332,7 +327,6 @@ def save_as_tiff(int_im, outpath):
     # 16 bits uncompressed by default
     # Imageio is the only module I could find to save 16 bits RGB tiffs without compression (cv2 does LZW).
     # It is vital to have uncompressed image, because validate_dng cannot work if the tiff is compressed.
-    # imageio.imwrite(outpath.with_suffix('.tif').as_posix(), int_im, bigtiff=False)
     try:
         # Try to write as classic TIFF
         with imageio.imopen(outpath.with_suffix('.tif').as_posix(), 'w', bigtiff=False) as img_file: # Cant put bigtiff=True, else exiftool wont work to write tags...
