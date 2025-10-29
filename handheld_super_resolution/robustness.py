@@ -20,7 +20,7 @@ from numba import cuda, uint8
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE,DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS, clamp, timer
 from .utils_image import dogson_biquadratic_kernel
 
-def init_robustness(ref_img, config):
+def init_robustness(ref_img, cfa_pattern, white_balance, config):
     """
     Initialiazes the robustness etimation procedure by
     computing the local stats of the reference image
@@ -29,6 +29,10 @@ def init_robustness(ref_img, config):
     ----------
     ref_img : device Array[imshape_y, imshape_x]
         Raw reference image J_1
+    cfa_pattern : device Array[2,2]
+        Bayer pattern
+    white_balance : device Array[3]
+        White balance gains
     config : OmegaConf object
         parameters. 
 
@@ -52,14 +56,11 @@ def init_robustness(ref_img, config):
     bayer_mode = config.mode=='bayer'
     r_on = config.robustness.enabled
 
-    CFA_pattern = cuda.to_device(config.exif.cfa_pattern)
-
-
     if r_on :         
         # Computing guide image
 
         if bayer_mode:
-            guide_ref_img = compute_guide_image_(ref_img, CFA_pattern)
+            guide_ref_img = compute_guide_image_(ref_img, cfa_pattern, white_balance)
         else:
             # Numba friendly code to add 1 channel
             guide_ref_img = ref_img.reshape((imshape_y, imshape_x, 1)) 
@@ -75,7 +76,7 @@ def init_robustness(ref_img, config):
         return None, None
     
     
-def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, config):
+def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, cfa_pattern, white_balance, config):
     """
     this is the implementation of Algorithm 6: ComputeRobustness
     Returns the robustnesses of the compared image J_n (n>1), based on the
@@ -91,6 +92,10 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, config)
         Local standard deviations of the reference image
     flows : device Array[n_patchs_y, n_patchs_y, 2]
         patch-wise optical flows of the compared image V_n(p)
+    cfa_pattern : device Array[2,2]
+        Bayer pattern
+    white_balance : device Array[3]
+        White balance gains
     config : OmegaConf object
         parameters.
 
@@ -115,8 +120,6 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, config)
 
     bayer_mode = config.mode=='bayer'
     r_on = config.robustness.enabled
-
-    CFA_pattern = cuda.to_device(config.exif.cfa_pattern)
 
     tile_size = config.block_matching.tuning.tile_size
     t = config.robustness.tuning.t
@@ -145,13 +148,12 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, config)
             
         # Computing guide image
         if bayer_mode:
-            guide_img = compute_guide_image_(comp_img, CFA_pattern)
+            guide_img = compute_guide_image_(comp_img, cfa_pattern, white_balance)
         else:
             guide_img = comp_img.reshape((imshape_y, imshape_x, 1)) # Adding 1 channel
             
 
         # Computing local stats (before applying optical flow)
-            
         comp_local_means, _ = compute_local_stats_(guide_img)
         
         # Upscale and warp local means
@@ -168,9 +170,7 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, config)
         
         # applying flow discontinuity penalty
         S = compute_s_(flows, Mt, s1, s2)
-        
         R = robustness_threshold_(d_sq, sigma_sq, S, t, tile_size, bayer_mode)
-
         r = local_min_(R)
         
     else: 
@@ -179,7 +179,7 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, config)
     return r
 
 
-def compute_guide_image(raw_img, CFA):
+def compute_guide_image(raw_img, cfa_pattern, white_balance):
     """
     This is the implementation of Algorithm 7: ComputeGuideImage
     Return the guide image G associated with the raw frame J
@@ -188,8 +188,10 @@ def compute_guide_image(raw_img, CFA):
     ----------
     raw_img : device Array[imshape_y, imshape_x]
         Raw frame J_n.
-    CFA : device Array[2, 2]
+    cfa_pattern : device Array[2, 2]
         Bayer pattern
+    white_balance : device Array[3]
+        White balance gains
 
     Returns
     -------
@@ -206,12 +208,12 @@ def compute_guide_image(raw_img, CFA):
     blockspergrid_y = math.ceil(guide_imshape_y/threadsperblock[0])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
             
-    cuda_compute_guide_image[blockspergrid, threadsperblock](raw_img, guide_img, CFA)
+    cuda_compute_guide_image[blockspergrid, threadsperblock](raw_img, guide_img, cfa_pattern, white_balance)
     
     return guide_img
     
 @cuda.jit
-def cuda_compute_guide_image(raw_img, guide_img, CFA):
+def cuda_compute_guide_image(raw_img, guide_img, CFA, wb):
     tx, ty = cuda.grid(2)
     
     if not (0 <= ty < guide_img.shape[0] and
@@ -223,12 +225,12 @@ def cuda_compute_guide_image(raw_img, guide_img, CFA):
     for i in range(2):
         for j in range(2):
             c = uint8(CFA[i, j])
+            x = raw_img[2*ty + i, 2*tx + j] / wb[c] # Undo whitebalance
             
             if c == 1: # green
-                g +=  raw_img[2*ty + i, 2*tx + j]
+                g += x
             else:
-                guide_img[ty, tx, c] = raw_img[2*ty + i, 2*tx + j]
-            
+                guide_img[ty, tx, c] = x
     guide_img[ty, tx, 1] = g/2
 
 def compute_local_stats(guide_img):
@@ -689,4 +691,14 @@ def cuda_compute_local_min(R, r):
             mini = min(mini, R[y, x])
     
     r[idy, idx] = mini
+
+@cuda.jit
+def cuda_undo_whitebalance(guide_img, wb):
+    tx, ty = cuda.grid(2)
+    
+    if not (0 <= ty < guide_img.shape[0] and
+            0 <= tx < guide_img.shape[1]):
+        return
         
+    for c in range(3):
+        guide_img[ty, tx, c] = guide_img[ty, tx, c] / wb[c]

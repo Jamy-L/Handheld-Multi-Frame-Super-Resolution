@@ -143,35 +143,25 @@ def load_dng_burst(burst_path):
     ISO = min(3200, ISO)
 
 
+    #### Performing whitebalance
+    assert (type_ := type(ref_raw[0, 0])) == (y := type(raw_comp[0, 0, 0])), f'Reference and comp images should have the same data type, got {type_} and {y}.'
 
 
-    #### Performing whitebalance and normalizing into 0, 1
-
-    if np.issubdtype(type(ref_raw[0, 0]), np.integer):
-        # Here do black and white level correction and white balance processing for all image in comp_images
-        # Each image in comp_images should be between 0 and 1.
-        # ref_raw is a (H,W) array
+    if np.issubdtype(type_, np.integer):
         ref_raw = ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE)
+        raw_comp = raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE)
         for i in range(2):
             for j in range(2):
                 channel = CFA[i, j]
+                k = white_balance[channel] / white_balance[1]
                 ref_raw[i::2, j::2] = (ref_raw[i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
-                ref_raw[i::2, j::2] *= white_balance[channel] / white_balance[1]
-
-        ref_raw = np.clip(ref_raw, 0.0, 1.0)
-        # The division by the green WB value is important because WB may come with integer coefficients instead
-
-    if np.issubdtype(type(raw_comp[0, 0, 0]), np.integer):
-        raw_comp = raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE)
-        # raw_comp is a (N, H,W) array
-        for i in range(2):
-            for j in range(2):
-                channel = channel = CFA[i, j]
                 raw_comp[:, i::2, j::2] = (raw_comp[:, i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
-                raw_comp[:, i::2, j::2] *= white_balance[channel] / white_balance[1]
-        raw_comp = np.clip(raw_comp, 0., 1.)
+                ref_raw[i::2, j::2] *= k
+                raw_comp[:, i::2, j::2] *= k
+    else:
+        warnings.warn('Input DNG images are not in integer format: is the input valid RAW data?')
 
-    return ref_raw, raw_comp, ISO, tags, CFA, xyz2cam, raw_path_list[ref_id]
+    return ref_raw, raw_comp, ISO, tags, CFA, xyz2cam, white_balance, raw_path_list[ref_id]
 
 
 def save_as_dng(np_img, ref_dng_path, outpath):

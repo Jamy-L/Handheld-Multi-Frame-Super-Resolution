@@ -88,36 +88,32 @@ def main(ref_img, comp_imgs, config):
     debug_dict = {"robustness":[],
                   "flow":[]}
 
-    accumulate_r = config.accumulated_robustness_denoiser.enabled
+    accumulate_r = config.accumulated_robustness_denoiser.enabled or config.robustness.save_mask
 
     #### Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
+    white_balance = cuda.to_device(np.array(config.exif.white_balance))
+    cfa_pattern = cuda.to_device(np.array(config.exif.cfa_pattern))
     cuda.synchronize()
     
     if verbose :
         print("\nProcessing reference image ---------\n")
         t1 = time.perf_counter()
     
-    
     #### Raw to grey
-    
     if bayer_mode :
         cuda_ref_grey = compute_grey_images_(cuda_ref_img, grey_method)
-
     else:
         cuda_ref_grey = cuda_ref_img
         
     #### Block Matching
-        
     reference_pyramid = init_block_matching_(cuda_ref_grey, config)
 
     #### ICA : compute grad and hessian
-
     ref_gradx, ref_grady, hessian = init_ICA_(cuda_ref_grey, config)
 
     #### Local stats estimation
-
-    ref_local_means, ref_local_stds = init_robustness_(cuda_ref_img, config)
+    ref_local_means, ref_local_stds = init_robustness_(cuda_ref_img, cfa_pattern, white_balance, config)
 
     if accumulate_r:
         accumulated_r = cuda.to_device(np.zeros(ref_local_means.shape[:2]))
@@ -126,13 +122,13 @@ def main(ref_img, comp_imgs, config):
     scale = config.scale
     native_imshape_y, native_imshape_x = cuda_ref_img.shape
     output_size = (round(scale*native_imshape_y), round(scale*native_imshape_x))
-    num = cuda.to_device(np.zeros(output_size+(3,), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
-    den = cuda.to_device(np.zeros(output_size+(3,), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
+    num = cuda.to_device(np.zeros((*output_size, 3), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
+    den = cuda.to_device(np.zeros((*output_size, 3), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
     
     if verbose :
         cuda.synchronize()
         getTime(t1, '\nRef Img processed (Total)')
-    
+
 
     n_images = comp_imgs.shape[0]
     for im_id in range(n_images):
@@ -147,16 +143,13 @@ def main(ref_img, comp_imgs, config):
         #### Compute Grey Images
         if bayer_mode:
             cuda_im_grey = compute_grey_images(comp_imgs[im_id], grey_method)
-
         else:
             cuda_im_grey = cuda_img
         
         #### Block Matching
-        
         pre_alignment = align_image_block_matching_(cuda_im_grey, reference_pyramid, config)
         
         #### ICA
-        
         cuda_final_alignment = ICA_optical_flow_(cuda_im_grey, cuda_ref_grey,
                                                  ref_gradx, ref_grady,
                                                  hessian, pre_alignment,
@@ -165,22 +158,17 @@ def main(ref_img, comp_imgs, config):
         if debug_mode:
             debug_dict["flow"].append(cuda_final_alignment.copy_to_host())
             
-            
         #### Robustness
-          
         cuda_robustness = compute_robustness_(cuda_img, ref_local_means, ref_local_stds, cuda_final_alignment,
-                                              config)
+                                            cfa_pattern, white_balance, config)
         if accumulate_r:
             add(accumulated_r, cuda_robustness)
         
-
         #### Kernel estimation
-        
         cuda_kernels = estimate_kernels_(cuda_img, config)
         
         #### Merging
-        
-        merge_(cuda_img, cuda_final_alignment, cuda_kernels, cuda_robustness, num, den, config)
+        merge_(cuda_img, cuda_final_alignment, cuda_kernels, cuda_robustness, num, den, cfa_pattern, config)
         
         if verbose :
             cuda.synchronize()
@@ -190,18 +178,16 @@ def main(ref_img, comp_imgs, config):
             debug_dict['robustness'].append(cuda_robustness.copy_to_host())
     
     #### Ref kernel estimation
-        
     cuda_kernels = estimate_kernels_(cuda_ref_img, config)
     
     #### Merge ref
-
     if accumulate_r:     
         merge_ref_(cuda_ref_img, cuda_kernels,
-                   num, den,
+                   num, den, cfa_pattern,
                    config, accumulated_r)
     else:
         merge_ref_(cuda_ref_img, cuda_kernels,
-                   num, den,
+                   num, den, cfa_pattern,
                    config)
 
 
@@ -241,7 +227,7 @@ def process(burst_path, config):
                                          config.verbose >= 2)
     
     # reading image stack
-    ref_raw, raw_comp, ISO, tags, CFA, xyz2cam, ref_path = load_dng_burst(burst_path)
+    ref_raw, raw_comp, ISO, tags, CFA, xyz2cam, white_balance, ref_path = load_dng_burst(burst_path)
     
     if config.noise_model.get("alpha", None) is not None:
         # User provided custom values.
@@ -298,7 +284,8 @@ def process(burst_path, config):
 
     config.exif = OmegaConf.create({
         "cfa_pattern": CFA.tolist(), # omegaconf doesnt like numpy...
-        "iso": ISO
+        "iso": ISO,
+        "white_balance": white_balance,
         })
 
     config.noise_model.update({

@@ -19,7 +19,7 @@ from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEF
 from .utils_image import denoise_power_merge, denoise_range_merge
 from .linalg import quad_mat_prod, invert_2x2, interpolate_cov
 
-def merge_ref(ref_img, kernels, num, den, config, acc_rob=None):
+def merge_ref(ref_img, kernels, num, den, cfa_pattern, config, acc_rob=None):
     """
     Implementation of Alg. 11: AccumulationReference
     Accumulates the reference frame into num and den, while considering
@@ -48,7 +48,6 @@ def merge_ref(ref_img, kernels, num, den, config, acc_rob=None):
     """
     scale = config.scale
 
-    CFA_pattern = cuda.to_device(config.exif.cfa_pattern)
     bayer_mode = config.mode == 'bayer'
     iso_kernel = config.merging.kernel == 'iso'
 
@@ -76,7 +75,7 @@ def merge_ref(ref_img, kernels, num, den, config, acc_rob=None):
     blockspergrid = (blockspergrid_x, blockspergrid_y)
     
     accumulate_ref[blockspergrid, threadsperblock](
-        ref_img, kernels, bayer_mode, iso_kernel, scale, CFA_pattern,
+        ref_img, kernels, bayer_mode, iso_kernel, scale, cfa_pattern,
         num, den, acc_rob, robustness_denoise, max_frame_count, rad_max, max_multiplier)
     
     
@@ -234,7 +233,7 @@ def accumulate_ref(ref_img, covs, bayer_mode, iso_kernel, scale, CFA_pattern,
             den[output_pixel_idy, output_pixel_idx, chan] += acc[chan]
           
     
-def merge(comp_img, alignments, covs, r, num, den, config):
+def merge(comp_img, alignments, covs, r, num, den, cfa_pattern, config):
     """
     Implementation of Alg. 4: Accumulation
     Accumulates comp_img (J_n, n>1) into num and den, based on the alignment
@@ -266,7 +265,6 @@ def merge(comp_img, alignments, covs, r, num, den, config):
     """
     scale = config.scale
 
-    CFA_pattern = cuda.to_device(config.exif.cfa_pattern)
     bayer_mode = config.mode == 'bayer'
     iso_kernel = config.merging.kernel == 'iso'
     tile_size = config.block_matching.tuning.tile_size
@@ -284,7 +282,7 @@ def merge(comp_img, alignments, covs, r, num, den, config):
                     
     accumulate[blockspergrid, threadsperblock](
         comp_img, alignments, covs, r,
-        bayer_mode, iso_kernel, scale, tile_size, CFA_pattern,
+        bayer_mode, iso_kernel, scale, tile_size, cfa_pattern,
         num, den)
 
 
