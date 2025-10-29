@@ -64,4 +64,4 @@ accumulated_robustness_denoiser:
     enabled: False
     rad_max: 2
     max_multiplier: 8 # Multiplier of the covariance for single frame SR
-    max_frame_count: 8 # # number of merged frames above which no blur is applied
+    max_frame_count: 2 # # number of merged frames above which no blur is applied
