@@ -74,18 +74,49 @@ def update_snr_config(config, SNR):
     config.block_matching.tuning.tile_sizes = sizes
 
     if config.merging.tuning.k_detail == "SNR_based":
-        config.merging.tuning.k_detail = 0.25 + (0.33 - 0.25)*(30 - SNR)/(30 - 6)  # [0.25, ..., 0.33]
+        config.merging.tuning.k_detail = lerp(SNR, [6, 30], [0.33, 0.25])
     else:
         assert isinstance(config.merging.tuning.k_detail, float), "k_detail should be a float or 'SNR_based'"
     if config.merging.tuning.k_denoise == "SNR_based":
-        config.merging.tuning.k_denoise = 3 + (5 - 3)*(30 - SNR)/(30 - 6)    # [3.0, ...,5.0]
+        config.merging.tuning.k_denoise = lerp(SNR, [6, 30], [3.0, 5.0])
     else:
         assert isinstance(config.merging.tuning.k_denoise, float), "k_denoise should be a float or 'SNR_based'"
     if config.merging.tuning.D_th == "SNR_based":
-        config.merging.tuning.D_th = 0.71 + (0.81 - 0.71)*(30 - SNR)/(30 - 6)      # [0.001, ..., 0.010]
+        config.merging.tuning.D_th = lerp(SNR, [6, 30], [0.71, 0.81])
     else:
         assert isinstance(config.merging.tuning.D_th, float), "D_th should be a float or 'SNR_based'"
     if config.merging.tuning.D_tr == "SNR_based":
-        config.merging.tuning.D_tr = 1 + (1.24 - 1)*(30 - SNR)/(30 - 6)     # [0.006, ..., 0.020]
+        config.merging.tuning.D_tr = lerp(SNR, [6, 30], [1, 1.24])
     else:
         assert isinstance(config.merging.tuning.D_tr, float), "D_tr should be a float or 'SNR_based'"
+
+
+def lerp(x, x_range, y_range):
+    """
+    Linearly interpolate a scalar value x from x_range -> y_range.
+
+    Parameters
+    ----------
+    x : float or int
+        Input value.
+    x_range : tuple[float, float]
+        (x_min, x_max) range.
+    y_range : tuple[float, float]
+        (y_min, y_max) range.
+
+    Returns
+    -------
+    float
+        Interpolated value in y_range.
+    """
+    x0, x1 = x_range
+    y0, y1 = y_range
+
+    assert x0 < x1
+    assert y0 != y1
+
+    # normalized t
+    t = (x - x0) / (x1 - x0)
+    t = max(0.0, min(1.0, t))
+
+    return y0 + (y1 - y0) * t
