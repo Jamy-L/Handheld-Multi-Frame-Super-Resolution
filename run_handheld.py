@@ -80,7 +80,7 @@ if __name__ == "__main__":
         elif v.lower() in ('no', 'false', 'f', 'n', '0'):
             return False
         else:
-            raise argparse.ArgumentTypeError('Boolean value expected.')
+            raise TypeError()
     
     parser = argparse.ArgumentParser()
     ## Image parameter
@@ -103,11 +103,16 @@ if __name__ == "__main__":
     # Apply overrides
     for item in args.overrides:
         key, value = item.split("=", 1)
+
         # Try to parse int/float/bool automatically
         try:
-            value = eval(value)
-        except:
-            raise ValueError(f"Could not parse override value: {value}")
+            value = str2bool(value)
+        except TypeError:
+            # not a bool
+            try:
+                value = eval(value)
+            except:
+                pass # Keep as string if eval fails
         OmegaConf.update(config, key, value)
     
     print_parameters(config)
@@ -122,7 +127,8 @@ if __name__ == "__main__":
     # disabling post processing for dng outputs
     if outpath.suffix == '.dng':
         config.postprocessing.enabled = False
-    
+
+
     handheld_output, debug_dict = process(args.impath, config)
     handheld_output = np.nan_to_num(handheld_output)
     handheld_output = np.clip(handheld_output, 0, 1)
