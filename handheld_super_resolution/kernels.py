@@ -238,7 +238,7 @@ def hard_threshold(A, k_shrink, k_stretch):
 
 @cuda.jit(device=True)
 def linear(A, k_shrink, k_stretch):
-    k1 = 1 + A * (1/k_shrink - 1)
-    k2 = 1 + A * (k_stretch - 1)
+    k1 = 1 + A/2 * (1/k_shrink - 1)
+    k2 = 1 + A/2 * (k_stretch - 1)
     return k1, k2
 
