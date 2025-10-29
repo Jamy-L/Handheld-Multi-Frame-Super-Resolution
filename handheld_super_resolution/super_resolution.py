@@ -94,7 +94,12 @@ def main(ref_img, comp_imgs, config):
     cuda_ref_img = cuda.to_device(ref_img)
     white_balance = cuda.to_device(np.array(config.exif.white_balance))
     cfa_pattern = cuda.to_device(np.array(config.exif.cfa_pattern))
+    # This running buffer is for the image being processed
+    stream = cuda.stream()
+    cuda_img = cuda.device_array_like(comp_imgs[0], stream=stream)
     cuda.synchronize()
+    cuda_std_curve = cuda.to_device(np.array(config.noise_model.std_curve))
+    cuda_diff_curve = cuda.to_device(np.array(config.noise_model.diff_curve))
     
     if verbose :
         print("\nProcessing reference image ---------\n")
@@ -118,10 +123,10 @@ def main(ref_img, comp_imgs, config):
     if accumulate_r:
         accumulated_r = cuda.to_device(np.zeros(ref_local_means.shape[:2]))
 
-    # zeros init of num and den
     scale = config.scale
     native_imshape_y, native_imshape_x = cuda_ref_img.shape
     output_size = (round(scale*native_imshape_y), round(scale*native_imshape_x))
+    # zeros init of num and den
     num = cuda.to_device(np.zeros((*output_size, 3), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
     den = cuda.to_device(np.zeros((*output_size, 3), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
     
@@ -138,7 +143,8 @@ def main(ref_img, comp_imgs, config):
             im_time = time.perf_counter()
         
         #### Moving to GPU
-        cuda_img = cuda.to_device(comp_imgs[im_id])
+        # cuda_img = cuda.to_device(comp_imgs[im_id])
+        cuda.to_device(comp_imgs[im_id], to=cuda_img, stream=stream)
         
         #### Compute Grey Images
         if bayer_mode:
@@ -160,7 +166,7 @@ def main(ref_img, comp_imgs, config):
             
         #### Robustness
         cuda_robustness = compute_robustness_(cuda_img, ref_local_means, ref_local_stds, cuda_final_alignment,
-                                            cfa_pattern, white_balance, config)
+                                            cfa_pattern, white_balance, (cuda_std_curve, cuda_diff_curve), config)
         if accumulate_r:
             add(accumulated_r, cuda_robustness)
         
@@ -176,6 +182,7 @@ def main(ref_img, comp_imgs, config):
             
         if debug_mode : 
             debug_dict['robustness'].append(cuda_robustness.copy_to_host())
+        stream.synchronize()
     
     #### Ref kernel estimation
     cuda_kernels = estimate_kernels_(cuda_ref_img, config)

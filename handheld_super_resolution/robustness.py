@@ -76,7 +76,7 @@ def init_robustness(ref_img, cfa_pattern, white_balance, config):
         return None, None
     
     
-def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, cfa_pattern, white_balance, config):
+def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, cfa_pattern, white_balance, noise_model, config):
     """
     this is the implementation of Algorithm 6: ComputeRobustness
     Returns the robustnesses of the compared image J_n (n>1), based on the
@@ -137,14 +137,7 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, cfa_pat
     if r_on : 
         r = cuda.device_array(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
         
-        # moving noise model to GPU
-        cuda_std_curve = cuda.to_device(np.array(config.noise_model.std_curve))
-        cuda_diff_curve = cuda.to_device(np.array(config.noise_model.diff_curve))
-            
-        if verbose_3:
-            cuda.synchronize()
-            current_time = getTime(current_time, ' - Moved noise model to GPU')
-
+        cuda_std_curve, cuda_diff_curve = noise_model
             
         # Computing guide image
         if bayer_mode:
@@ -691,14 +684,3 @@ def cuda_compute_local_min(R, r):
             mini = min(mini, R[y, x])
     
     r[idy, idx] = mini
-
-@cuda.jit
-def cuda_undo_whitebalance(guide_img, wb):
-    tx, ty = cuda.grid(2)
-    
-    if not (0 <= ty < guide_img.shape[0] and
-            0 <= tx < guide_img.shape[1]):
-        return
-        
-    for c in range(3):
-        guide_img[ty, tx, c] = guide_img[ty, tx, c] / wb[c]
