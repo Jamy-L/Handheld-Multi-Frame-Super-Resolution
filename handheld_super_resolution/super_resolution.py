@@ -27,6 +27,7 @@ import rawpy
 from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame_count_denoising_median, apply_orientation
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso, timer
 from .block_matching import init_block_matching, align_image_block_matching
+from .alignment import align, init_alignment
 from .params import sanitize_config, update_snr_config
 from .robustness import init_robustness, compute_robustness
 from .utils_dng import load_dng_burst
@@ -110,12 +111,8 @@ def main(ref_img, comp_imgs, config):
         cuda_ref_grey = compute_grey_images_(cuda_ref_img, grey_method)
     else:
         cuda_ref_grey = cuda_ref_img
-        
-    #### Block Matching
-    reference_pyramid = init_block_matching_(cuda_ref_grey, config)
 
-    #### ICA : compute grad and hessian
-    ref_gradx, ref_grady, hessian = init_ICA_(cuda_ref_grey, config)
+    ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian = init_alignment(cuda_ref_grey, config)
 
     #### Local stats estimation
     ref_local_means, ref_local_stds = init_robustness_(cuda_ref_img, cfa_pattern, white_balance, config)
@@ -152,14 +149,8 @@ def main(ref_img, comp_imgs, config):
         else:
             cuda_im_grey = cuda_img
         
-        #### Block Matching
-        pre_alignment = align_image_block_matching_(cuda_im_grey, reference_pyramid, config)
-        
-        #### ICA
-        cuda_final_alignment = ICA_optical_flow_(cuda_im_grey, cuda_ref_grey,
-                                                 ref_gradx, ref_grady,
-                                                 hessian, pre_alignment,
-                                                 config)
+        cuda_final_alignment = align_(ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian,
+                        cuda_im_grey, config)
         
         if debug_mode:
             debug_dict["flow"].append(cuda_final_alignment.copy_to_host())
