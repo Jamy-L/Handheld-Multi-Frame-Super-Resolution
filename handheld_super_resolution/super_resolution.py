@@ -83,6 +83,7 @@ def main(ref_img, comp_imgs, config):
     merge_ = timer(merge, verbose_2, '\nAccumulating Image', 'Image accumulated (Total)')
     merge_ref_ = timer(merge_ref, verbose_2, '\nAccumulating ref Img', 'Ref Img accumulated (Total)')    
     divide_ = timer(divide, verbose_2, end_s='\n------------------------\nImage normalized (Total)')
+    align_ = timer(align, verbose_2, '\nBeginning alignment', 'Image aligned (Total)')
 
     bayer_mode = config.mode=='bayer'
     debug_mode = config.debug
@@ -132,6 +133,7 @@ def main(ref_img, comp_imgs, config):
         getTime(t1, '\nRef Img processed (Total)')
 
 
+    # comp_imgs = comp_imgs[:1]
     n_images = comp_imgs.shape[0]
     for im_id in range(n_images):
         if verbose :

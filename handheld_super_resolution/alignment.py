@@ -16,6 +16,15 @@ SOBEL_X = torch.as_tensor(np.array([[-1,0,1]]), dtype=DEFAULT_TORCH_FLOAT_TYPE, 
 SOBEL_Y.requires_grad = False
 SOBEL_X.requires_grad = False
 
+BOX_FILTER_8 = torch.as_tensor(np.ones((1,1,8,8)), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+BOX_FILTER_8.requires_grad = False
+BOX_FILTER_16 = torch.as_tensor(np.ones((1,1,16,16)), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+BOX_FILTER_16.requires_grad = False
+BOX_FILTER_32 = torch.as_tensor(np.ones((1,1,32,32)), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+BOX_FILTER_32.requires_grad = False
+BOX_FILTER_64 = torch.as_tensor(np.ones((1,1,64,64)), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+BOX_FILTER_64.requires_grad = False
+
 def init_alignment(ref_img, config):
     h, w = ref_img.shape
 
@@ -55,15 +64,10 @@ def init_alignment(ref_img, config):
         ts = tileSizes[len(factors) - i - 1]
         tiled = lvl.unfold(0, ts, ts).unfold(1, ts, ts)
 
-        #####
-        # import matplotlib.pyplot as plt
-        # i_, j_ = 0, 0
-        # plt.imshow(tiled)
-
         # Pad the crops with 0 to get size 2*R + 1
         r = config.block_matching.tuning.search_radii[len(factors) - i - 1]
         tiled = torch.nn.functional.pad(tiled, (r, r, r, r), mode='constant', value=0)
-        fft = torch.fft.rfft2(tiled, dim=(-1, -2))
+        fft = torch.fft.rfft2(tiled, dim=(-2, -1)) # The order of the dim tuple is EXTREMELY important !!! (and undocumented :)))))))
 
         tiled_fft.append(fft)
         tiled_pyr.append(tiled)
@@ -130,9 +134,6 @@ def align(ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessi
         ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian, moving_pyramid)):
 
         list_id = len(ref_pyramid) - l - 1
-        print(f"FFT shape : {ref_tiled_fft_lvl.shape}, Level {list_id}")
-        print(f"Upscale factor at this level: {factors[list_id]}")
-        print(f"Tile size at this level: {config.block_matching.tuning.tile_sizes[list_id]}")
         if alignments is None:
             alignments = torch.zeros((*ref_tiled_fft_lvl.shape[:2], 2), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
         else:
@@ -199,21 +200,27 @@ def align_lvl(ref_lvl, tyled_pyr_lvl, ref_fft_lvl, ref_gradx_lvl, ref_grady_lvl,
     verbose = config.verbose > 2
     currentTime = time.perf_counter()
 
-    align_lvl_block_matching(tyled_pyr_lvl, ref_fft_lvl, moving_lvl, alignments, l, config)
+    metric = config.block_matching.tuning.metrics[l]
+    if metric == "L2":
+        align_lvl_block_matching_L2(tyled_pyr_lvl, ref_fft_lvl, moving_lvl, alignments, l, config)
+    elif metric == "L1":
+        align_lvl_block_matching_L1(ref_lvl, moving_lvl, alignments, l, config)
+    else:
+        raise ValueError("Unknown block matching metric {}".format(config.block_matching.metric))
 
     if verbose:
         cuda.synchronize()
         currentTime = getTime(currentTime, ' ---- Block matching level {}'.format(l))
 
-    # align_lvl_ica(ref_lvl, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl,
-    #               moving_lvl, alignments, l, config)
+    align_lvl_ica(ref_lvl, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl,
+                  moving_lvl, alignments, l, config)
     
     if verbose:
         cuda.synchronize()
         currentTime = getTime(currentTime, ' ---- ICA level {}'.format(l))
     
 
-def align_lvl_block_matching(tyled_pyr_lvl, ref_fft_lvl, moving_lvl, alignment, l, config):
+def align_lvl_block_matching_L2(tyled_pyr_lvl, ref_fft_lvl, moving_lvl, alignment, l, config):
     verbose = config.verbose > 2
     currentTime = time.perf_counter()
     tileSize = config.block_matching.tuning.tile_sizes[l]
@@ -222,63 +229,122 @@ def align_lvl_block_matching(tyled_pyr_lvl, ref_fft_lvl, moving_lvl, alignment, 
 
     imshape = moving_lvl.shape
     
-    search_size = 2 * searchRadius + tileSize
+    search_size = 2 * searchRadius + tileSize # The size of the crop in which the search is done
+    corr_size = 2 * searchRadius + 1 # The size of the correlation map output
 
     # Extract tiles based on the optical flow
     search_area = extract_flow_patches(moving_lvl, alignment, tileSize, searchRadius)
-    moving_fft = torch.fft.rfft2(search_area, dim=(-1, -2))
 
+    moving_fft = torch.fft.rfft2(search_area, dim=(-2, -1))
     corrs = torch.fft.irfft2(torch.conj(ref_fft_lvl) * moving_fft, s=(search_size, search_size))
     corrs = torch.fft.fftshift(corrs, dim=(-2, -1))
 
+    # crop to valid region ±R around center output size search_size
+    # Before cropping, corrs has an even shaped. The correlation with shift=0 is almost at the center, biased towards the bottom left. By removing 1 pixel from top and left, we center it.
+    # The rest of the crop removes the phantom "circular" correlations at the borders due to the FFT
+    pre_crop_size = corrs.shape[-1]
+    crop = (pre_crop_size - 1 - corr_size) // 2
+    corrs = corrs[..., crop+1:crop+corr_size+1, crop+1:crop+corr_size+1]
 
-    # crop to valid region ±R around center
-    corrs = corrs[..., tileSize//2 - searchRadius + 1 : tileSize//2 + searchRadius, tileSize//2 - searchRadius + 1 : tileSize//2 + searchRadius]
 
-    corr_flat = corrs.flatten(-2, -1)
-    max_idx = torch.argmax(corr_flat, dim=-1)
-    peak_y = max_idx // tileSize
-    peak_x = max_idx % tileSize
-    dy = tileSize//2 - peak_y
-    dx = tileSize//2 - peak_x
-    # breakpoint()
-
-        ############
-    # import matplotlib.pyplot as plt
-    # # Undo the tiling of tyled_pyr_lvl
-    # ref_recomposed = torch.zeros_like(moving_lvl)
-    # for patch_y in range(tyled_pyr_lvl.shape[0]):
-    #     for patch_x in range(tyled_pyr_lvl.shape[1]):
-    #         ref_recomposed[
-    #             patch_y*tileSize:(patch_y+1)*tileSize,
-    #             patch_x*tileSize:(patch_x+1)*tileSize] = tyled_pyr_lvl[patch_y, patch_x, searchRadius:-searchRadius, searchRadius:-searchRadius]
+    ## Now compute the windows L2 norm of the search patches
+    if tileSize == 8:
+        box_filter = BOX_FILTER_8
+    elif tileSize == 16:
+        box_filter = BOX_FILTER_16
+    elif tileSize == 32:
+        box_filter = BOX_FILTER_32
+    elif tileSize == 64:
+        box_filter = BOX_FILTER_64
+    else:
+        raise NotImplementedError("Box filter for tile size {} not implemented".format(tileSize))
     
-    # plt.imshow(ref_recomposed.cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-    # plt.title("Reference Level {}".format(l))
-    # plt.figure("Moving Level {}".format(l))
-    # plt.imshow(moving_lvl.cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-    # plt.title("Moving Level {}".format(l))
+    L2_search = torch.nn.functional.conv2d(
+        search_area.view(-1, 1, search_size, search_size).square(), box_filter, padding="valid")
+    L2_search = L2_search.view(search_area.shape[0], search_area.shape[1], L2_search.shape[-2], L2_search.shape[-1])
 
+    ## Final L2 error computation (Not the full L2, but enough to find the minimum)
+    L2_error = L2_search - 2 * corrs
 
-
-
-    # i_, j_ = 1, 4
-    # plt.figure("Correlation")
-    # plt.imshow(corrs[i_, j_].cpu().numpy())
-    # plt.figure("Search Area")
-    # plt.imshow(search_area[i_, j_].cpu().numpy() ** (1/2.2), cmap='gray', vmin=0, vmax=1)
-    # plt.figure("Tiled Pyramid Level")
-    # plt.imshow(tyled_pyr_lvl[i_, j_].cpu().numpy() ** (1/2.2), cmap='gray', vmin=0, vmax=1)
-    # plt.show()
-    # breakpoint()
-
-
+    L2_error_ = L2_error.flatten(-2, -1)
+    max_idx = torch.argmin(L2_error_, dim=-1)
+    peak_y = max_idx // corr_size
+    peak_x = max_idx % corr_size
+    dy = peak_y - corr_size//2
+    dx = peak_x - corr_size//2
 
     # Test alignment here
-
     alignment[:, :, 0] += dx
     alignment[:, :, 1] += dy
     
+def align_lvl_block_matching_L1(ref_lvl, moving_lvl, alignments, l, config):
+    h, w, _ = alignments.shape
+    tile_size = config.block_matching.tuning.tile_sizes[l]
+    search_radius = config.block_matching.tuning.search_radii[l]
+
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
+    blockspergrid_x = math.ceil(w / threadsperblock[1])
+    blockspergrid_y = math.ceil(h / threadsperblock[0])
+    blockspergrid = (blockspergrid_x, blockspergrid_y)
+
+    cuda_L1_local_search[blockspergrid, threadsperblock](
+        ref_lvl, moving_lvl, tile_size, search_radius, alignments)
+
+
+@cuda.jit
+def cuda_L1_local_search(ref, moving, tile_size, search_radius, alignments):
+    n_patchs_y, n_patchs_x, _ = alignments.shape
+    h, w = moving.shape
+    tile_x, tile_y = cuda.grid(2)
+    if not(0 <= tile_y < n_patchs_y and
+           0 <= tile_x < n_patchs_x):
+        return
+    
+    local_flow = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
+    local_flow[0] = alignments[tile_y, tile_x, 0]
+    local_flow[1] = alignments[tile_y, tile_x, 1]
+
+    # position of the pixel in the top left corner of the patch
+    patch_pos_x = tile_x * tile_size
+    patch_pos_y = tile_y * tile_size
+
+    # this should be rewritten to allow patchs bigger than 32
+    local_ref = cuda.local.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
+    for i in range(tile_size):
+        for j in range(tile_size):
+            idx = patch_pos_x + j
+            idy = patch_pos_y + i
+            local_ref[i, j] = ref[idy, idx]
+
+    min_dist = +1/0 #init as infty
+    min_shift_y = 0
+    min_shift_x = 0
+    # window search
+    for search_shift_y in range(-search_radius, search_radius + 1):
+        for search_shift_x in range(-search_radius, search_radius + 1):
+            # computing dist
+            dist = 0
+            for i in range(tile_size):
+                for j in range(tile_size):
+                    new_idx = patch_pos_x + j + int(local_flow[0]) + search_shift_x
+                    new_idy = patch_pos_y + i + int(local_flow[1]) + search_shift_y
+                    
+                    if (0 <= new_idx < w and
+                        0 <= new_idy < h):
+                        dist += abs(local_ref[i, j] - moving[new_idy, new_idx])
+                    else:
+                        dist = +1/0
+                    
+                    
+            if dist < min_dist:
+                min_dist = dist
+                min_shift_y = search_shift_y
+                min_shift_x = search_shift_x
+
+    alignments[tile_y, tile_x, 0] = local_flow[0] + min_shift_x
+    alignments[tile_y, tile_x, 1] = local_flow[1] + min_shift_y
+
+
 
 def extract_flow_patches(frame_tgt, flow, patch_size, radius):
     ny, nx, _ = flow.shape
@@ -425,17 +491,13 @@ def upscale_lvl(alignments, npatchs, l, config):
 
     repeat_factor = upsampling_factor // (new_tile_size // prev_tile_size)
 
-    # breakpoint()
     upsampled_alignments = torch.repeat_interleave(
         torch.repeat_interleave(
             alignments, repeat_factor, dim=0), repeat_factor, dim=1)
     upsampled_alignments *= upsampling_factor
 
-    print(f"Alignment shape : {alignments.shape} -> {upsampled_alignments.shape}, Level {l}")
     # Add a potential tile with 0 flow on the bottom or the right
     if upsampled_alignments.shape[0] < npatchs[0] or upsampled_alignments.shape[1] < npatchs[1]:
-        print("Padding upsampled alignments from shape {} to {}".format(
-            upsampled_alignments.shape, npatchs))
         upsampled_alignments = F.pad(
             upsampled_alignments,
             (0, 0,
