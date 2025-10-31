@@ -269,7 +269,7 @@ def compute_local_stats(guide_img):
     
 @cuda.jit
 def cuda_compute_local_stats(guide_img, local_means, local_stds):
-    guide_imshape_y, guide_imshape_x, _ = guide_img.shape
+    _, guide_imshape_y, guide_imshape_x = guide_img.shape
     
     channel, idx, idy = cuda.grid(3)
     if not(0 <= idy < guide_imshape_y and
