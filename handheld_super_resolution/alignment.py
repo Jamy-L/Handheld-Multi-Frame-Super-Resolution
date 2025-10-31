@@ -540,14 +540,16 @@ def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter):
     for _ in range(niter):
         cuda.syncthreads()
         # Warp I with W(x; p) to compute I(W(x; p))
-        new_x = s_alignment[0] + x
-        new_y = s_alignment[1] + y
 
         ## bilinear interpolation at new_x, new_y
-        frac_x, floor_x = math.modf(new_x) # https://www.rollpie.com/post/252
-        frac_y, floor_y = math.modf(new_y) # separating floor and floating part
-        floor_x = clamp(int(floor_x), 0, imsize_x - 1)
-        floor_y = clamp(int(floor_y), 0, imsize_y - 1)
+        floor_x = x + int(s_alignment[0])
+        floor_y = y + int(s_alignment[1])
+        frac_x, _ = math.modf(s_alignment[0])
+        frac_y, _ = math.modf(s_alignment[1])
+        # Note: in theory frac_x, floor_x = math.modf(x + alignment[0]) in 1 shot. But it is surprisingly faster to compute it from s_alignment this way 
+
+        floor_x = clamp(floor_x, 0, imsize_x - 1)
+        floor_y = clamp(floor_y, 0, imsize_y - 1)
 
         ceil_x = clamp(floor_x + 1, 0, imsize_x - 1)
         ceil_y = clamp(floor_y + 1, 0, imsize_y - 1)
@@ -559,9 +561,10 @@ def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter):
 
         lerpx_top = m00 + (m01 - m00) * frac_x
         lerpx_bot = m10 + (m11 - m10) * frac_x
-        comp_val = lerpx_top + (lerpx_bot - lerpx_top) * frac_y
+        mov_interp = lerpx_top + (lerpx_bot - lerpx_top) * frac_y
+
         
-        gradt = comp_val - ref_c
+        gradt = mov_interp - ref_c
 
         s_B_0[tid] = -l_grad[0] * gradt
         s_B_1[tid] = -l_grad[1] * gradt
