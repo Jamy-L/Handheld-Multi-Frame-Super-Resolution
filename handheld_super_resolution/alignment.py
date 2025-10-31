@@ -127,7 +127,7 @@ def align(ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessi
 
     if verbose:
         cuda.synchronize()
-        currentTime = getTime(currentTime, ' --- Create moving pyramid')
+        currentTime = getTime(currentTime, ' - Create moving pyramid')
 
     alignments = None
     for l, (ref_lvl, tyled_pyr_lvl, ref_tiled_fft_lvl, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl, moving_lvl) in enumerate(zip(
@@ -146,7 +146,7 @@ def align(ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessi
             
         if verbose:
             cuda.synchronize()
-            currentTime = getTime(currentTime, ' --- Align pyramid')
+            currentTime = getTime(currentTime, ' - Align pyramid')
 
     return alignments
     
@@ -210,14 +210,14 @@ def align_lvl(ref_lvl, tyled_pyr_lvl, ref_fft_lvl, ref_gradx_lvl, ref_grady_lvl,
 
     if verbose:
         cuda.synchronize()
-        currentTime = getTime(currentTime, ' ---- Block matching level {}'.format(l))
+        currentTime = getTime(currentTime, ' -- Block matching level {}'.format(l))
 
     align_lvl_ica(ref_lvl, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl,
                   moving_lvl, alignments, l, config)
     
     if verbose:
         cuda.synchronize()
-        currentTime = getTime(currentTime, ' ---- ICA level {}'.format(l))
+        currentTime = getTime(currentTime, ' -- ICA level {}'.format(l))
     
 
 def align_lvl_block_matching_L2(tyled_pyr_lvl, ref_fft_lvl, moving_lvl, alignment, l, config):
@@ -384,17 +384,139 @@ def align_lvl_ica(ref_img, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl,
     tile_size = config.block_matching.tuning.tile_size
 
     n_patch_y, n_patch_x, _ = alignment.shape
+    h, w = moving_lvl.shape
     
-    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
+    # # Old way, 1 thread/patch
+    # threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
     
-    blockspergrid_x = math.ceil(n_patch_x / threadsperblock[1])
-    blockspergrid_y = math.ceil(n_patch_y / threadsperblock[0])
+    # blockspergrid_x = math.ceil(n_patch_x / threadsperblock[1])
+    # blockspergrid_y = math.ceil(n_patch_y / threadsperblock[0])
+    # blockspergrid = (blockspergrid_x, blockspergrid_y)
+    
+    # cuda_ica[blockspergrid, threadsperblock](
+    #     ref_img, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl,
+    #     moving_lvl, alignment, tile_size, config.ica.tuning.n_iter)   
+
+    # New way, 1 thread/pixel
+    threadsperblock = (tile_size, tile_size)
+    blockspergrid_x = math.ceil(n_patch_x)
+    blockspergrid_y = math.ceil(n_patch_y)
     blockspergrid = (blockspergrid_x, blockspergrid_y)
-    
-    cuda_ica[blockspergrid, threadsperblock](
+    if tile_size == 8:
+        cuda_kernel = ica_kernel_8
+    elif tile_size == 16:
+        cuda_kernel = ica_kernel_16
+    elif tile_size == 32:
+        cuda_kernel = ica_kernel_32
+    elif tile_size == 64:
+        cuda_kernel = ica_kernel_64
+    else:
+        raise NotImplementedError("ICA kernel for tile size {} not implemented".format(tile_size))
+    cuda_kernel[blockspergrid, threadsperblock](
         ref_img, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl,
-        moving_lvl, alignment, tile_size, config.ica.tuning.n_iter)   
+        moving_lvl, alignment, config.ica.tuning.n_iter)
+
+
+@cuda.jit
+def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter):
+    tile_size = 16
+    imsize_y, imsize_x = moving.shape
+    n_patchs_y, n_patchs_x, _ = alignment.shape
+    x, y  = cuda.grid(2)
+    patch_idx = cuda.blockIdx.x
+    patch_idy = cuda.blockIdx.y
+    tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
+    tid = ty * tile_size + tx
+    # NOTE: There can be patches partialy out of frame. In this case, some x,y are out of image bounds.
+    # I strip them out of the sums by setting relevant quantities to 0.
+
+    if not(0 <= patch_idy < n_patchs_y and
+        0 <= patch_idx < n_patchs_x):
+        return
     
+    is_inbound = x < imsize_x and y < imsize_y
+    
+    A = cuda.local.array((2,2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    A[0, 0] = hessian[patch_idy, patch_idx, 0, 0]
+    A[0, 1] = hessian[patch_idy, patch_idx, 0, 1]
+    A[1, 0] = hessian[patch_idy, patch_idx, 1, 0]
+    A[1, 1] = hessian[patch_idy, patch_idx, 1, 1]
+
+    if abs(A[0, 0]*A[1, 1] - A[0, 1]*A[1, 0]) < 1e-10: # system is Not solvable
+        return  # 1 Hessian per block, so all threads exit
+
+    s_alignment = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    if tid == 0:
+        s_alignment[0] = alignment[patch_idy, patch_idx, 0]
+        s_alignment[1] = alignment[patch_idy, patch_idx, 1]
+    cuda.syncthreads()
+
+    l_grad = cuda.local.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    l_grad[0] = gradx[y, x] if is_inbound else 0.0
+    l_grad[1] = grady[y, x] if is_inbound else 0.0
+
+    B = cuda.local.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    s_B_0 = cuda.shared.array((16 * 16), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    s_B_1 = cuda.shared.array((16 * 16), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+
+    ref_c = ref_img[y, x] if is_inbound else 0.0
+
+    buffer_val = cuda.local.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
+    pos = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE) # y, x
+    alignment_step = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
+
+    for _ in range(niter):
+        cuda.syncthreads()
+        # Warp I with W(x; p) to compute I(W(x; p))
+        new_x = s_alignment[0] + x
+        new_y = s_alignment[1] + y
+
+        # bilinear interpolation
+        normalised_pos_x, floor_x = math.modf(new_x) # https://www.rollpie.com/post/252
+        normalised_pos_y, floor_y = math.modf(new_y) # separating floor and floating part
+        floor_x = clamp(int(floor_x), 0, imsize_x - 1)
+        floor_y = clamp(int(floor_y), 0, imsize_y - 1)
+
+        ceil_x = clamp(floor_x + 1, 0, imsize_x - 1)
+        ceil_y = clamp(floor_y + 1, 0, imsize_y - 1)
+        pos[0] = clamp(normalised_pos_y, 0, imsize_y - 1)
+        pos[1] = clamp(normalised_pos_x, 0, imsize_x - 1)
+
+
+
+        buffer_val[0, 0] = moving[floor_y, floor_x]
+        buffer_val[0, 1] = moving[floor_y, ceil_x]
+        buffer_val[1, 0] = moving[ceil_y, floor_x]
+        buffer_val[1, 1] = moving[ceil_y, ceil_x]
+
+        comp_val = bilinear_interpolation(buffer_val, pos)
+        
+        gradt = comp_val - ref_c
+
+        s_B_0[tid] = -l_grad[0] * gradt
+        s_B_1[tid] = -l_grad[1] * gradt
+
+
+        N = tile_size * tile_size // 2
+        while N > 0:
+            cuda.syncthreads()
+            if tid < N:
+                s_B_0[tid] += s_B_0[tid + N]
+                s_B_1[tid] += s_B_1[tid + N]
+            N = N // 2
+
+        if tid == 0:
+            B[0] = s_B_0[0]
+            B[1] = s_B_1[0]
+
+            solve_2x2(A, B, alignment_step)
+            s_alignment[0] += alignment_step[0]
+            s_alignment[1] += alignment_step[1]
+
+    if tid == 0:
+        alignment[patch_idy, patch_idx, 0] = s_alignment[0]
+        alignment[patch_idy, patch_idx, 1] = s_alignment[1]
+
 @cuda.jit
 def cuda_ica(ref_img, gradx, grady, hessian, moving, alignment, tile_size, niter):
     imsize_y, imsize_x = moving.shape
