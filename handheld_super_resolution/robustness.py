@@ -441,8 +441,8 @@ def compute_dist(means_1, means_2):
     diff = cuda.device_array(shape, DEFAULT_NUMPY_FLOAT_TYPE)
     
     threadsperblock = (1, DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
-    blockspergrid_x = math.ceil(nx/threadsperblock[1])
-    blockspergrid_y = math.ceil(ny/threadsperblock[0])
+    blockspergrid_x = math.ceil(nx/threadsperblock[2])
+    blockspergrid_y = math.ceil(ny/threadsperblock[1])
     blockspergrid = (nc, blockspergrid_x, blockspergrid_y)
     
     cuda_compute_dist[blockspergrid, threadsperblock](means_1, means_2, diff)
