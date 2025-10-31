@@ -401,15 +401,15 @@ def cuda_uspcale_dogson(LR, s, is_ref, flow, tile_size, HR):
         buffer[c] = 0
     
     for i in range(-1, 2):
+        y_ = int(clamp(center_y + i, 0, LR_ny-1))
+        dy = y_ - LR_y
+        wy = dogson_quadratic_kernel(dy)
         for j in range(-1, 2):
-            y_ = int(clamp(center_y + i, 0, LR_ny-1))
             x_ = int(clamp(center_x + j, 0, LR_nx-1))
-            
-            dy = y_ - LR_y
             dx = x_ - LR_x
-            
-            w = dogson_biquadratic_kernel(dx,dy) + 1e-6 # 1 e-6 to avoid dividing by zeros
-            
+
+            w = wy * dogson_quadratic_kernel(dx)
+
             for c in range(n_channels):
                 buffer[c] += LR[c, y_, x_] * w
             w_acc += w
