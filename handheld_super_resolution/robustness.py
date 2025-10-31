@@ -63,7 +63,7 @@ def init_robustness(ref_img, cfa_pattern, white_balance, config):
             guide_ref_img = compute_guide_image_(ref_img, cfa_pattern, white_balance)
         else:
             # Numba friendly code to add 1 channel
-            guide_ref_img = ref_img.reshape((imshape_y, imshape_x, 1)) 
+            guide_ref_img = ref_img.reshape((1, imshape_y, imshape_x)) 
             
         local_means, local_stds = compute_local_stats_(guide_ref_img)
         
@@ -188,13 +188,13 @@ def compute_guide_image(raw_img, cfa_pattern, white_balance):
 
     Returns
     -------
-    guide_img : device Array[imshape_y//2, imshape_x//2, 3]
+    guide_img : device Array[3, imshape_y//2, imshape_x//2]
         guide image.
 
     """
     imshape_y, imshape_x = raw_img.shape
     guide_imshape_y, guide_imshape_x = imshape_y//2, imshape_x//2
-    guide_img = cuda.device_array((guide_imshape_y, guide_imshape_x, 3), DEFAULT_NUMPY_FLOAT_TYPE)
+    guide_img = cuda.device_array((3, guide_imshape_y, guide_imshape_x), DEFAULT_NUMPY_FLOAT_TYPE)
     
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
     blockspergrid_x = math.ceil(guide_imshape_x/threadsperblock[1])
@@ -208,9 +208,10 @@ def compute_guide_image(raw_img, cfa_pattern, white_balance):
 @cuda.jit
 def cuda_compute_guide_image(raw_img, guide_img, CFA, wb):
     tx, ty = cuda.grid(2)
+    _, h, w = guide_img.shape
     
-    if not (0 <= ty < guide_img.shape[0] and
-            0 <= tx < guide_img.shape[1]):
+    if not (0 <= ty < h and
+            0 <= tx < w):
         return
         
     g = 0
@@ -223,8 +224,8 @@ def cuda_compute_guide_image(raw_img, guide_img, CFA, wb):
             if c == 1: # green
                 g += x
             else:
-                guide_img[ty, tx, c] = x
-    guide_img[ty, tx, 1] = g/2
+                guide_img[c, ty, tx] = x
+    guide_img[1, ty, tx] = g/2
 
 def compute_local_stats(guide_img):
     """
@@ -234,7 +235,7 @@ def compute_local_stats(guide_img):
 
     Parameters
     ----------
-    guide_img : device Array[guide_imshape_y, guide_imshape_x, channels]
+    guide_img : device Array[channels, guide_imshape_y, guide_imshape_x]
         Guide image G_n. 
         
     Returns
@@ -246,17 +247,17 @@ def compute_local_stats(guide_img):
 
 
     """
-    *guide_imshape, n_channels = guide_img.shape
+    n_channels, *guide_imshape = guide_img.shape
     if n_channels == 1:
-        local_means = cuda.device_array(guide_imshape + [1], DEFAULT_NUMPY_FLOAT_TYPE) # mu
-        local_stds = cuda.device_array(guide_imshape + [1], DEFAULT_NUMPY_FLOAT_TYPE) # sigma
+        local_means = cuda.device_array((1, *guide_imshape), DEFAULT_NUMPY_FLOAT_TYPE) # mu
+        local_stds = cuda.device_array((1, *guide_imshape), DEFAULT_NUMPY_FLOAT_TYPE) # sigma
     elif n_channels == 3:
-        local_means = cuda.device_array(guide_imshape + [3], DEFAULT_NUMPY_FLOAT_TYPE) # mu for rgb
-        local_stds = cuda.device_array(guide_imshape + [3], DEFAULT_NUMPY_FLOAT_TYPE) # sigma for rgb
+        local_means = cuda.device_array((3, *guide_imshape), DEFAULT_NUMPY_FLOAT_TYPE) # mu for rgb
+        local_stds = cuda.device_array((3, *guide_imshape), DEFAULT_NUMPY_FLOAT_TYPE) # sigma for rgb
     else: 
         raise ValueError("Incoherent number of channel : {}".format(n_channels))
     
-    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS, 1) # maximum, we may take less
+    threadsperblock = (1, DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
     blockspergrid_x = math.ceil(guide_imshape[1]/threadsperblock[1])
     blockspergrid_y = math.ceil(guide_imshape[0]/threadsperblock[0])
     blockspergrid = (blockspergrid_x, blockspergrid_y, n_channels)
@@ -270,7 +271,7 @@ def compute_local_stats(guide_img):
 def cuda_compute_local_stats(guide_img, local_means, local_stds):
     guide_imshape_y, guide_imshape_x, _ = guide_img.shape
     
-    idx, idy, channel = cuda.grid(3)
+    channel, idx, idy = cuda.grid(3)
     if not(0 <= idy < guide_imshape_y and
            0 <= idx < guide_imshape_x):
         return
@@ -284,15 +285,15 @@ def cuda_compute_local_stats(guide_img, local_means, local_stds):
             y = clamp(idy + i, 0, guide_imshape_y-1)
             x = clamp(idx + j, 0, guide_imshape_x-1)
 
-            value = guide_img[y, x, channel]
+            value = guide_img[channel, y, x]
             local_stats_[0] += value
             local_stats_[1] += value*value
 
 
     # normalizing
     channel_mean = local_stats_[0]/9
-    local_means[idy, idx, channel] = channel_mean
-    local_stds[idy, idx, channel] = local_stats_[1]/9 - channel_mean*channel_mean
+    local_means[channel, idy, idx] = channel_mean
+    local_stds[channel, idy, idx] = local_stats_[1]/9 - channel_mean*channel_mean
 
 def upscale_warp_stats(local_stats, tile_size=None, flow=None):
     """
@@ -313,7 +314,7 @@ def upscale_warp_stats(local_stats, tile_size=None, flow=None):
         Upscaled and warped local stats
 
     """
-    *guide_imshape, n_channels = local_stats.shape
+    n_channels, *guide_imshape = local_stats.shape
     bayer_mode = (n_channels == 3)
     
     if flow is None:
@@ -327,22 +328,23 @@ def upscale_warp_stats(local_stats, tile_size=None, flow=None):
         
     
     if bayer_mode:
-        upscaled_stats = cuda.device_array((guide_imshape[0]*2,
+        upscaled_stats = cuda.device_array((n_channels,         
+                                            guide_imshape[0]*2,
                                             guide_imshape[1]*2,
-                                            n_channels),
+                                            ),
                                             DEFAULT_NUMPY_FLOAT_TYPE)
 
         upscale = 2
         
     else:
-        upscaled_stats = cuda.device_array((guide_imshape[0],
-                                            guide_imshape[1],
-                                            n_channels),
+        upscaled_stats = cuda.device_array((n_channels, 
+                                            guide_imshape[0],
+                                            guide_imshape[1]),
                                            DEFAULT_NUMPY_FLOAT_TYPE)
 
         upscale = 1
     
-    HR_ny, HR_nx, _ = upscaled_stats.shape
+    _, HR_ny, HR_nx = upscaled_stats.shape
     
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
     blockspergrid_x = math.ceil(HR_nx/threadsperblock[1])
@@ -357,8 +359,8 @@ def upscale_warp_stats(local_stats, tile_size=None, flow=None):
     
 @cuda.jit
 def cuda_uspcale_dogson(LR, s, is_ref, flow, tile_size, HR):
-    LR_ny, LR_nx, n_channels = LR.shape
-    HR_ny, HR_nx, _ = HR.shape
+    n_channels, LR_ny, LR_nx = LR.shape
+    _, HR_ny, HR_nx = HR.shape
     
     x, y = cuda.grid(2)
     
@@ -386,7 +388,7 @@ def cuda_uspcale_dogson(LR, s, is_ref, flow, tile_size, HR):
     if not (0 <= LR_y < LR_ny and
             0 <= LR_x < LR_nx):
         for c in range(n_channels):
-            HR[y, x, c] = 1/0 # infinity will imply R = 0
+            HR[c, y, x] = 1/0 # infinity will imply R = 0
         return
     
     center_y = round(LR_y)
@@ -409,12 +411,12 @@ def cuda_uspcale_dogson(LR, s, is_ref, flow, tile_size, HR):
             w = dogson_biquadratic_kernel(dx,dy) + 1e-6 # 1 e-6 to avoid dividing by zeros
             
             for c in range(n_channels):
-                buffer[c] += LR[y_, x_, c] * w
+                buffer[c] += LR[c, y_, x_] * w
             w_acc += w
     
     # Normalise and write output
     for c in range(n_channels):
-        HR[y, x, c] = buffer[c]/w_acc
+        HR[c, y, x] = buffer[c]/w_acc
             
 
 def compute_dist(means_1, means_2):
@@ -435,13 +437,13 @@ def compute_dist(means_1, means_2):
 
     """
     assert means_1.shape == means_2.shape
-    ny, nx, nc = shape = means_1.shape
+    nc, ny, nx = shape = means_1.shape
     diff = cuda.device_array(shape, DEFAULT_NUMPY_FLOAT_TYPE)
     
-    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS, 1) # maximum, we may take less
+    threadsperblock = (1, DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
     blockspergrid_x = math.ceil(nx/threadsperblock[1])
     blockspergrid_y = math.ceil(ny/threadsperblock[0])
-    blockspergrid = (blockspergrid_x, blockspergrid_y, nc)
+    blockspergrid = (nc, blockspergrid_x, blockspergrid_y)
     
     cuda_compute_dist[blockspergrid, threadsperblock](means_1, means_2, diff)
     
@@ -450,16 +452,16 @@ def compute_dist(means_1, means_2):
 
 @cuda.jit
 def cuda_compute_dist(means_1, means_2, diff):
-    x, y, c = cuda.grid(3)
-    ny, nx, nc = diff.shape
+    c, x, y = cuda.grid(3)
+    nc, ny, nx = diff.shape
     
     if not (0 <= y < ny and
             0 <= x < nx and
             0 <= c < nc):
         return
-    
-    diff[y, x, c] = abs(means_1[y, x, c] - means_2[y, x, c])
-    
+
+    diff[c, y, x] = abs(means_1[c, y, x] - means_2[c, y, x])
+
 
 def apply_noise_model(d_p, ref_local_means, ref_local_stds, std_curve, diff_curve):
     """
@@ -486,7 +488,7 @@ def apply_noise_model(d_p, ref_local_means, ref_local_stds, std_curve, diff_curv
         Array that will contained the noise-corrected sigma² value
 
     """
-    *imshape, n_channels = ref_local_means.shape     
+    _, *imshape = ref_local_means.shape     
     sigma_sq = cuda.device_array(imshape, DEFAULT_NUMPY_FLOAT_TYPE)
     d_sq = cuda.device_array(sigma_sq.shape, DEFAULT_NUMPY_FLOAT_TYPE)
         
@@ -505,7 +507,7 @@ def cuda_apply_noise_model(d_p, ref_local_means, ref_local_stds,
                            std_curve, diff_curve,
                            d_sq, sigma_sq):
     idx, idy = cuda.grid(2)
-    ny, nx, nc = ref_local_means.shape
+    nc, ny, nx = ref_local_means.shape
     
     if not(0 <= idy < ny and
            0 <= idx < nx):
@@ -518,11 +520,11 @@ def cuda_apply_noise_model(d_p, ref_local_means, ref_local_stds,
         id_noise = round(1000 *brightness) # id on the noise curve
         d_t =  diff_curve[id_noise]
         sigma_t = std_curve[id_noise]
-        
-        sigma_p_sq = ref_local_stds[idy, idx, channel]
+
+        sigma_p_sq = ref_local_stds[channel, idy, idx]
         sigma_sq_ += max(sigma_p_sq, sigma_t*sigma_t)
         
-        d_p_ = d_p[idy, idx, channel]
+        d_p_ = d_p[channel, idy, idx]
         d_p_sq = d_p_ * d_p_
         shrink = d_p_sq/(d_p_sq + d_t*d_t)
         d_sq_ += d_p_sq * shrink * shrink
