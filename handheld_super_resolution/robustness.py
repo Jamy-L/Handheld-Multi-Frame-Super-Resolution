@@ -18,7 +18,7 @@ import numpy as np
 from numba import cuda, uint8
 
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE,DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS, clamp, timer
-from .utils_image import dogson_biquadratic_kernel
+from .utils_image import dogson_biquadratic_kernel, dogson_quadratic_kernel
 
 def init_robustness(ref_img, cfa_pattern, white_balance, config):
     """
@@ -258,9 +258,9 @@ def compute_local_stats(guide_img):
         raise ValueError("Incoherent number of channel : {}".format(n_channels))
     
     threadsperblock = (1, DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
-    blockspergrid_x = math.ceil(guide_imshape[1]/threadsperblock[1])
-    blockspergrid_y = math.ceil(guide_imshape[0]/threadsperblock[0])
-    blockspergrid = (blockspergrid_x, blockspergrid_y, n_channels)
+    blockspergrid_x = math.ceil(guide_imshape[1]/threadsperblock[2])
+    blockspergrid_y = math.ceil(guide_imshape[0]/threadsperblock[1])
+    blockspergrid = (n_channels, blockspergrid_x, blockspergrid_y)
     
     cuda_compute_local_stats[blockspergrid, threadsperblock](guide_img, local_means, local_stds)
     
@@ -516,7 +516,7 @@ def cuda_apply_noise_model(d_p, ref_local_means, ref_local_stds,
     d_sq_ = 0
     sigma_sq_ = 0
     for channel in range(nc):
-        brightness = ref_local_means[idy, idx, channel]
+        brightness = ref_local_means[channel, idy, idx]
         id_noise = round(1000 *brightness) # id on the noise curve
         d_t =  diff_curve[id_noise]
         sigma_t = std_curve[id_noise]
