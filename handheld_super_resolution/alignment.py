@@ -281,15 +281,92 @@ def align_lvl_block_matching_L1(ref_lvl, moving_lvl, alignments, l, config):
     h, w, _ = alignments.shape
     tile_size = config.block_matching.tuning.tile_sizes[l]
     search_radius = config.block_matching.tuning.search_radii[l]
+    ny, nx, _ = alignments.shape
 
-    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
-    blockspergrid_x = math.ceil(w / threadsperblock[1])
-    blockspergrid_y = math.ceil(h / threadsperblock[0])
+    # Old way a thread per patch
+    # threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
+    # blockspergrid_x = math.ceil(w / threadsperblock[1])
+    # blockspergrid_y = math.ceil(h / threadsperblock[0])
+    # blockspergrid = (blockspergrid_x, blockspergrid_y)
+
+    # cuda_L1_local_search[blockspergrid, threadsperblock](
+    #     ref_lvl, moving_lvl, tile_size, search_radius, alignments)
+    
+    # New way, 1 thread per pixel
+    threadsperblock = (tile_size, tile_size)
+    blockspergrid_x = math.ceil(nx)
+    blockspergrid_y = math.ceil(ny)
     blockspergrid = (blockspergrid_x, blockspergrid_y)
-
-    cuda_L1_local_search[blockspergrid, threadsperblock](
+    cuda_L1_local_search_new[blockspergrid, threadsperblock](
         ref_lvl, moving_lvl, tile_size, search_radius, alignments)
 
+@cuda.jit
+def cuda_L1_local_search_new(ref, moving, tile_size, search_radius, alignments):
+    n_patchs_y, n_patchs_x, _ = alignments.shape
+    x, y = cuda.grid(2)
+    tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
+    tile_x = cuda.blockIdx.x
+    tile_y = cuda.blockIdx.y
+    tid = ty * tile_size + tx
+    is_inbound = (0 <= x < moving.shape[1] and 
+                  0 <= y < moving.shape[0])
+    
+    local_flow = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
+    local_flow[0] = alignments[tile_y, tile_x, 0]
+    local_flow[1] = alignments[tile_y, tile_x, 1]
+
+    # Load ref patch into shared memory
+    s_ref = cuda.shared.array((16, 16), DEFAULT_CUDA_FLOAT_TYPE)
+    s_ref[ty, tx] = ref[y, x]
+
+    s_mov = cuda.shared.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
+    mov_y = y + int(local_flow[1]) - search_radius
+    mov_x = x + int(local_flow[0]) - search_radius
+    s_mov[ty, tx] = moving[mov_y, mov_x] if is_inbound else 0.0
+
+    # Load the remaining pixels
+    if tx < 2 * search_radius:
+        s_mov[ty, tx + tile_size] = moving[mov_y, mov_x + tile_size] if is_inbound else 0.0
+    if ty < 2 * search_radius:
+        s_mov[ty + tile_size, tx] = moving[mov_y + tile_size, mov_x] if is_inbound else 0.0
+    if tx < 2 * search_radius and ty < 2 * search_radius:
+        s_mov[ty + tile_size, tx + tile_size] = moving[mov_y + tile_size, mov_x + tile_size] if is_inbound else 0.0
+    cuda.syncthreads()
+
+    s_l1_map = cuda.shared.array(16 * 16, DEFAULT_CUDA_FLOAT_TYPE)
+    s_err = cuda.shared.array((16, 16), DEFAULT_CUDA_FLOAT_TYPE)
+    for shift_y in range(-search_radius, search_radius + 1):
+        for shift_x in range(-search_radius, search_radius + 1):
+            error = s_ref[ty, tx] - s_mov[ty + shift_y + search_radius, tx + shift_x + search_radius]
+
+            s_l1_map[tid] = error
+
+            # Reduce within the block
+            N = (tile_size * tile_size) // 2
+            while N > 0:
+                cuda.syncthreads()
+                if tid < N:
+                    s_l1_map[tid] += abs(s_l1_map[tid + N])
+                N = N // 2
+            
+            if tid == 0:
+                s_err[shift_y + search_radius, shift_x + search_radius] = s_l1_map[0]
+            cuda.syncthreads()
+    
+    # Now find the minimum error and corresponding shift
+    if tid == 0:
+        err = s_err[0, 0]
+        for i in range(2*search_radius + 1):
+            for j in range(2*search_radius + 1):
+                min = s_err[i, j]
+                if err < min:
+                    min = err
+                    min_shift_y = i - search_radius
+                    min_shift_x = j - search_radius
+
+
+    alignments[tile_y, tile_x, 0] = local_flow[0] + min_shift_x
+    alignments[tile_y, tile_x, 1] = local_flow[1] + min_shift_y
 
 @cuda.jit
 def cuda_L1_local_search(ref, moving, tile_size, search_radius, alignments):
@@ -436,34 +513,29 @@ def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter):
     
     is_inbound = x < imsize_x and y < imsize_y
     
-    A = cuda.local.array((2,2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
-    A[0, 0] = hessian[patch_idy, patch_idx, 0, 0]
-    A[0, 1] = hessian[patch_idy, patch_idx, 0, 1]
-    A[1, 0] = hessian[patch_idy, patch_idx, 1, 0]
-    A[1, 1] = hessian[patch_idy, patch_idx, 1, 1]
+    A00 = hessian[patch_idy, patch_idx, 0, 0]
+    A01 = hessian[patch_idy, patch_idx, 0, 1]
+    A10 = hessian[patch_idy, patch_idx, 1, 0]
+    A11 = hessian[patch_idy, patch_idx, 1, 1]
 
-    if abs(A[0, 0]*A[1, 1] - A[0, 1]*A[1, 0]) < 1e-10: # system is Not solvable
+    det = A00 * A11 - A01 * A10
+    if abs(det) < 1e-10: # system is Not solvable
         return  # 1 Hessian per block, so all threads exit
+    det_inv = 1.0 / det
 
     s_alignment = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
     if tid == 0:
         s_alignment[0] = alignment[patch_idy, patch_idx, 0]
         s_alignment[1] = alignment[patch_idy, patch_idx, 1]
-    cuda.syncthreads()
 
     l_grad = cuda.local.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
     l_grad[0] = gradx[y, x] if is_inbound else 0.0
     l_grad[1] = grady[y, x] if is_inbound else 0.0
 
-    B = cuda.local.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
     s_B_0 = cuda.shared.array((16 * 16), dtype = DEFAULT_CUDA_FLOAT_TYPE)
     s_B_1 = cuda.shared.array((16 * 16), dtype = DEFAULT_CUDA_FLOAT_TYPE)
 
     ref_c = ref_img[y, x] if is_inbound else 0.0
-
-    buffer_val = cuda.local.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
-    pos = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE) # y, x
-    alignment_step = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
 
     for _ in range(niter):
         cuda.syncthreads()
@@ -471,32 +543,30 @@ def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter):
         new_x = s_alignment[0] + x
         new_y = s_alignment[1] + y
 
-        # bilinear interpolation
-        normalised_pos_x, floor_x = math.modf(new_x) # https://www.rollpie.com/post/252
-        normalised_pos_y, floor_y = math.modf(new_y) # separating floor and floating part
+        ## bilinear interpolation at new_x, new_y
+        frac_x, floor_x = math.modf(new_x) # https://www.rollpie.com/post/252
+        frac_y, floor_y = math.modf(new_y) # separating floor and floating part
         floor_x = clamp(int(floor_x), 0, imsize_x - 1)
         floor_y = clamp(int(floor_y), 0, imsize_y - 1)
 
         ceil_x = clamp(floor_x + 1, 0, imsize_x - 1)
         ceil_y = clamp(floor_y + 1, 0, imsize_y - 1)
-        pos[0] = clamp(normalised_pos_y, 0, imsize_y - 1)
-        pos[1] = clamp(normalised_pos_x, 0, imsize_x - 1)
 
+        m00 = moving[floor_y, floor_x]
+        m01 = moving[floor_y, ceil_x]
+        m10 = moving[ceil_y, floor_x]
+        m11 = moving[ceil_y, ceil_x]
 
-
-        buffer_val[0, 0] = moving[floor_y, floor_x]
-        buffer_val[0, 1] = moving[floor_y, ceil_x]
-        buffer_val[1, 0] = moving[ceil_y, floor_x]
-        buffer_val[1, 1] = moving[ceil_y, ceil_x]
-
-        comp_val = bilinear_interpolation(buffer_val, pos)
+        lerpx_top = m00 + (m01 - m00) * frac_x
+        lerpx_bot = m10 + (m11 - m10) * frac_x
+        comp_val = lerpx_top + (lerpx_bot - lerpx_top) * frac_y
         
         gradt = comp_val - ref_c
 
         s_B_0[tid] = -l_grad[0] * gradt
         s_B_1[tid] = -l_grad[1] * gradt
 
-
+        # Reduce within the block (=sum)
         N = tile_size * tile_size // 2
         while N > 0:
             cuda.syncthreads()
@@ -506,12 +576,12 @@ def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter):
             N = N // 2
 
         if tid == 0:
-            B[0] = s_B_0[0]
-            B[1] = s_B_1[0]
+            B0 = s_B_0[0]
+            B1 = s_B_1[0]
 
-            solve_2x2(A, B, alignment_step)
-            s_alignment[0] += alignment_step[0]
-            s_alignment[1] += alignment_step[1]
+            # solve Ax = B
+            s_alignment[0] += det_inv * (A11 * B0 - A01 * B1)
+            s_alignment[1] += det_inv * (-A10 * B0 + A00 * B1)
 
     if tid == 0:
         alignment[patch_idy, patch_idx, 0] = s_alignment[0]
