@@ -1,127 +1,40 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Sun Jul 31 00:00:36 2022
-
-This script contains all the operations corresponding to the function
-"ICA" called in Alg. 2: Registration.
-
-@author: jamyl
-"""
-
-import time
 import math
 
 import numpy as np
 from numba import cuda
-from scipy.ndimage._filters import _gaussian_kernel1d
 import torch
 import torch.nn.functional as F
 
-from .linalg import bilinear_interpolation
-from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
-from .linalg import solve_2x2
-    
-def init_ICA(ref_img, config):
-    """
-    Initializes the ICa algorithm by computing the gradients of the reference
-    image, and the hessian matrix.
+from .utils import clamp, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
 
-    Parameters
-    ----------
-    ref_img : device Array[imshape_y, imshape_x]
-        Reference image J_1
-    config : OmegaConf object
-        parameters.
+SOBEL_Y = torch.as_tensor(np.array([[-1], [0], [1]]), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
+SOBEL_X = torch.as_tensor(np.array([[-1,0,1]]), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
+SOBEL_Y.requires_grad = False
+SOBEL_X.requires_grad = False
 
-    Returns
-    -------
-    cuda_gradx : Device Array
-        horizontal gradients of the reference image
-    cuda_grady : Device Array
-        vertical gradients of the reference image
-    hessian : Device Array
-        hessian matrix defined for each patch of the reference image.
+def init_ica(image, tile_size, config):
+    imsize_y, imsize_x = image.shape
+    n_patch_y = imsize_y // tile_size 
+    n_patch_x = imsize_x // tile_size
 
-    """
-    current_time, verbose_3 = time.perf_counter(),  config.verbose >= 3
+    gradx = F.conv2d(image[None, None], SOBEL_X, padding='same').squeeze()
+    grady = F.conv2d(image[None, None], SOBEL_Y, padding='same').squeeze()
 
-    sigma_blur = config.ica.tuning.sigma_blur
-    tile_size = config.block_matching.tuning.tile_size
-    
-    imsize_y, imsize_x = ref_img.shape
-    
-    # image is padded during BM, we need to consider that to count patches
-    
-    n_patch_y = math.ceil(imsize_y/ tile_size)
-    n_patch_x = math.ceil(imsize_x/ tile_size)
+    gradx = cuda.as_cuda_array(gradx)
+    grady = cuda.as_cuda_array(grady)
 
-    # Estimating gradients with Prewitt kernels
-    kernely = np.array([[-1],
-                        [0],
-                        [1]])
-    
-    kernelx = np.array([[-1,0,1]])
-    
-    # translating ref_img numba pointer to pytorch
-    # the type needs to be explicitely specified. Filters need to be casted to float to perform convolution
-    # on float image
-    th_ref_img = torch.as_tensor(ref_img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
-    th_kernely = torch.as_tensor(kernely, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
-    th_kernelx = torch.as_tensor(kernelx, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
-    
-    
-    # adding 2 dummy dims for batch, channel, to use torch convolve
-    if sigma_blur != 0:
-        # This is the default kernel of scipy gaussian_filter1d
-        # Note that pytorch Convolve is actually a correlation, hence the ::-1 flip.
-        # copy to avoid negative stride (not supported by torch)
-        gaussian_kernel = _gaussian_kernel1d(sigma=sigma_blur, order=0, radius=int(4*sigma_blur+0.5))[::-1].copy()
-        th_gaussian_kernel = torch.as_tensor(gaussian_kernel, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
-        
-        
-        # 2 times gaussian 1d is faster than gaussian 2d
-        temp = F.conv2d(th_ref_img, th_gaussian_kernel[:, None], padding='same') # convolve y
-        temp = F.conv2d(temp, th_gaussian_kernel[None, :], padding='same') # convolve x
-        
-        
-        th_gradx = F.conv2d(temp, th_kernelx, padding='same').squeeze() # 1 batch, 1 channel
-        th_grady = F.conv2d(temp, th_kernely, padding='same').squeeze()
-        
-    else:
-        th_gradx = F.conv2d(th_ref_img, th_kernelx, padding='same').squeeze() # 1 batch, 1 channel
-        th_grady = F.conv2d(th_ref_img, th_kernely, padding='same').squeeze()
-        
-    
-    # swapping grads back to numba
-    cuda_gradx = cuda.as_cuda_array(th_gradx)
-    cuda_grady = cuda.as_cuda_array(th_grady)
-    
-    if verbose_3:
-        cuda.synchronize()
-        current_time = getTime(
-            current_time, ' -- Gradients estimated')
-    
     hessian = cuda.device_array((n_patch_y, n_patch_x, 2, 2), DEFAULT_NUMPY_FLOAT_TYPE)
-    
+
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
-    
-    blockspergrid_x = math.ceil(n_patch_x/threadsperblock[1])
-    blockspergrid_y = math.ceil(n_patch_y/threadsperblock[0])
+    blockspergrid_x = math.ceil(n_patch_x / threadsperblock[1])
+    blockspergrid_y = math.ceil(n_patch_y / threadsperblock[0])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
-    
-    compute_hessian[blockspergrid, threadsperblock](cuda_gradx, cuda_grady,
-                                                    tile_size, hessian)
-    
-    if verbose_3:
-        cuda.synchronize()
-        current_time = getTime(
-            current_time, ' -- Hessian estimated')
-    
-    return cuda_gradx, cuda_grady, hessian
-    
-@cuda.jit
+    compute_hessian[blockspergrid, threadsperblock](gradx, grady, tile_size, hessian)
+
+    return gradx, grady, hessian
+
+@cuda.jit()
 def compute_hessian(gradx, grady, tile_size, hessian):
-    imshape = gradx.shape
     patch_idx, patch_idy = cuda.grid(2)
     n_patchy, n_patch_x, _, _ = hessian.shape
     
@@ -143,10 +56,11 @@ def compute_hessian(gradx, grady, tile_size, hessian):
         for j in range(tile_size):
             pixel_global_idy = patch_pos_idy + i
             pixel_global_idx = patch_pos_idx + j
-            
-            if not (0 <= pixel_global_idy < imshape[0] and 
-                    0 <= pixel_global_idx < imshape[1]):
-                continue
+
+            # I think this check useless, the check above should be enough            
+            # if not (0 <= pixel_global_idy < imshape[0] and 
+            #         0 <= pixel_global_idx < imshape[1]):
+            #     continue
 
             local_gradx = gradx[pixel_global_idy, pixel_global_idx]
             local_grady = grady[pixel_global_idy, pixel_global_idx]
@@ -161,210 +75,407 @@ def compute_hessian(gradx, grady, tile_size, hessian):
     hessian[patch_idy, patch_idx, 1, 0] = local_hessian[1, 0]
     hessian[patch_idy, patch_idx, 1, 1] = local_hessian[1, 1]
 
-
-def ICA_optical_flow(cuda_im_grey, cuda_ref_grey,
-                     cuda_gradx, cuda_grady,
-                     hessian, cuda_pre_alignment,
-                     config, debug = False):
-    """ Computes optical flow between the ref_img and all images of comp_imgs 
-    based on the ICA method http://www.ipol.im/pub/art/2016/153/
-    The optical flow follows a translation per patch model, such that :
-    ref_img(X) ~= comp_img(X + flow(X))
-    
-
-    Parameters
-    ----------
-    cuda_img_grey : device Array[imsize_y, imsize_x]
-        Image to align on grey level G_n
-    cuda_ref_grey : device Array[imsize_y, imsize_x]
-        Reference image on grey level G_1
-    cuda_gradx : device array[imsize_y, imsize_x]
-        Horizontal gradient of the reference image
-    cuda_grady : device array[imsize_y, imsize_x]
-        Vertical gradient of the reference image
-    hessian : device_array[n_tiles_y, n_tiles_x, 2, 2]
-        Hessian matrix of the reference image
-    cuda_pre_alignment : device Array[n_tiles_y, n_tiles_x, 2]
-        optical flow for each tile of each image, outputed by bloc matching : V_n
-        pre_alignment[0] must be the horizontal flow oriented towards the right if positive.
-        pre_alignment[1] must be the vertical flow oriented towards the bottom if positive.
-    config : OmegaConf object
-        parameters.
-            
-    debug : bool, optional
-        If True, this function returns a list containing the flow at each iteration.
-        The default is False.
-
-    Returns
-    -------
-    cuda_alignment : device_array[n_tiles_y, n_tiles_x, 2]
-        Updated alignment vectors V_n(p) for each tile of the image
-
-    """
-    if debug : 
-        debug_list = []
-
-    n_iter = config.ica.tuning.n_iter
-        
-    cuda_alignment = cuda_pre_alignment
-    
-    for iter_index in range(n_iter):
-        ICA_optical_flow_iteration(
-            cuda_ref_grey, cuda_gradx, cuda_grady, cuda_im_grey, cuda_alignment, hessian,
-            config, iter_index)
-        
-        if debug :
-            debug_list.append(cuda_alignment.copy_to_host())
-        
-    if debug:
-        return debug_list
-    return cuda_alignment
-
-    
-def ICA_optical_flow_iteration(ref_img, gradsx, gradsy, comp_img, alignment, hessian, config,
-                               iter_index):
-    """
-    Computes one iteration of the Lucas-Kanade optical flow
-
-    Parameters
-    ----------
-    ref_img : Array [imsize_y, imsize_x]
-        Ref image (grey)
-    gradx : Array [imsize_y, imsize_x]
-        Horizontal gradient of the ref image
-    grady : Array [imsize_y, imsize_x]
-        Vertical gradient of the ref image
-    comp_img : Array[imsize_y, imsize_x]
-        The image to rearrange and compare to the reference (grey images)
-    alignment : Array[n_tiles_y, n_tiles_x, 2]
-        The inial alignment of the tiles
-    hessian : Array[n_tiles_y, n_tiles_x, 2, 2]
-        The hessian matrix of the ref image
-    config : OmegaConf object
-        parameters.
-    iter_index : int
-        The iteration index (for printing evolution when verbose >2,
-                             and for clearing memory)
-
-    """
+def align_lvl_ica(ref_img, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl,
+                  moving_lvl, alignment, l, config):
     verbose_3 = config.verbose >= 3
-    tile_size = config.block_matching.tuning.tile_size
+    tile_size = config.block_matching.tuning.tile_sizes[l]
 
-    n_patch_y, n_patch_x, _ = alignment.shape
-    
-    if verbose_3 :
-        cuda.synchronize()
-        current_time = time.perf_counter()
-        print(" -- Lucas-Kanade iteration {}".format(iter_index))
-    
-    
-    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
-    
-    blockspergrid_x = math.ceil(n_patch_x/threadsperblock[1])
-    blockspergrid_y = math.ceil(n_patch_y/threadsperblock[0])
+    np_y, np_x, _ = alignment.shape
+
+    # New way, 1 thread/pixel
+    threadsperblock = (tile_size, tile_size)
+    blockspergrid_x = np_x
+    blockspergrid_y = np_y
     blockspergrid = (blockspergrid_x, blockspergrid_y)
-    
-    ICA_get_new_flow[blockspergrid, threadsperblock](
-        ref_img, comp_img,
-        gradsx, gradsy,
-        alignment, hessian, tile_size)   
-
-    if verbose_3:
-        cuda.synchronize()
-        current_time = getTime(
-            current_time, ' --- Systems calculated and solved')
-
-
+    if tile_size == 8:
+        cuda_kernel = ica_kernel_8
+    elif tile_size == 16:
+        cuda_kernel = ica_kernel_16
+    elif tile_size == 32:
+        cuda_kernel = ica_kernel_32
+    elif tile_size == 64:
+        cuda_kernel = ica_kernel_64
+        threadsperblock = (32, 32)  # because each thread handles 4 pixels
+    else:
+        raise NotImplementedError("ICA kernel for tile size {} not implemented".format(tile_size))
+    cuda_kernel[blockspergrid, threadsperblock](
+        ref_img, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl,
+        moving_lvl, alignment, config.ica.tuning.n_iter)
 
 @cuda.jit
-def ICA_get_new_flow(ref_img, comp_img, gradx, grady, alignment, hessian, tile_size):
-    """
-    The update relies on solving AX = B, a 2 by 2 system.
-    A is precomputed, but B is evaluated each time. 
+def ica_kernel_8(ref_img, gradx, grady, hessian, moving, alignment, niter):
+    # 1 thread/pixel, 1 block/patch
+    TILE_SIZE = 8
+    h, w = moving.shape
+    np_y, np_x, _ = alignment.shape
+    x, y  = cuda.grid(2)
+    px = cuda.blockIdx.x
+    py = cuda.blockIdx.y
+    tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
+    tid = ty * TILE_SIZE + tx
 
-    """
-    imsize_y, imsize_x = comp_img.shape
-    n_patchs_y, n_patchs_x, _ = alignment.shape
-    patch_idx, patch_idy = cuda.grid(2)
-    
-    if not(0 <= patch_idy < n_patchs_y and
-           0 <= patch_idx < n_patchs_x):
+    # x,y are inbound by design
+    A00 = hessian[py, px, 0, 0]
+    A01 = hessian[py, px, 0, 1]
+    A10 = hessian[py, px, 1, 0]
+    A11 = hessian[py, px, 1, 1]
+
+    det = A00 * A11 - A01 * A10
+    if abs(det) < 1e-10: # system is Not solvable
+        return  # 1 Hessian per block, so all threads exit
+    det_inv = 1.0 / det
+
+    s_alignment = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    if tid == 0:
+        s_alignment[0] = alignment[py, px, 0]
+        s_alignment[1] = alignment[py, px, 1]
+
+    l_gradx = gradx[y, x]
+    l_grady = grady[y, x]
+
+    s_B0 = cuda.shared.array((8 * 8), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    s_B1 = cuda.shared.array((8 * 8), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+
+    ref_c = ref_img[y, x]
+
+    for _ in range(niter):
+        cuda.syncthreads()
+        # Warp I with W(x; p) to compute I(W(x; p))
+
+        ## bilinear interpolation at new_x, new_y
+        floor_x = x + int(s_alignment[0])
+        floor_y = y + int(s_alignment[1])
+        frac_x, _ = math.modf(s_alignment[0])
+        frac_y, _ = math.modf(s_alignment[1])
+        # Note: in theory frac_x, floor_x = math.modf(x + alignment[0]) in 1 shot. But it is surprisingly faster to compute it from s_alignment this way 
+
+        floor_x = clamp(floor_x, 0, w - 1)
+        floor_y = clamp(floor_y, 0, h - 1)
+
+        ceil_x = clamp(floor_x + 1, 0, w - 1)
+        ceil_y = clamp(floor_y + 1, 0, h - 1)
+
+        m00 = moving[floor_y, floor_x]
+        m01 = moving[floor_y, ceil_x]
+        m10 = moving[ceil_y, floor_x]
+        m11 = moving[ceil_y, ceil_x]
+
+        lerpx_top = m00 + (m01 - m00) * frac_x
+        lerpx_bot = m10 + (m11 - m10) * frac_x
+        mov_interp = lerpx_top + (lerpx_bot - lerpx_top) * frac_y
+
+        gradt = mov_interp - ref_c
+
+        ##### Reduce within the block (=sum)
+        # The reduce methods using shfl on warps is slower than this, idk why
+        s_B0[tid] = -l_gradx * gradt
+        s_B1[tid] = -l_grady * gradt
+        N = TILE_SIZE * TILE_SIZE // 2
+        while N > 0:
+            cuda.syncthreads()
+            if tid < N:
+                s_B0[tid] += s_B0[tid + N]
+                s_B1[tid] += s_B1[tid + N]
+            N = N // 2
+        #############
+
+        if tid == 0:
+            B0 = s_B0[0]
+            B1 = s_B1[0]
+
+            # solve Ax = B
+            s_alignment[0] += det_inv * (A11 * B0 - A01 * B1)
+            s_alignment[1] += det_inv * (-A10 * B0 + A00 * B1)
+
+    if tid == 0:
+        alignment[py, px, 0] = s_alignment[0]
+        alignment[py, px, 1] = s_alignment[1]
+
+@cuda.jit
+def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter):
+    # 1 thread/pixel, 1 block/patch
+    TILE_SIZE = 16
+    h, w = moving.shape
+    x, y  = cuda.grid(2)
+    px = cuda.blockIdx.x
+    py = cuda.blockIdx.y
+    tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
+    tid = ty * TILE_SIZE + tx
+
+    # x,y are inbound by design
+    A00 = hessian[py, px, 0, 0]
+    A01 = hessian[py, px, 0, 1]
+    A10 = hessian[py, px, 1, 0]
+    A11 = hessian[py, px, 1, 1]
+
+    det = A00 * A11 - A01 * A10
+    if abs(det) < 1e-10: # system is Not solvable
+        return  # 1 Hessian per block, so all threads exit
+    det_inv = 1.0 / det
+
+    s_alignment = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    if tid == 0:
+        s_alignment[0] = alignment[py, px, 0]
+        s_alignment[1] = alignment[py, px, 1]
+
+    l_gradx = gradx[y, x]
+    l_grady = grady[y, x]
+
+    s_B0 = cuda.shared.array((16 * 16), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    s_B1 = cuda.shared.array((16 * 16), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+
+    ref_c = ref_img[y, x]
+
+    for _ in range(niter):
+        cuda.syncthreads()
+        # Warp I with W(x; p) to compute I(W(x; p))
+
+        ## bilinear interpolation at new_x, new_y
+        floor_x = x + int(s_alignment[0])
+        floor_y = y + int(s_alignment[1])
+        frac_x, _ = math.modf(s_alignment[0])
+        frac_y, _ = math.modf(s_alignment[1])
+        # Note: in theory frac_x, floor_x = math.modf(x + alignment[0]) in 1 shot. But it is surprisingly faster to compute it from s_alignment this way 
+
+        floor_x = clamp(floor_x, 0, w - 1)
+        floor_y = clamp(floor_y, 0, h - 1)
+
+        ceil_x = clamp(floor_x + 1, 0, w - 1)
+        ceil_y = clamp(floor_y + 1, 0, h - 1)
+
+        m00 = moving[floor_y, floor_x]
+        m01 = moving[floor_y, ceil_x]
+        m10 = moving[ceil_y, floor_x]
+        m11 = moving[ceil_y, ceil_x]
+
+        lerpx_top = m00 + (m01 - m00) * frac_x
+        lerpx_bot = m10 + (m11 - m10) * frac_x
+        mov_interp = lerpx_top + (lerpx_bot - lerpx_top) * frac_y
+
+        gradt = mov_interp - ref_c
+
+        ##### Reduce within the block (=sum)
+        # The reduce methods using shfl on warps is slower than this, idk why
+        s_B0[tid] = -l_gradx * gradt
+        s_B1[tid] = -l_grady * gradt
+        N = TILE_SIZE * TILE_SIZE // 2
+        while N > 0:
+            cuda.syncthreads()
+            if tid < N:
+                s_B0[tid] += s_B0[tid + N]
+                s_B1[tid] += s_B1[tid + N]
+            N = N // 2
+        #############
+
+        if tid == 0:
+            B0 = s_B0[0]
+            B1 = s_B1[0]
+
+            # solve Ax = B
+            s_alignment[0] += det_inv * (A11 * B0 - A01 * B1)
+            s_alignment[1] += det_inv * (-A10 * B0 + A00 * B1)
+
+    if tid == 0:
+        alignment[py, px, 0] = s_alignment[0]
+        alignment[py, px, 1] = s_alignment[1]
+
+@cuda.jit
+def ica_kernel_32(ref_img, gradx, grady, hessian, moving, alignment, niter):
+    # 1 thread/pixel, 1 block/patch
+    TILE_SIZE = 32
+    h, w = moving.shape
+    x, y  = cuda.grid(2)
+    px = cuda.blockIdx.x
+    py = cuda.blockIdx.y
+    tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
+    tid = ty * TILE_SIZE + tx
+
+    # x,y are inbound by design
+    A00 = hessian[py, px, 0, 0]
+    A01 = hessian[py, px, 0, 1]
+    A10 = hessian[py, px, 1, 0]
+    A11 = hessian[py, px, 1, 1]
+
+    det = A00 * A11 - A01 * A10
+    if abs(det) < 1e-10: # system is Not solvable
+        return  # 1 Hessian per block, so all threads exit
+    det_inv = 1.0 / det
+
+    s_alignment = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    if tid == 0:
+        s_alignment[0] = alignment[py, px, 0]
+        s_alignment[1] = alignment[py, px, 1]
+
+    l_gradx = gradx[y, x]
+    l_grady = grady[y, x]
+
+    s_B0 = cuda.shared.array((32 * 32), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    s_B1 = cuda.shared.array((32 * 32), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+
+    ref_c = ref_img[y, x]
+
+    for _ in range(niter):
+        cuda.syncthreads()
+        # Warp I with W(x; p) to compute I(W(x; p))
+
+        ## bilinear interpolation at new_x, new_y
+        floor_x = x + int(s_alignment[0])
+        floor_y = y + int(s_alignment[1])
+        frac_x, _ = math.modf(s_alignment[0])
+        frac_y, _ = math.modf(s_alignment[1])
+        # Note: in theory frac_x, floor_x = math.modf(x + alignment[0]) in 1 shot. But it is surprisingly faster to compute it from s_alignment this way 
+
+        floor_x = clamp(floor_x, 0, w - 1)
+        floor_y = clamp(floor_y, 0, h - 1)
+
+        ceil_x = clamp(floor_x + 1, 0, w - 1)
+        ceil_y = clamp(floor_y + 1, 0, h - 1)
+
+        m00 = moving[floor_y, floor_x]
+        m01 = moving[floor_y, ceil_x]
+        m10 = moving[ceil_y, floor_x]
+        m11 = moving[ceil_y, ceil_x]
+
+        lerpx_top = m00 + (m01 - m00) * frac_x
+        lerpx_bot = m10 + (m11 - m10) * frac_x
+        mov_interp = lerpx_top + (lerpx_bot - lerpx_top) * frac_y
+
+        gradt = mov_interp - ref_c
+
+        ##### Reduce within the block (=sum)
+        # The reduce methods using shfl on warps is slower than this, idk why
+        s_B0[tid] = -l_gradx * gradt
+        s_B1[tid] = -l_grady * gradt
+        N = TILE_SIZE * TILE_SIZE // 2
+        while N > 0:
+            cuda.syncthreads()
+            if tid < N:
+                s_B0[tid] += s_B0[tid + N]
+                s_B1[tid] += s_B1[tid + N]
+            N = N // 2
+        #############
+
+        if tid == 0:
+            B0 = s_B0[0]
+            B1 = s_B1[0]
+
+            # solve Ax = B
+            s_alignment[0] += det_inv * (A11 * B0 - A01 * B1)
+            s_alignment[1] += det_inv * (-A10 * B0 + A00 * B1)
+
+    if tid == 0:
+        alignment[py, px, 0] = s_alignment[0]
+        alignment[py, px, 1] = s_alignment[1]
+
+@cuda.jit
+def ica_kernel_64(ref_img, gradx, grady, hessian, moving, alignment, niter):
+    # THis kernel is special, because we cant use 1 threads/pixel. 1 thread accumulates 4 horizontal pixels
+    TILE_SIZE = 64
+    h, w = moving.shape
+    np_y, np_x, _ = alignment.shape
+    px = cuda.blockIdx.x
+    py = cuda.blockIdx.y
+    tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
+    ti = ty * cuda.blockDim.x + tx
+    x = px * TILE_SIZE + tx * 4
+    y = py * TILE_SIZE + ty
+
+    if not(0 <= py < np_y and 0 <= px < np_x):
         return
-    
-    patch_pos_x = tile_size * patch_idx
-    patch_pos_y = tile_size * patch_idy
-    
-    A = cuda.local.array((2,2), dtype = DEFAULT_CUDA_FLOAT_TYPE)
-    A[0, 0] = hessian[patch_idy, patch_idx, 0, 0]
-    A[0, 1] = hessian[patch_idy, patch_idx, 0, 1]
-    A[1, 0] = hessian[patch_idy, patch_idx, 1, 0]
-    A[1, 1] = hessian[patch_idy, patch_idx, 1, 1]
-    
-    # By putting non solvable exit this early, the remaining calculations are 
-    # skipped for burned patches, which represents most of over-exposed images !
-    if abs(A[0, 0]*A[1, 1] - A[0, 1]*A[1, 0]) < 1e-10: # system is Not solvable
-        return 
-    
-    B = cuda.local.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
-    B[0] = 0
-    B[1] = 0
-    
-    local_alignment = cuda.local.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
-    local_alignment[0] = alignment[patch_idy, patch_idx, 0]
-    local_alignment[1] = alignment[patch_idy, patch_idx, 1]
-    
-    buffer_val = cuda.local.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
-    pos = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE) # y, x
-                
-    for i in range(tile_size):
-        for j in range(tile_size):
-            pixel_global_idx = patch_pos_x + j # global position on the coarse grey grid. Because of extremity padding, it can be out of bound
-            pixel_global_idy = patch_pos_y + i
-            
-            if not (0 <= pixel_global_idx < imsize_x and 
-                    0 <= pixel_global_idy < imsize_y):
-                continue
-            
-            local_gradx = gradx[pixel_global_idy, pixel_global_idx]
-            local_grady = grady[pixel_global_idy, pixel_global_idx]
 
-            # Warp I with W(x; p) to compute I(W(x; p))
-            new_idx = local_alignment[0] + pixel_global_idx
-            new_idy = local_alignment[1] + pixel_global_idy 
- 
-            if not (0 <= new_idx < imsize_x - 1 and
-                    0 <= new_idy < imsize_y - 1): # -1 for bicubic interpolation
-                continue
-            
-            # bicubic interpolation
-            normalised_pos_x, floor_x = math.modf(new_idx) # https://www.rollpie.com/post/252
-            normalised_pos_y, floor_y = math.modf(new_idy) # separating floor and floating part
-            floor_x = int(floor_x)
-            floor_y = int(floor_y)
-            
-            ceil_x = floor_x + 1
-            ceil_y = floor_y + 1
-            pos[0] = normalised_pos_y
-            pos[1] = normalised_pos_x
-            
-            buffer_val[0, 0] = comp_img[floor_y, floor_x]
-            buffer_val[0, 1] = comp_img[floor_y, ceil_x]
-            buffer_val[1, 0] = comp_img[ceil_y, floor_x]
-            buffer_val[1, 1] = comp_img[ceil_y, ceil_x]
-            
-            comp_val = bilinear_interpolation(buffer_val, pos)
-            
-            gradt = comp_val - ref_img[pixel_global_idy, pixel_global_idx]
-            
-            
-            B[0] += -local_gradx*gradt
-            B[1] += -local_grady*gradt
-        
-    
-    alignment_step = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-    
-    # solvability is ensured by design
-    solve_2x2(A, B, alignment_step)
-    
-    alignment[patch_idy, patch_idx, 0] = local_alignment[0] + alignment_step[0]
-    alignment[patch_idy, patch_idx, 1] = local_alignment[1] + alignment_step[1]
+    is_inbound = x < w and y < h
+
+    A00 = hessian[py, px, 0, 0]
+    A01 = hessian[py, px, 0, 1]
+    A10 = hessian[py, px, 1, 0]
+    A11 = hessian[py, px, 1, 1]
+
+    det = A00 * A11 - A01 * A10
+    if abs(det) < 1e-10: # system is Not solvable
+        return  # 1 Hessian per block, so all threads exit
+    det_inv = 1.0 / det
+
+    s_alignment = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    if ti == 0:
+        s_alignment[0] = alignment[py, px, 0]
+        s_alignment[1] = alignment[py, px, 1]
+
+    # Specific to 64x64: patchs: the threads manages 4 pixels, so we store 4 gradients
+    l_gradx = cuda.local.array(4, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    l_grady = cuda.local.array(4, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    l_gradx[0] = gradx[y, x] if is_inbound else 0.0
+    l_grady[0] = grady[y, x] if is_inbound else 0.0
+    l_gradx[1] = gradx[y, x + 1] if is_inbound and (x + 1) < w else 0.0
+    l_grady[1] = grady[y, x + 1] if is_inbound and (x + 1) < h else 0.0
+    l_gradx[2] = gradx[y, x + 2] if is_inbound and (x + 2) < w else 0.0
+    l_grady[2] = grady[y, x + 2] if is_inbound and (x + 2) < h else 0.0
+    l_gradx[3] = gradx[y, x + 3] if is_inbound and (x + 3) < w else 0.0
+    l_grady[3] = grady[y, x + 3] if is_inbound and (x + 3) < h else 0.0
+                    
+
+    s_B0 = cuda.shared.array((32 * 32), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    s_B1 = cuda.shared.array((32 * 32), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+
+    ref_c = cuda.local.array(4, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    ref_c[0] = ref_img[y, x] if is_inbound else 0.0
+    ref_c[1] = ref_img[y, x + 1] if is_inbound and (x + 1) < w else 0.0
+    ref_c[2] = ref_img[y, x + 2] if is_inbound and (x + 2) < w else 0.0
+    ref_c[3] = ref_img[y, x + 3] if is_inbound and (x + 3) < w else 0.0  
+
+
+    for _ in range(niter):
+        cuda.syncthreads()
+        # Warp I with W(x; p) to compute I(W(x; p))
+
+        ## bilinear interpolation at new_x, new_y
+        s_B0[ti] = 0.0
+        s_B1[ti] = 0.0
+
+        for j in range(4):
+            floor_x = x + j + int(s_alignment[0])
+            floor_y = y + int(s_alignment[1])
+            frac_x, _ = math.modf(s_alignment[0])
+            frac_y, _ = math.modf(s_alignment[1])
+            # Note: in theory frac_x, floor_x = math.modf(x + alignment[0]) in 1 shot. But it is surprisingly faster to compute it from s_alignment this way 
+
+            floor_x = clamp(floor_x, 0, w - 1)
+            floor_y = clamp(floor_y, 0, h - 1)
+
+            ceil_x = clamp(floor_x + 1, 0, w - 1)
+            ceil_y = clamp(floor_y + 1, 0, h - 1)
+
+            m00 = moving[floor_y, floor_x]
+            m01 = moving[floor_y, ceil_x]
+            m10 = moving[ceil_y, floor_x]
+            m11 = moving[ceil_y, ceil_x]
+
+            lerpx_top = m00 + (m01 - m00) * frac_x
+            lerpx_bot = m10 + (m11 - m10) * frac_x
+            mov_interp = lerpx_top + (lerpx_bot - lerpx_top) * frac_y
+
+            gradt = mov_interp - ref_c[j]
+
+        ##### Reduce within the block (=sum)
+        # The reduce methods using shfl on warps is slower than this, idk why
+            s_B0[ti] += -l_gradx[j] * gradt
+            s_B1[ti] += -l_grady[j] * gradt
+
+        N = 32 * 32 // 2
+        while N > 0:
+            cuda.syncthreads()
+            if ti < N:
+                s_B0[ti] += s_B0[ti + N]
+                s_B1[ti] += s_B1[ti + N]
+            N = N // 2
+        ###########
+        if ti == 0:
+            B0 = s_B0[0]
+            B1 = s_B1[0]
+
+            # solve Ax = B
+            s_alignment[0] += det_inv * (A11 * B0 - A01 * B1)
+            s_alignment[1] += det_inv * (-A10 * B0 + A00 * B1)
+
+    if ti == 0:
+        alignment[py, px, 0] = s_alignment[0]
+        alignment[py, px, 1] = s_alignment[1]
