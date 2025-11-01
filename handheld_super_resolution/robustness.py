@@ -143,7 +143,7 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, cfa_pat
         if bayer_mode:
             guide_img = compute_guide_image_(comp_img, cfa_pattern, white_balance)
         else:
-            guide_img = comp_img.reshape((imshape_y, imshape_x, 1)) # Adding 1 channel
+            guide_img = comp_img.reshape((1, imshape_y, imshape_x)) # Adding 1 channel
             
 
         # Computing local stats (before applying optical flow)
@@ -359,6 +359,7 @@ def upscale_warp_stats(local_stats, tile_size=None, flow=None):
     
 @cuda.jit
 def cuda_uspcale_dogson(LR, s, is_ref, flow, tile_size, HR):
+    s = 2
     n_channels, LR_ny, LR_nx = LR.shape
     _, HR_ny, HR_nx = HR.shape
     
