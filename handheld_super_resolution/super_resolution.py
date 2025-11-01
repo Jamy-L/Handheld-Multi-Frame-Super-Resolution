@@ -26,11 +26,10 @@ import rawpy
 
 from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame_count_denoising_median, apply_orientation
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso, timer
-from .block_matching import init_block_matching, align_image_block_matching
+from .alignment import align, init_alignment
 from .params import sanitize_config, update_snr_config
 from .robustness import init_robustness, compute_robustness
 from .utils_dng import load_dng_burst
-from .ICA import ICA_optical_flow, init_ICA
 from .fast_monte_carlo import run_fast_MC
 from .kernels import estimate_kernels
 from .merge import merge, merge_ref
@@ -71,17 +70,15 @@ def main(ref_img, comp_imgs, config):
     verbose_3 = config.verbose >= 3
 
     compute_grey_images_ = timer(compute_grey_images, verbose_3, end_s="- Ref grey image estimated by {}".format(grey_method))
-    init_block_matching_ = timer(init_block_matching, verbose_2, '\nBeginning Block Matching initialisation', 'Block Matching initialised (Total)')
-    init_ICA_ = timer(init_ICA, verbose_2, '\nBeginning ICA initialisation', 'ICA initialised (Total)')
     init_robustness_ = timer(init_robustness, verbose_2, "\nEstimating ref image local stats", 'Local stats estimated (Total)')
     compute_grey_images_ = timer(compute_grey_images, verbose_3, end_s="- grey images estimated by {}".format(grey_method))
-    align_image_block_matching_ = timer(align_image_block_matching, verbose_2, 'Beginning block matching', 'Block Matching (Total)')
-    ICA_optical_flow_ = timer(ICA_optical_flow, verbose_2, '\nBeginning ICA alignment', 'Image aligned using ICA (Total)')
     compute_robustness_ = timer(compute_robustness, verbose_2, '\nEstimating robustness', 'Robustness estimated (Total)')
     estimate_kernels_ = timer(estimate_kernels, verbose_2, '\nEstimating kernels', 'Kernels estimated (Total)')
     merge_ = timer(merge, verbose_2, '\nAccumulating Image', 'Image accumulated (Total)')
     merge_ref_ = timer(merge_ref, verbose_2, '\nAccumulating ref Img', 'Ref Img accumulated (Total)')    
     divide_ = timer(divide, verbose_2, end_s='\n------------------------\nImage normalized (Total)')
+    init_alignment_ = timer(init_alignment, verbose_2, '\nInitializing alignment', 'Alignment initialized (Total)')
+    align_ = timer(align, verbose_2, '\nBeginning alignment', 'Image aligned (Total)')
 
     bayer_mode = config.mode=='bayer'
     debug_mode = config.debug
@@ -94,34 +91,35 @@ def main(ref_img, comp_imgs, config):
     cuda_ref_img = cuda.to_device(ref_img)
     white_balance = cuda.to_device(np.array(config.exif.white_balance))
     cfa_pattern = cuda.to_device(np.array(config.exif.cfa_pattern))
+    # This running buffer is for the image being processed
+    stream = cuda.stream()
+    cuda_img = cuda.device_array_like(comp_imgs[0], stream=stream)
     cuda.synchronize()
+    cuda_std_curve = cuda.to_device(np.array(config.noise_model.std_curve))
+    cuda_diff_curve = cuda.to_device(np.array(config.noise_model.diff_curve))
     
     if verbose :
         print("\nProcessing reference image ---------\n")
         t1 = time.perf_counter()
-    
+
     #### Raw to grey
     if bayer_mode :
         cuda_ref_grey = compute_grey_images_(cuda_ref_img, grey_method)
     else:
         cuda_ref_grey = cuda_ref_img
-        
-    #### Block Matching
-    reference_pyramid = init_block_matching_(cuda_ref_grey, config)
 
-    #### ICA : compute grad and hessian
-    ref_gradx, ref_grady, hessian = init_ICA_(cuda_ref_grey, config)
+    ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian = init_alignment_(cuda_ref_grey, config)
 
     #### Local stats estimation
     ref_local_means, ref_local_stds = init_robustness_(cuda_ref_img, cfa_pattern, white_balance, config)
 
     if accumulate_r:
-        accumulated_r = cuda.to_device(np.zeros(ref_local_means.shape[:2]))
+        accumulated_r = cuda.to_device(np.zeros(ref_local_means.shape[1:]))
 
-    # zeros init of num and den
     scale = config.scale
     native_imshape_y, native_imshape_x = cuda_ref_img.shape
     output_size = (round(scale*native_imshape_y), round(scale*native_imshape_x))
+    # zeros init of num and den
     num = cuda.to_device(np.zeros((*output_size, 3), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
     den = cuda.to_device(np.zeros((*output_size, 3), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
     
@@ -130,6 +128,7 @@ def main(ref_img, comp_imgs, config):
         getTime(t1, '\nRef Img processed (Total)')
 
 
+    # comp_imgs = comp_imgs[:1]
     n_images = comp_imgs.shape[0]
     for im_id in range(n_images):
         if verbose :
@@ -138,7 +137,8 @@ def main(ref_img, comp_imgs, config):
             im_time = time.perf_counter()
         
         #### Moving to GPU
-        cuda_img = cuda.to_device(comp_imgs[im_id])
+        # cuda_img = cuda.to_device(comp_imgs[im_id])
+        cuda.to_device(comp_imgs[im_id], to=cuda_img, stream=stream)
         
         #### Compute Grey Images
         if bayer_mode:
@@ -146,21 +146,15 @@ def main(ref_img, comp_imgs, config):
         else:
             cuda_im_grey = cuda_img
         
-        #### Block Matching
-        pre_alignment = align_image_block_matching_(cuda_im_grey, reference_pyramid, config)
-        
-        #### ICA
-        cuda_final_alignment = ICA_optical_flow_(cuda_im_grey, cuda_ref_grey,
-                                                 ref_gradx, ref_grady,
-                                                 hessian, pre_alignment,
-                                                 config)
+        cuda_final_alignment = align_(ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian,
+                        cuda_im_grey, config)
         
         if debug_mode:
             debug_dict["flow"].append(cuda_final_alignment.copy_to_host())
             
         #### Robustness
         cuda_robustness = compute_robustness_(cuda_img, ref_local_means, ref_local_stds, cuda_final_alignment,
-                                            cfa_pattern, white_balance, config)
+                                            cfa_pattern, white_balance, (cuda_std_curve, cuda_diff_curve), config)
         if accumulate_r:
             add(accumulated_r, cuda_robustness)
         
@@ -176,6 +170,7 @@ def main(ref_img, comp_imgs, config):
             
         if debug_mode : 
             debug_dict['robustness'].append(cuda_robustness.copy_to_host())
+        stream.synchronize()
     
     #### Ref kernel estimation
     cuda_kernels = estimate_kernels_(cuda_ref_img, config)

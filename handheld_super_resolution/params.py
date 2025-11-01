@@ -11,6 +11,9 @@ def sanitize_config(config, imshape):
                                              config.accumulated_robustness_denoiser.gauss.enabled or
                                              config.accumulated_robustness_denoiser.merge.enabled):
         raise ValueError("Accumulated robustness denoiser cannot be enabled if robustness is disabled.")
+    
+    if not config.robustness.enabled and config.robustness.save_mask:
+        raise ValueError("Robustness mask cannot be saved if robustness is disabled.")
 
     assert config.merging.kernel in ['steerable', 'iso'], f"Unknown kernel type {config.merging.kernel}"
     assert config.mode in ["bayer", 'grey'], f"Unknown mode {config.mode}"

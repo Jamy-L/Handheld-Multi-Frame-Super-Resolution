@@ -1,546 +1,341 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Mon Sep 12 11:31:38 2022
-
-This script contains all the operations corresponding to the function
-"MultiScaleBlockMatching" called in Alg. 2: Registration. The pyramid
-representations are created and patches are aligned with the block matching
-method. 
-
-
-@author: jamyl
-"""
 import time
 import math
 
 import numpy as np
 from numba import cuda
 import torch
-import torch.nn.functional as F
 
-from .utils import getTime, clamp, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
-from .utils_image import cuda_downsample
+from .utils import clamp, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
 
+BOX_FILTER_8 = torch.as_tensor(np.ones((1,1,8,8)), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+BOX_FILTER_8.requires_grad = False
+BOX_FILTER_16 = torch.as_tensor(np.ones((1,1,16,16)), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+BOX_FILTER_16.requires_grad = False
+BOX_FILTER_32 = torch.as_tensor(np.ones((1,1,32,32)), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+BOX_FILTER_32.requires_grad = False
+BOX_FILTER_64 = torch.as_tensor(np.ones((1,1,64,64)), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+BOX_FILTER_64.requires_grad = False
 
-def init_block_matching(ref_img, config):
-    '''
-    Returns the pyramid representation of ref_img, that will be used for 
-    future block matching
+def align_lvl_block_matching_L2(tyled_pyr_lvl, ref_fft_lvl, moving_lvl, alignment, l, config):
+    verbose = config.verbose > 2
+    currentTime = time.perf_counter()
+    tileSize = config.block_matching.tuning.tile_sizes[l]
+    searchRadius = config.block_matching.tuning.search_radii[l]
+    distanceMetric = config.block_matching.tuning.metrics[l]
 
-    Parameters
-    ----------
-    ref_img : device Array[imshape_y, imshape_x]
-        Reference image J_1
-    options : dict
-        options.
-    config : OmegaConf object
-        parameters.
-    Returns
-    -------
-    referencePyramid : list [device Array]
-        pyramid representation of the image
-
-    '''
-    # Initialization.
-    h, w = ref_img.shape  # height and width should be identical for all images
-
-    tileSize = config.block_matching.tuning.tile_size
-
-    # if needed, pad images with zeros so that getTiles contains all image pixels
-    paddingPatchesHeight = (tileSize - h % (tileSize)) * (h % (tileSize) != 0)
-    paddingPatchesWidth = (tileSize - w % (tileSize)) * (w % (tileSize) != 0)
-
-    # combine the two to get the total padding
-    paddingTop = 0
-    paddingBottom = paddingPatchesHeight
-    paddingLeft = 0
-    paddingRight = paddingPatchesWidth
+    imshape = moving_lvl.shape
     
-	# pad all images (by mirroring image edges)
-	# separate reference and alternate images
-    # ref_img_padded = np.pad(ref_img, ((paddingTop, paddingBottom), (paddingLeft, paddingRight)), 'symmetric')
+    search_size = 2 * searchRadius + tileSize # The size of the crop in which the search is done
+    corr_size = 2 * searchRadius + 1 # The size of the correlation map output
+
+    # Extract tiles based on the optical flow
+    search_area = extract_flow_patches(moving_lvl, alignment, tileSize, searchRadius)
+
+    moving_fft = torch.fft.rfft2(search_area, dim=(-2, -1))
+    corrs = torch.fft.irfft2(torch.conj(ref_fft_lvl) * moving_fft, s=(search_size, search_size))
+    corrs = torch.fft.fftshift(corrs, dim=(-2, -1))
+
+    # crop to valid region ±R around center output size search_size
+    # Before cropping, corrs has an even shaped. The correlation with shift=0 is almost at the center, biased towards the bottom left. By removing 1 pixel from top and left, we center it.
+    # The rest of the crop removes the phantom "circular" correlations at the borders due to the FFT
+    pre_crop_size = corrs.shape[-1]
+    crop = (pre_crop_size - 1 - corr_size) // 2
+    corrs = corrs[..., crop+1:crop+corr_size+1, crop+1:crop+corr_size+1]
+
+
+    ## Now compute the windows L2 norm of the search patches
+    if tileSize == 8:
+        box_filter = BOX_FILTER_8
+    elif tileSize == 16:
+        box_filter = BOX_FILTER_16
+    elif tileSize == 32:
+        box_filter = BOX_FILTER_32
+    elif tileSize == 64:
+        box_filter = BOX_FILTER_64
+    else:
+        raise NotImplementedError("Box filter for tile size {} not implemented".format(tileSize))
     
-    th_ref_img = torch.as_tensor(ref_img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
+    # TODO there may be a faster and smarter way than conv2d for this, but this is not the bottleneck so far
+    L2_search = torch.nn.functional.conv2d(
+        search_area.view(-1, 1, search_size, search_size).square(), box_filter, padding="valid")
+    L2_search = L2_search.view(search_area.shape[0], search_area.shape[1], L2_search.shape[-2], L2_search.shape[-1])
+
+    ## Final L2 error computation (Not the full L2, but enough to find the minimum)
+    L2_error = L2_search - 2 * corrs
+
+    L2_error_ = L2_error.flatten(-2, -1)
+    max_idx = torch.argmin(L2_error_, dim=-1)
+    peak_y = max_idx // corr_size
+    peak_x = max_idx % corr_size
+    dy = peak_y - corr_size//2
+    dx = peak_x - corr_size//2
+
+    # Test alignment here
+    alignment[:, :, 0] += dx
+    alignment[:, :, 1] += dy
     
-    th_ref_img_padded = F.pad(th_ref_img, (paddingLeft, paddingRight, paddingTop, paddingBottom), 'circular')
+def align_lvl_block_matching_L1(ref_lvl, moving_lvl, alignments, l, config):
+    h, w, _ = alignments.shape
+    tile_size = config.block_matching.tuning.tile_sizes[l]
+    search_radius = config.block_matching.tuning.search_radii[l]
+    ny, nx, _ = alignments.shape
 
-
-
-    # For convenience
-    currentTime, verbose = time.perf_counter(), config.verbose > 2
-    # factors, tileSizes, distances, searchRadia and subpixels are described fine-to-coarse
-    factors = config.block_matching.tuning.factors
-
-
-    # construct 4-level coarse-to fine pyramid of the reference
-
-    referencePyramid = hdrplusPyramid(th_ref_img_padded, factors)
-    if verbose:
-        currentTime = getTime(currentTime, ' --- Create ref pyramid')
-    
-    return referencePyramid
-
-
-def align_image_block_matching(img, referencePyramid, config, debug=False):
-    """
-    Align the reference image with the img : returns a patchwise flow such that
-    for patches py, px :
-        img[py, px] ~= ref_img[py + alignments[py, px, 1], 
-                               px + alignments[py, px, 0]]
-
-    Parameters
-    ----------
-    img : device Array[imshape_y, imshape_x]
-        Image to be compared J_i (i>1)
-    referencePyramid : list [device Array]
-        Pyramid representation of the ref image J_1
-    config : OmegaConf object
-    debug : Bool, optional
-        When True, a list with the alignment at each step is returned. The default is False.
-
-    Returns
-    -------
-    alignments : device Array[n_patchs_y, n_patchs_x, 2]
-        Patchwise flow : V_n(p) for each patch (p)
-
-    """
-    # Initialization.
-    h, w = img.shape  # height and width should be identical for all images
-    
-    tileSize = config.block_matching.tuning.tile_size
-    # if needed, pad images with zeros so that getTiles contains all image pixels
-    paddingPatchesHeight = (tileSize - h % (tileSize)) * (h % (tileSize) != 0)
-    paddingPatchesWidth = (tileSize - w % (tileSize)) * (w % (tileSize) != 0)
-
-    # combine the two to get the total padding
-    paddingTop = 0
-    paddingBottom = paddingPatchesHeight
-    paddingLeft = 0
-    paddingRight = paddingPatchesWidth
-    
-	# pad all images (by mirroring image edges)
-	# separate reference and alternate images
-    
-    th_img = torch.as_tensor(img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
-    
-
-    img_padded = F.pad(th_img, (paddingLeft, paddingRight, paddingTop, paddingBottom), 'circular')
-    
-
-    # For convenience
-    currentTime, verbose = time.perf_counter(), config.verbose > 2
-    # factors, tileSizes, distances, searchRadia and subpixels are described fine-to-coarse
-    factors = config.block_matching.tuning.factors
-    tileSizes = config.block_matching.tuning.tile_sizes
-    distances = config.block_matching.tuning.metrics
-    searchRadia = config.block_matching.tuning.search_radii
-
-    upsamplingFactors = factors[1:] + [1]
-    previousTileSizes = tileSizes[1:] + [None]
-
-
-    # Align alternate image to the reference image
-
-    # 4-level coarse-to fine pyramid of alternate image
-    alternatePyramid = hdrplusPyramid(img_padded, factors)
-    if verbose:
-        cuda.synchronize()
-        currentTime = getTime(currentTime, ' --- Create alt pyramid')
-
-    # succesively align from coarsest to finest level of the pyramid
-    alignments = None
-    if debug:
-        debug_list = []
-    
-    for lv in range(len(referencePyramid)):
-        alignments = align_on_a_level(
-            referencePyramid[lv],
-            alternatePyramid[lv],
-            config,
-            upsamplingFactors[-lv - 1],
-            tileSizes[-lv - 1],
-            previousTileSizes[-lv - 1],
-            searchRadia[-lv - 1],
-            distances[-lv - 1],
-            alignments
-        )
-
-        if debug:
-            debug_list.append(alignments.copy_to_host())
-            
-        if verbose:
-            cuda.synchronize()
-            currentTime = getTime(currentTime, ' --- Align pyramid')
-    if debug:
-        return debug_list
-    return alignments
-
-
-def hdrplusPyramid(image, factors=[1, 2, 4, 4], kernel='gaussian'):
-    '''Construct 4-level coarse-to-fine gaussian pyramid
-    as described in the HDR+ paper and its supplement (Section 3.2 of the IPOL article).
-    Args:
-            image: input image (expected to be a grayscale image downsampled from a Bayer raw image)
-            factors: [int], dowsampling factors (fine-to-coarse)
-            kernel: convolution kernel to apply before downsampling (default: gaussian kernel)'''
-    # Start with the finest level computed from the input
-    pyramidLevels = [cuda_downsample(image, kernel, factors[0])]
-    # pyramidLevels = [downsample(image, kernel, factors[0])]
-
-    # Subsequent pyramid levels are successively created
-    # with convolution by a kernel followed by downsampling
-    for factor in factors[1:]:
-        pyramidLevels.append(cuda_downsample(pyramidLevels[-1], kernel, factor))
-        # pyramidLevels.append(downsample(pyramidLevels[-1], kernel, factor))
-
-    # torch to numba, remove batch, channel dimensions
-    for i, pyramidLevel in enumerate(pyramidLevels):
-        pyramidLevels[i] = cuda.as_cuda_array(pyramidLevel.squeeze())
-        
-    # Reverse the pyramid to get it coarse-to-fine
-    return pyramidLevels[::-1]
-
-def align_on_a_level(referencePyramidLevel, alternatePyramidLevel, config, upsamplingFactor, tileSize, 
-                     previousTileSize, searchRadius, distance, previousAlignments):
-    """
-    Alignment will always be an integer with this function, however it is 
-    set to DEFAULT_FLOAT_TYPE. This enables to directly use the outputed
-    alignment for ICA without any casting from int to float, which would be hard
-    to perform on GPU : Numba is completely powerless and cannot make the
-    casting.
-
-    """
-    
-    
-    # For convenience
-    verbose = config.verbose > 3
-    if verbose :
-        cuda.synchronize()
-        currentTime = time.perf_counter()
-    imshape = referencePyramidLevel.shape
-    
-    # This formula is checked : it is correct
-    # Number of patches that can fit on this level
-    h = imshape[0] // tileSize
-    w = imshape[1] // tileSize
-    
-    # Upsample the previous alignements for initialization
-    if previousAlignments is None:
-        upsampledAlignments = cuda.to_device(np.zeros((h, w, 2), dtype=DEFAULT_NUMPY_FLOAT_TYPE))
-    else:        
-        # use the upsampled previous alignments as initial guesses
-        upsampledAlignments = upsample_alignments(
-            referencePyramidLevel,
-            alternatePyramidLevel,
-            previousAlignments,
-            upsamplingFactor,
-            tileSize,
-            previousTileSize
-        )
-
-    if verbose:
-        cuda.synchronize()
-        currentTime = getTime(currentTime, ' ---- Upsample alignments')
-    
-    local_search(referencePyramidLevel, alternatePyramidLevel,
-                 tileSize, searchRadius,
-                 upsampledAlignments, distance)
-    
-    if verbose:
-        cuda.synchronize()
-        currentTime = getTime(currentTime, ' ---- Patchs aligned')
-        
-    # In the original HDR block matching, supixel precision is obtained here.
-    # We do not need that as we use the ICA after block matching
-
-    return upsampledAlignments
-    
-def upsample_alignments(referencePyramidLevel, alternatePyramidLevel, previousAlignments, upsamplingFactor, tileSize, previousTileSize):
-    '''Upsample alignements to adapt them to the next pyramid level (Section 3.2 of the IPOL article).'''
-    n_tiles_y_prev, n_tiles_x_prev, _ = previousAlignments.shape
-    # Different resolution upsampling factors and tile sizes lead to different vector repetitions
-
-    # UpsampledAlignments.shape can be less than referencePyramidLevel.shape/tileSize
-    # eg when previous alignments could not be computed over the whole image
-    n_tiles_y_new = referencePyramidLevel.shape[0] // tileSize
-    n_tiles_x_new = referencePyramidLevel.shape[1] // tileSize
-
-    upsampledAlignments = cuda.device_array((n_tiles_y_new, n_tiles_x_new, 2), dtype=DEFAULT_NUMPY_FLOAT_TYPE)
-    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
-    blockspergrid_x = math.ceil(n_tiles_x_new/threadsperblock[1])
-    blockspergrid_y = math.ceil(n_tiles_y_new/threadsperblock[0])
+    # New way, 1 thread per pixel
+    threadsperblock = (tile_size, tile_size)
+    if tile_size == 8:
+        raise NotImplementedError("L1 local search kernel for tile size {} not implemented".format(tile_size))
+    elif tile_size == 16:
+        kernel = cuda_L1_local_search16
+        assert 2 * search_radius + 16 <= 32, f"L1 local search kernel only implemented for search windows up to size 32, which is not the case for tile size {tile_size} and search radius {search_radius}."
+    elif tile_size == 32:
+        kernel = cuda_L1_local_search32
+    elif tile_size == 64:
+        kernel = cuda_L1_local_search64
+        threadsperblock = (32, 32)  # because each thread handles 4 pixels
+    else:
+        raise NotImplementedError("L1 local search kernel for tile size {} not implemented".format(tile_size))
+    blockspergrid_x = nx
+    blockspergrid_y = ny
     blockspergrid = (blockspergrid_x, blockspergrid_y)
-    
-    cuda_upsample_alignments[blockspergrid, threadsperblock](
-        referencePyramidLevel, alternatePyramidLevel,
-        upsampledAlignments, previousAlignments,
-        upsamplingFactor, tileSize, previousTileSize)
+    kernel[blockspergrid, threadsperblock](
+        ref_lvl, moving_lvl, search_radius, alignments)
 
-    return upsampledAlignments
-        
 @cuda.jit
-def cuda_upsample_alignments(referencePyramidLevel, alternatePyramidLevel, upsampledAlignments, previousAlignments, upsamplingFactor, tileSize, previousTileSize):
-    subtile_x, subtile_y = cuda.grid(2)
-    n_tiles_y_prev, n_tiles_x_prev, _ = previousAlignments.shape
-    n_tiles_y_new, n_tiles_x_new, _ = upsampledAlignments.shape
-    h, w = referencePyramidLevel.shape
+def cuda_L1_local_search16(ref, moving, search_radius, alignments):
+    TILE_SIZE = 16
+    h, w = moving.shape
+    x, y = cuda.grid(2)
+    tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
+    tile_x = cuda.blockIdx.x
+    tile_y = cuda.blockIdx.y
+    tid = ty * TILE_SIZE + tx
+    
+    # x and y are by design in the image.
+    
+    s_flow = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
+    if tid == 0:
+        s_flow[0] = round(alignments[tile_y, tile_x, 0])
+        s_flow[1] = round(alignments[tile_y, tile_x, 1])
 
-    repeatFactor = upsamplingFactor // (tileSize // previousTileSize)
-    if not(0 <= subtile_x < n_tiles_x_new and
-           0 <= subtile_y < n_tiles_y_new):
-        return
+    # Load ref patch into shared memory
+    s_ref = cuda.shared.array((16, 16), DEFAULT_CUDA_FLOAT_TYPE)
+    s_ref[ty, tx] = ref[y, x]
+
+    cuda.syncthreads()
+    mov_y = y + int(s_flow[1]) - search_radius
+    mov_x = x + int(s_flow[0]) - search_radius
+
+    s_mov = cuda.shared.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE) # Only (2*search_radius + TILE_SIZE)**2 used
+    s_mov[ty, tx] = moving[mov_y, mov_x] if 0 <= mov_x < w and 0 <= mov_y < h else 0.0
+
+    # Load the remaining pixels
+    if tx < 2 * search_radius:
+        s_mov[ty, tx + TILE_SIZE] = moving[mov_y, mov_x + TILE_SIZE] if 0 <= mov_x + TILE_SIZE < w and 0 <= mov_y < h else 0.0
+    if ty < 2 * search_radius:
+        s_mov[ty + TILE_SIZE, tx] = moving[mov_y + TILE_SIZE, mov_x] if 0 <= mov_x < w and 0 <= mov_y + TILE_SIZE < h else 0.0
+    if tx < 2 * search_radius and ty < 2 * search_radius:
+        s_mov[ty + TILE_SIZE, tx + TILE_SIZE] = moving[mov_y + TILE_SIZE, mov_x + TILE_SIZE] if 0 <= mov_x + TILE_SIZE < w and 0 <= mov_y + TILE_SIZE < h else 0.0
+    cuda.syncthreads()
+
+    s_l1_map = cuda.shared.array(16 * 16, DEFAULT_CUDA_FLOAT_TYPE) # used to accumulate l1 between threads
+    s_err = cuda.shared.array((16, 16), DEFAULT_CUDA_FLOAT_TYPE) # Stores the error map. We only use (2*search_radius + 1)**2 values
+    for shift_y in range(-search_radius, search_radius + 1):
+        for shift_x in range(-search_radius, search_radius + 1):
+            ### Fancy reduce = sum accros threads
+            l1_sum = abs(s_ref[ty, tx] - s_mov[ty + shift_y + search_radius, tx + shift_x + search_radius])
+            t_per_warp = 32
+            w_per_block = (TILE_SIZE * TILE_SIZE) // t_per_warp
+            offset = t_per_warp // 2
+            # Sum thread among warps first
+            while offset > 0:
+                l1_sum += cuda.shfl_down_sync(0xffffffff, l1_sum, offset)
+                offset //= 2
+            if tid % t_per_warp == 0:
+                s_l1_map[tid] = l1_sum
+            cuda.syncthreads()
+            # Then sum warps
+            if tid == 0:
+                for w_id in range(t_per_warp, w_per_block * t_per_warp, t_per_warp):
+                    s_l1_map[0] += s_l1_map[w_id]
+            ###########
+
+            if tid == 0:
+                s_err[shift_y + search_radius, shift_x + search_radius] = s_l1_map[0]
     
-    # the new subtile is on the side of the image, and is not contained within a bigger old tile
-    if (subtile_x >= repeatFactor*n_tiles_x_prev or
-        subtile_y >= repeatFactor*n_tiles_y_prev):
-        upsampledAlignments[subtile_y, subtile_x, 0] = 0
-        upsampledAlignments[subtile_y, subtile_x, 1] = 0
-        return
+    # Now find the minimum error and corresponding shift
+    if tid == 0:
+        err = s_err[0, 0]
+        for i in range(2*search_radius + 1):
+            for j in range(2*search_radius + 1):
+                min = s_err[i, j]
+                if err < min:
+                    min = err
+                    min_shift_y = i - search_radius
+                    min_shift_x = j - search_radius
+
+
+    alignments[tile_y, tile_x, 0] = s_flow[0] + min_shift_x
+    alignments[tile_y, tile_x, 1] = s_flow[1] + min_shift_y
+
+@cuda.jit
+def cuda_L1_local_search32(ref, moving, search_radius, alignments):
+    TILE_SIZE = 32
+    h, w = moving.shape
+    x, y = cuda.grid(2)
+    tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
+    tile_x = cuda.blockIdx.x
+    tile_y = cuda.blockIdx.y
+    tid = ty * TILE_SIZE + tx
     
-    # else
-    prev_tile_x = subtile_x//repeatFactor
-    prev_tile_y = subtile_y//repeatFactor
+    s_flow = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
+    if tid == 0:
+        s_flow[0] = round(alignments[tile_y, tile_x, 0])
+        s_flow[1] = round(alignments[tile_y, tile_x, 1])
+
+    # Load ref patch into shared memory
+    s_ref = cuda.shared.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
+    s_ref[ty, tx] = ref[y, x] if (0 <= x < w and 0 <= y < h) else 0.0
+    cuda.syncthreads()
+
+    mov_y = y + int(s_flow[1])
+    mov_x = x + int(s_flow[0])
     
-    candidate_alignment_0_shift = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
-    candidate_alignment_0_shift[0] = previousAlignments[prev_tile_y, prev_tile_x, 0] * upsamplingFactor
-    candidate_alignment_0_shift[1] = previousAlignments[prev_tile_y, prev_tile_x, 1] * upsamplingFactor
-    
-    # position of the top left pixel in the subtile
-    subtile_pos_y = subtile_y*tileSize
-    subtile_pos_x = subtile_x*tileSize
-    
-    # copying ref patch into local memory, because it needs to be read 3 times
-    # this should be rewritten to allow patchs bigger than 32
-    local_ref = cuda.local.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
-    for i in range(tileSize):
-        for j in range(tileSize):
-            idx = subtile_pos_x + j
-            idy = subtile_pos_y + i            
-            local_ref[i, j] = referencePyramidLevel[idy, idx]
-    
-    
-    # position of the new tile within the old tile
-    ups_subtile_x = subtile_x%repeatFactor
-    ups_subtile_y = subtile_y%repeatFactor
-    
-    # computing id for the 3 closest patchs
-    if 2 * ups_subtile_x + 1 > repeatFactor:
-        x_shift = +1
-    else:
-        x_shift = -1
-        
-    if 2 * ups_subtile_y + 1 > repeatFactor:
-        y_shift = +1
-    else:
-        y_shift = -1
-    
-    # 3 Candidates alignments are fetched (by fetching them as early as possible, we may received 
-    # them from global memory before we even require them, as calculations are performed during this delay)
-    candidate_alignment_vert_shift = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
-    candidate_alignment_vert_shift[0] = previousAlignments[clamp(prev_tile_y + y_shift, 0, n_tiles_y_prev - 1),
-                                                           prev_tile_x,
-                                                           0] * upsamplingFactor
-    candidate_alignment_vert_shift[1] = previousAlignments[clamp(prev_tile_y + y_shift, 0, n_tiles_y_prev - 1),
-                                                           prev_tile_x,
-                                                           1] * upsamplingFactor
-    
-    candidate_alignment_horizontal_shift = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
-    candidate_alignment_horizontal_shift[0] = previousAlignments[prev_tile_y,
-                                                                 clamp(prev_tile_x + x_shift, 0, n_tiles_x_prev - 1),
-                                                                 0] * upsamplingFactor
-    candidate_alignment_horizontal_shift[1] = previousAlignments[prev_tile_y,
-                                                                 clamp(prev_tile_x + x_shift, 0, n_tiles_x_prev - 1),
-                                                                 1] * upsamplingFactor
-    
-    # Choosing the best of the 3 alignments by minimising L1 dist
-    dist = +1/0
-    optimal_flow_x = 0
-    optimal_flow_y = 0
-    
-    # 0 shift
-    dist_ = 0
-    for i in range(tileSize):
-        for j in range(tileSize):
-            new_idy = subtile_pos_y + i + int(candidate_alignment_0_shift[1])
-            new_idx = subtile_pos_x + j + int(candidate_alignment_0_shift[0])
-            if (0 <= new_idx < w and
-                0 <= new_idy < h):
-                dist_ += abs(local_ref[i, j] - alternatePyramidLevel[new_idy, new_idx])
-            else:
-                dist_ = 1/0
-    if dist_ < dist:
-        dist = dist_
-        optimal_flow_x = candidate_alignment_0_shift[0]
-        optimal_flow_y = candidate_alignment_0_shift[1]
-        
-    # vertical shift
-    dist_ = 0
-    for i in range(tileSize):
-        for j in range(tileSize):
-            new_idy = subtile_pos_y + i + int(candidate_alignment_vert_shift[1])
-            new_idx = subtile_pos_x + j + int(candidate_alignment_vert_shift[0])
-            if (0 <= new_idx < w and
-                0 <= new_idy < h):
-                dist_ += abs(local_ref[i, j] - alternatePyramidLevel[new_idy, new_idx])
-            else:
-                dist_ = 1/0
-    if dist_ < dist:
-        dist = dist_
-        optimal_flow_x = candidate_alignment_vert_shift[0]
-        optimal_flow_y = candidate_alignment_vert_shift[1]
+    s_l1_map = cuda.shared.array(32 * 32, DEFAULT_CUDA_FLOAT_TYPE)
+    s_err = cuda.shared.array((16, 16), DEFAULT_CUDA_FLOAT_TYPE)
+    for shift_y in range(-search_radius, search_radius + 1):
+        for shift_x in range(-search_radius, search_radius + 1):
+            ### Fancy reduce = sum across threads
+            l1_sum = abs(s_ref[ty, tx] - moving[mov_y + shift_y, mov_x + shift_x]) if 0 <= mov_x + shift_x < w and 0 <= mov_y + shift_y < h else 1/0
+            t_per_warp = 32
+            w_per_block = (TILE_SIZE * TILE_SIZE) // t_per_warp
+            offset = t_per_warp // 2
+            # Sum thread among warps first
+            while offset > 0:
+                l1_sum += cuda.shfl_down_sync(0xffffffff, l1_sum, offset)
+                offset //= 2
+            if tid % t_per_warp == 0:
+                s_l1_map[tid] = l1_sum
+            cuda.syncthreads()
+            # Then sum warps
+            if tid == 0:
+                for w_id in range(t_per_warp, w_per_block * t_per_warp, t_per_warp):
+                    s_l1_map[0] += s_l1_map[w_id]
+            ###########
+
             
-    # horizontal shift
-    dist_ = 0
-    for i in range(tileSize):
-        for j in range(tileSize):
-            new_idy = subtile_pos_y + i + int(candidate_alignment_horizontal_shift[1])
-            new_idx = subtile_pos_x + j + int(candidate_alignment_horizontal_shift[0])
-            if (0 <= new_idx < w and
-                0 <= new_idy < h):
-                dist_ += abs(local_ref[i, j] - alternatePyramidLevel[new_idy, new_idx])
-            else:
-                dist_ = 1/0
-    if dist_ < dist:
-        dist = dist_
-        optimal_flow_x = candidate_alignment_horizontal_shift[0]
-        optimal_flow_y = candidate_alignment_horizontal_shift[1]
+            if tid == 0:
+                s_err[shift_y + search_radius, shift_x + search_radius] = s_l1_map[0]
     
-    # applying best flow
-    upsampledAlignments[subtile_y, subtile_x, 0] = optimal_flow_x
-    upsampledAlignments[subtile_y, subtile_x, 1] = optimal_flow_y
+    # Now find the minimum error and corresponding shift
+    if tid == 0:
+        err = s_err[0, 0]
+        for i in range(2*search_radius + 1):
+            for j in range(2*search_radius + 1):
+                min = s_err[i, j]
+                if err < min:
+                    min = err
+                    min_shift_y = i - search_radius
+                    min_shift_x = j - search_radius
 
 
+    alignments[tile_y, tile_x, 0] = s_flow[0] + min_shift_x
+    alignments[tile_y, tile_x, 1] = s_flow[1] + min_shift_y
 
-def local_search(referencePyramidLevel, alternatePyramidLevel,
-                 tileSize, searchRadius,
-                 upsampledAlignments, distance):
-
-    h, w, _ = upsampledAlignments.shape
-    
-    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
-    blockspergrid_x = math.ceil(w/threadsperblock[1])
-    blockspergrid_y = math.ceil(h/threadsperblock[0])
-    blockspergrid = (blockspergrid_x, blockspergrid_y)
-
-    if distance == 'L1':
-        cuda_L1_local_search[blockspergrid, threadsperblock](referencePyramidLevel, alternatePyramidLevel,
-                                                      tileSize, searchRadius,
-                                                      upsampledAlignments)
-    elif distance == 'L2':
-        cuda_L2_local_search[blockspergrid, threadsperblock](referencePyramidLevel, alternatePyramidLevel,
-                                                      tileSize, searchRadius,
-                                                      upsampledAlignments)
-    else:
-        raise ValueError('Unknown distance : {}'.format(distance))
-        
-        
 @cuda.jit
-def cuda_L1_local_search(referencePyramidLevel, alternatePyramidLevel,
-                         tileSize, searchRadius, upsampledAlignments):
-    n_patchs_y, n_patchs_x, _ = upsampledAlignments.shape
-    h, w = alternatePyramidLevel.shape
-    tile_x, tile_y = cuda.grid(2)
-    if not(0 <= tile_y < n_patchs_y and
-           0 <= tile_x < n_patchs_x):
-        return
-    
-    local_flow = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
-    local_flow[0] = upsampledAlignments[tile_y, tile_x, 0]
-    local_flow[1] = upsampledAlignments[tile_y, tile_x, 1]
+def cuda_L1_local_search64(ref, moving, search_radius, alignments):
+    TILE_SIZE = 64
+    h, w = moving.shape
+    x, y = cuda.grid(2)
+    tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
+    tile_x = cuda.blockIdx.x
+    tile_y = cuda.blockIdx.y
+    tid = ty * cuda.blockDim.x + tx
 
-    # position of the pixel in the top left corner of the patch
-    patch_pos_x = tile_x * tileSize
-    patch_pos_y = tile_y * tileSize
-    
-    # this should be rewritten to allow patchs bigger than 32
-    local_ref = cuda.local.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
-    for i in range(tileSize):
-        for j in range(tileSize):
-            idx = patch_pos_x + j
-            idy = patch_pos_y + i
-            local_ref[i, j] = referencePyramidLevel[idy, idx]
-        
-    min_dist = +1/0 #init as infty
-    min_shift_y = 0
-    min_shift_x = 0
-    # window search
-    for search_shift_y in range(-searchRadius, searchRadius + 1):
-        for search_shift_x in range(-searchRadius, searchRadius + 1):
-            # computing dist
-            dist = 0
-            for i in range(tileSize):
-                for j in range(tileSize):
-                    new_idx = patch_pos_x + j + int(local_flow[0]) + search_shift_x
-                    new_idy = patch_pos_y + i + int(local_flow[1]) + search_shift_y
-                    
-                    if (0 <= new_idx < w and
-                        0 <= new_idy < h):
-                        diff = local_ref[i, j] - alternatePyramidLevel[new_idy, new_idx]
-                        dist += abs(diff)
-                    else:
-                        dist = +1/0
-                    
-                    
-            if dist < min_dist :
-                min_dist = dist
-                min_shift_y = search_shift_y
-                min_shift_x = search_shift_x
-    
-    upsampledAlignments[tile_y, tile_x, 0] = local_flow[0] + min_shift_x
-    upsampledAlignments[tile_y, tile_x, 1] = local_flow[1] + min_shift_y
-    
-@cuda.jit
-def cuda_L2_local_search(referencePyramidLevel, alternatePyramidLevel,
-                         tileSize, searchRadius, upsampledAlignments):
-    n_patchs_y, n_patchs_x, _ = upsampledAlignments.shape
-    h, w = alternatePyramidLevel.shape
-    tile_x, tile_y = cuda.grid(2)
-    if not(0 <= tile_y < n_patchs_y and
-           0 <= tile_x < n_patchs_x):
-        return
-    
-    local_flow = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
-    local_flow[0] = upsampledAlignments[tile_y, tile_x, 0]
-    local_flow[1] = upsampledAlignments[tile_y, tile_x, 1]
+    s_flow = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
+    if tid == 0:
+        s_flow[0] = round(alignments[tile_y, tile_x, 0])
+        s_flow[1] = round(alignments[tile_y, tile_x, 1])
 
-    # position of the pixel in the top left corner of the patch
-    patch_pos_x = tile_x * tileSize
-    patch_pos_y = tile_y * tileSize
-    
-    # this should be rewritten to allow patchs bigger than 32
-    local_ref = cuda.local.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
-    for i in range(tileSize):
-        for j in range(tileSize):
-            idx = patch_pos_x + j
-            idy = patch_pos_y + i
-            local_ref[i, j] = referencePyramidLevel[idy, idx]
-        
-    min_dist = +1/0 #init as infty
-    min_shift_y = 0
-    min_shift_x = 0
-    # window search
-    for search_shift_y in range(-searchRadius, searchRadius + 1):
-        for search_shift_x in range(-searchRadius, searchRadius + 1):
-            # computing dist
-            dist = 0
-            for i in range(tileSize):
-                for j in range(tileSize):
-                    new_idx = patch_pos_x + j + int(local_flow[0]) + search_shift_x
-                    new_idy = patch_pos_y + i + int(local_flow[1]) + search_shift_y
-                    
-                    if (0 <= new_idx < w and
-                        0 <= new_idy < h):
-                        diff = local_ref[i, j] - alternatePyramidLevel[new_idy, new_idx]
-                        dist += diff*diff
-                    else:
-                        dist = +1/0
-                    
-                    
-            if dist < min_dist :
-                min_dist = dist
-                min_shift_y = search_shift_y
-                min_shift_x = search_shift_x
-    
-    upsampledAlignments[tile_y, tile_x, 0] = local_flow[0] + min_shift_x
-    upsampledAlignments[tile_y, tile_x, 1] = local_flow[1] + min_shift_y
-    
+    mov_y = y + int(s_flow[1])
+    mov_x = x + int(s_flow[0])
+
+    s_l1_map = cuda.shared.array(32 * 32, DEFAULT_CUDA_FLOAT_TYPE)
+    s_err = cuda.shared.array((16, 16), DEFAULT_CUDA_FLOAT_TYPE) # This one in voluntarly large, we use only (2*search_radius + 1)**2 values
+    for shift_y in range(-search_radius, search_radius + 1):
+        for shift_x in range(-search_radius, search_radius + 1):
+            ### Fancy reduce = sum across threads
+            # A presum is made here: a thread manages 4 pixels because the block is 32x32 for a tile size of 64x64
+            l1_sum = abs(ref[y, x] - moving[mov_y + shift_y, mov_x + shift_x]) if 0 <= mov_x + shift_x < w and 0 <= mov_y + shift_y < h else 0.0
+            l1_sum += abs(ref[y, x + 32] - moving[mov_y + shift_y, mov_x + shift_x + 32]) if 0 <= mov_x + shift_x + 32 < w and 0 <= mov_y + shift_y < h else 0.0
+            l1_sum += abs(ref[y + 32, x] - moving[mov_y + shift_y + 32, mov_x + shift_x]) if 0 <= mov_x + shift_x < w and 0 <= mov_y + shift_y + 32 < h else 0.0
+            l1_sum += abs(ref[y + 32, x + 32] - moving[mov_y + shift_y + 32, mov_x + shift_x + 32]) if 0 <= mov_x + shift_x + 32 < w and 0 <= mov_y + shift_y + 32 < h else 0.0
+
+
+            t_per_warp = 32
+            w_per_block = (32 * 32) // t_per_warp
+            offset = t_per_warp // 2
+            # Sum thread among warps first
+            while offset > 0:
+                l1_sum += cuda.shfl_down_sync(0xffffffff, l1_sum, offset)
+                offset //= 2
+            if tid % t_per_warp == 0:
+                s_l1_map[tid] = l1_sum
+            cuda.syncthreads()
+            # Then sum warps
+            if tid == 0:
+                for w_id in range(t_per_warp, w_per_block * t_per_warp, t_per_warp):
+                    s_l1_map[0] += s_l1_map[w_id]
+            ###########
+
+            
+            if tid == 0:
+                s_err[shift_y + search_radius, shift_x + search_radius] = s_l1_map[0]
+
+
+    # Now find the minimum error and corresponding shift
+    if tid == 0:
+        err = s_err[0, 0]
+        for i in range(2*search_radius + 1):
+            for j in range(2*search_radius + 1):
+                min = s_err[i, j]
+                if err < min:
+                    min = err
+                    min_shift_y = i - search_radius
+                    min_shift_x = j - search_radius
+
+
+    alignments[tile_y, tile_x, 0] = s_flow[0] + min_shift_x
+    alignments[tile_y, tile_x, 1] = s_flow[1] + min_shift_y
+
+
+def extract_flow_patches(frame_tgt, flow, patch_size, radius):
+    ny, nx, _ = flow.shape
+    p = patch_size
+    r = radius
+    P_search = 2 * r + p
+    frame_tgt = torch.as_tensor(frame_tgt, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+    flow = flow.round().long()
+
+    dx = flow[..., 0]
+    dy = flow[..., 1]
+
+    # compute top-left corner of each patch
+    top = torch.arange(ny, device=frame_tgt.device)[:, None] * p + dy
+    left = torch.arange(nx, device=frame_tgt.device)[None, :] * p + dx
+
+    offsets = torch.arange(P_search, device=frame_tgt.device) - r
+    dy_offsets, dx_offsets = torch.meshgrid(offsets, offsets, indexing='ij')
+
+    y_coords = top[:, :, None, None] + dy_offsets[None, None, :, :]
+    x_coords = left[:, :, None, None] + dx_offsets[None, None, :, :]
+
+    # clamp to image boundaries
+    y_coords = y_coords.clamp(0, frame_tgt.shape[0]-1)
+    x_coords = x_coords.clamp(0, frame_tgt.shape[1]-1)
+
+    # flatten for advanced indexing
+    y_flat = y_coords.reshape(-1)
+    x_flat = x_coords.reshape(-1)
+
+    aligned_patches = frame_tgt[y_flat, x_flat].view(ny, nx, P_search, P_search)
+    return aligned_patches
