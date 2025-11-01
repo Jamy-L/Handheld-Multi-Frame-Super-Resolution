@@ -59,9 +59,8 @@ def init_alignment(ref_img, config):
     grady_pyramid = []
     hessian_pyramid = []
     for i, lvl in enumerate(pyramid):
-        gradx, grady, hessian = init_ica(lvl, config)
-
         ts = tileSizes[len(factors) - i - 1]
+        gradx, grady, hessian = init_ica(lvl, ts, config)
         tiled = lvl.unfold(0, ts, ts).unfold(1, ts, ts)
 
         # Pad the crops with 0 to get size 2*R + 1
@@ -90,11 +89,10 @@ def build_gaussian_pyramid(image, factors=[1, 2, 4, 4], kernel='gaussian'):
 
     return pyramid[::-1]
 
-def init_ica(image, config):
+def init_ica(image, tile_size, config):
     imsize_y, imsize_x = image.shape
-    tile_size = config.block_matching.tuning.tile_size
-    n_patch_y = math.ceil(imsize_y / tile_size)
-    n_patch_x = math.ceil(imsize_x / tile_size)
+    n_patch_y = imsize_y // tile_size
+    n_patch_x = imsize_x // tile_size
 
     gradx = F.conv2d(image[None, None], SOBEL_X, padding='same').squeeze()
     grady = F.conv2d(image[None, None], SOBEL_Y, padding='same').squeeze()
@@ -108,7 +106,6 @@ def init_ica(image, config):
     blockspergrid_x = math.ceil(n_patch_x / threadsperblock[1])
     blockspergrid_y = math.ceil(n_patch_y / threadsperblock[0])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
-
     compute_hessian[blockspergrid, threadsperblock](gradx, grady, tile_size, hessian)
 
     return gradx, grady, hessian
@@ -284,65 +281,134 @@ def align_lvl_block_matching_L1(ref_lvl, moving_lvl, alignments, l, config):
     search_radius = config.block_matching.tuning.search_radii[l]
     ny, nx, _ = alignments.shape
 
-    # Old way a thread per patch
-    # threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
-    # blockspergrid_x = math.ceil(w / threadsperblock[1])
-    # blockspergrid_y = math.ceil(h / threadsperblock[0])
-    # blockspergrid = (blockspergrid_x, blockspergrid_y)
-
-    # cuda_L1_local_search[blockspergrid, threadsperblock](
-    #     ref_lvl, moving_lvl, tile_size, search_radius, alignments)
-    
     # New way, 1 thread per pixel
     threadsperblock = (tile_size, tile_size)
-    blockspergrid_x = math.ceil(nx)
-    blockspergrid_y = math.ceil(ny)
+    if tile_size == 8:
+        raise NotImplementedError("L1 local search kernel for tile size {} not implemented".format(tile_size))
+    elif tile_size == 16:
+        kernel = cuda_L1_local_search16
+        assert 2 * search_radius + 16 <= 32, f"L1 local search kernel only implemented for search windows up to size 32, which is not the case for tile size {tile_size} and search radius {search_radius}."
+    elif tile_size == 32:
+        kernel = cuda_L1_local_search32
+    elif tile_size == 64:
+        kernel = cuda_L1_local_search64
+        threadsperblock = (32, 32)  # because each thread handles 4 pixels
+    else:
+        raise NotImplementedError("L1 local search kernel for tile size {} not implemented".format(tile_size))
+    blockspergrid_x = nx
+    blockspergrid_y = ny
     blockspergrid = (blockspergrid_x, blockspergrid_y)
-    cuda_L1_local_search_new[blockspergrid, threadsperblock](
-        ref_lvl, moving_lvl, tile_size, search_radius, alignments)
+    kernel[blockspergrid, threadsperblock](
+        ref_lvl, moving_lvl, search_radius, alignments)
 
 @cuda.jit
-def cuda_L1_local_search_new(ref, moving, tile_size, search_radius, alignments):
+def cuda_L1_local_search16(ref, moving, search_radius, alignments):
+    TILE_SIZE = 16
     h, w = moving.shape
     x, y = cuda.grid(2)
     tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
     tile_x = cuda.blockIdx.x
     tile_y = cuda.blockIdx.y
-    tid = ty * tile_size + tx
+    tid = ty * TILE_SIZE + tx
     
-    local_flow = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
+    # x and y are by design in the image.
+    
+    s_flow = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
     if tid == 0:
-        local_flow[0] = round(alignments[tile_y, tile_x, 0])
-        local_flow[1] = round(alignments[tile_y, tile_x, 1])
+        s_flow[0] = round(alignments[tile_y, tile_x, 0])
+        s_flow[1] = round(alignments[tile_y, tile_x, 1])
 
     # Load ref patch into shared memory
     s_ref = cuda.shared.array((16, 16), DEFAULT_CUDA_FLOAT_TYPE)
-    s_ref[ty, tx] = ref[y, x] if (0 <= x < w and 0 <= y < h) else 0.0
+    s_ref[ty, tx] = ref[y, x]
+
     cuda.syncthreads()
+    mov_y = y + int(s_flow[1]) - search_radius
+    mov_x = x + int(s_flow[0]) - search_radius
 
-    mov_y = y + int(local_flow[1]) - search_radius
-    mov_x = x + int(local_flow[0]) - search_radius
-
-    s_mov = cuda.shared.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
+    s_mov = cuda.shared.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE) # Only (2*search_radius + TILE_SIZE)**2 used
     s_mov[ty, tx] = moving[mov_y, mov_x] if 0 <= mov_x < w and 0 <= mov_y < h else 0.0
 
     # Load the remaining pixels
     if tx < 2 * search_radius:
-        s_mov[ty, tx + tile_size] = moving[mov_y, mov_x + tile_size] if 0 <= mov_x + tile_size < w and 0 <= mov_y < h else 0.0
+        s_mov[ty, tx + TILE_SIZE] = moving[mov_y, mov_x + TILE_SIZE] if 0 <= mov_x + TILE_SIZE < w and 0 <= mov_y < h else 0.0
     if ty < 2 * search_radius:
-        s_mov[ty + tile_size, tx] = moving[mov_y + tile_size, mov_x] if 0 <= mov_x < w and 0 <= mov_y + tile_size < h else 0.0
+        s_mov[ty + TILE_SIZE, tx] = moving[mov_y + TILE_SIZE, mov_x] if 0 <= mov_x < w and 0 <= mov_y + TILE_SIZE < h else 0.0
     if tx < 2 * search_radius and ty < 2 * search_radius:
-        s_mov[ty + tile_size, tx + tile_size] = moving[mov_y + tile_size, mov_x + tile_size] if 0 <= mov_x + tile_size < w and 0 <= mov_y + tile_size < h else 0.0
+        s_mov[ty + TILE_SIZE, tx + TILE_SIZE] = moving[mov_y + TILE_SIZE, mov_x + TILE_SIZE] if 0 <= mov_x + TILE_SIZE < w and 0 <= mov_y + TILE_SIZE < h else 0.0
     cuda.syncthreads()
 
-    s_l1_map = cuda.shared.array(16 * 16, DEFAULT_CUDA_FLOAT_TYPE)
-    s_err = cuda.shared.array((16, 16), DEFAULT_CUDA_FLOAT_TYPE)
+    s_l1_map = cuda.shared.array(16 * 16, DEFAULT_CUDA_FLOAT_TYPE) # used to accumulate l1 between threads
+    s_err = cuda.shared.array((16, 16), DEFAULT_CUDA_FLOAT_TYPE) # Stores the error map. We only use (2*search_radius + 1)**2 values
     for shift_y in range(-search_radius, search_radius + 1):
         for shift_x in range(-search_radius, search_radius + 1):
             ### Fancy reduce = sum accros threads
             l1_sum = abs(s_ref[ty, tx] - s_mov[ty + shift_y + search_radius, tx + shift_x + search_radius])
             t_per_warp = 32
-            w_per_block = (tile_size * tile_size) // t_per_warp
+            w_per_block = (TILE_SIZE * TILE_SIZE) // t_per_warp
+            offset = t_per_warp // 2
+            # Sum thread among warps first
+            while offset > 0:
+                l1_sum += cuda.shfl_down_sync(0xffffffff, l1_sum, offset)
+                offset //= 2
+            if tid % t_per_warp == 0:
+                s_l1_map[tid] = l1_sum
+            cuda.syncthreads()
+            # Then sum warps
+            if tid == 0:
+                for w_id in range(t_per_warp, w_per_block * t_per_warp, t_per_warp):
+                    s_l1_map[0] += s_l1_map[w_id]
+            ###########
+
+            if tid == 0:
+                s_err[shift_y + search_radius, shift_x + search_radius] = s_l1_map[0]
+    
+    # Now find the minimum error and corresponding shift
+    if tid == 0:
+        err = s_err[0, 0]
+        for i in range(2*search_radius + 1):
+            for j in range(2*search_radius + 1):
+                min = s_err[i, j]
+                if err < min:
+                    min = err
+                    min_shift_y = i - search_radius
+                    min_shift_x = j - search_radius
+
+
+    alignments[tile_y, tile_x, 0] = s_flow[0] + min_shift_x
+    alignments[tile_y, tile_x, 1] = s_flow[1] + min_shift_y
+
+@cuda.jit
+def cuda_L1_local_search32(ref, moving, search_radius, alignments):
+    TILE_SIZE = 32
+    h, w = moving.shape
+    x, y = cuda.grid(2)
+    tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
+    tile_x = cuda.blockIdx.x
+    tile_y = cuda.blockIdx.y
+    tid = ty * TILE_SIZE + tx
+    
+    s_flow = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
+    if tid == 0:
+        s_flow[0] = round(alignments[tile_y, tile_x, 0])
+        s_flow[1] = round(alignments[tile_y, tile_x, 1])
+
+    # Load ref patch into shared memory
+    s_ref = cuda.shared.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
+    s_ref[ty, tx] = ref[y, x] if (0 <= x < w and 0 <= y < h) else 0.0
+    cuda.syncthreads()
+
+    mov_y = y + int(s_flow[1])
+    mov_x = x + int(s_flow[0])
+    
+    s_l1_map = cuda.shared.array(32 * 32, DEFAULT_CUDA_FLOAT_TYPE)
+    s_err = cuda.shared.array((16, 16), DEFAULT_CUDA_FLOAT_TYPE)
+    for shift_y in range(-search_radius, search_radius + 1):
+        for shift_x in range(-search_radius, search_radius + 1):
+            ### Fancy reduce = sum across threads
+            l1_sum = abs(s_ref[ty, tx] - moving[mov_y + shift_y, mov_x + shift_x]) if 0 <= mov_x + shift_x < w and 0 <= mov_y + shift_y < h else 1/0
+            t_per_warp = 32
+            w_per_block = (TILE_SIZE * TILE_SIZE) // t_per_warp
             offset = t_per_warp // 2
             # Sum thread among warps first
             while offset > 0:
@@ -373,62 +439,74 @@ def cuda_L1_local_search_new(ref, moving, tile_size, search_radius, alignments):
                     min_shift_x = j - search_radius
 
 
-    alignments[tile_y, tile_x, 0] = local_flow[0] + min_shift_x
-    alignments[tile_y, tile_x, 1] = local_flow[1] + min_shift_y
+    alignments[tile_y, tile_x, 0] = s_flow[0] + min_shift_x
+    alignments[tile_y, tile_x, 1] = s_flow[1] + min_shift_y
 
 @cuda.jit
-def cuda_L1_local_search(ref, moving, tile_size, search_radius, alignments):
-    n_patchs_y, n_patchs_x, _ = alignments.shape
+def cuda_L1_local_search64(ref, moving, search_radius, alignments):
+    TILE_SIZE = 64
     h, w = moving.shape
-    tile_x, tile_y = cuda.grid(2)
-    if not(0 <= tile_y < n_patchs_y and
-           0 <= tile_x < n_patchs_x):
-        return
-    
-    local_flow = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
-    local_flow[0] = alignments[tile_y, tile_x, 0]
-    local_flow[1] = alignments[tile_y, tile_x, 1]
+    x, y = cuda.grid(2)
+    tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
+    tile_x = cuda.blockIdx.x
+    tile_y = cuda.blockIdx.y
+    tid = ty * cuda.blockDim.x + tx
 
-    # position of the pixel in the top left corner of the patch
-    patch_pos_x = tile_x * tile_size
-    patch_pos_y = tile_y * tile_size
+    s_flow = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
+    if tid == 0:
+        s_flow[0] = round(alignments[tile_y, tile_x, 0])
+        s_flow[1] = round(alignments[tile_y, tile_x, 1])
 
-    # this should be rewritten to allow patchs bigger than 32
-    local_ref = cuda.local.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
-    for i in range(tile_size):
-        for j in range(tile_size):
-            idx = patch_pos_x + j
-            idy = patch_pos_y + i
-            local_ref[i, j] = ref[idy, idx]
+    mov_y = y + int(s_flow[1])
+    mov_x = x + int(s_flow[0])
 
-    min_dist = +1/0 #init as infty
-    min_shift_y = 0
-    min_shift_x = 0
-    # window search
-    for search_shift_y in range(-search_radius, search_radius + 1):
-        for search_shift_x in range(-search_radius, search_radius + 1):
-            # computing dist
-            dist = 0
-            for i in range(tile_size):
-                for j in range(tile_size):
-                    new_idx = patch_pos_x + j + int(local_flow[0]) + search_shift_x
-                    new_idy = patch_pos_y + i + int(local_flow[1]) + search_shift_y
-                    
-                    if (0 <= new_idx < w and
-                        0 <= new_idy < h):
-                        dist += abs(local_ref[i, j] - moving[new_idy, new_idx])
-                    else:
-                        dist = +1/0
-                    
-                    
-            if dist < min_dist:
-                min_dist = dist
-                min_shift_y = search_shift_y
-                min_shift_x = search_shift_x
+    s_l1_map = cuda.shared.array(32 * 32, DEFAULT_CUDA_FLOAT_TYPE)
+    s_err = cuda.shared.array((16, 16), DEFAULT_CUDA_FLOAT_TYPE) # This one in voluntarly large, we use only (2*search_radius + 1)**2 values
+    for shift_y in range(-search_radius, search_radius + 1):
+        for shift_x in range(-search_radius, search_radius + 1):
+            ### Fancy reduce = sum across threads
+            # A presum is made here: a thread manages 4 pixels because the block is 32x32 for a tile size of 64x64
+            l1_sum = abs(ref[y, x] - moving[mov_y + shift_y, mov_x + shift_x]) if 0 <= mov_x + shift_x < w and 0 <= mov_y + shift_y < h else 0.0
+            l1_sum += abs(ref[y, x + 32] - moving[mov_y + shift_y, mov_x + shift_x + 32]) if 0 <= mov_x + shift_x + 32 < w and 0 <= mov_y + shift_y < h else 0.0
+            l1_sum += abs(ref[y + 32, x] - moving[mov_y + shift_y + 32, mov_x + shift_x]) if 0 <= mov_x + shift_x < w and 0 <= mov_y + shift_y + 32 < h else 0.0
+            l1_sum += abs(ref[y + 32, x + 32] - moving[mov_y + shift_y + 32, mov_x + shift_x + 32]) if 0 <= mov_x + shift_x + 32 < w and 0 <= mov_y + shift_y + 32 < h else 0.0
 
-    alignments[tile_y, tile_x, 0] = local_flow[0] + min_shift_x
-    alignments[tile_y, tile_x, 1] = local_flow[1] + min_shift_y
 
+            t_per_warp = 32
+            w_per_block = (32 * 32) // t_per_warp
+            offset = t_per_warp // 2
+            # Sum thread among warps first
+            while offset > 0:
+                l1_sum += cuda.shfl_down_sync(0xffffffff, l1_sum, offset)
+                offset //= 2
+            if tid % t_per_warp == 0:
+                s_l1_map[tid] = l1_sum
+            cuda.syncthreads()
+            # Then sum warps
+            if tid == 0:
+                for w_id in range(t_per_warp, w_per_block * t_per_warp, t_per_warp):
+                    s_l1_map[0] += s_l1_map[w_id]
+            ###########
+
+            
+            if tid == 0:
+                s_err[shift_y + search_radius, shift_x + search_radius] = s_l1_map[0]
+
+
+    # Now find the minimum error and corresponding shift
+    if tid == 0:
+        err = s_err[0, 0]
+        for i in range(2*search_radius + 1):
+            for j in range(2*search_radius + 1):
+                min = s_err[i, j]
+                if err < min:
+                    min = err
+                    min_shift_y = i - search_radius
+                    min_shift_x = j - search_radius
+
+
+    alignments[tile_y, tile_x, 0] = s_flow[0] + min_shift_x
+    alignments[tile_y, tile_x, 1] = s_flow[1] + min_shift_y
 
 
 def extract_flow_patches(frame_tgt, flow, patch_size, radius):
@@ -466,26 +544,14 @@ def extract_flow_patches(frame_tgt, flow, patch_size, radius):
 def align_lvl_ica(ref_img, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl,
                   moving_lvl, alignment, l, config):
     verbose_3 = config.verbose >= 3
-    tile_size = config.block_matching.tuning.tile_size
+    tile_size = config.block_matching.tuning.tile_sizes[l]
 
-    n_patch_y, n_patch_x, _ = alignment.shape
-    h, w = moving_lvl.shape
-    
-    # # Old way, 1 thread/patch
-    # threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
-    
-    # blockspergrid_x = math.ceil(n_patch_x / threadsperblock[1])
-    # blockspergrid_y = math.ceil(n_patch_y / threadsperblock[0])
-    # blockspergrid = (blockspergrid_x, blockspergrid_y)
-    
-    # cuda_ica[blockspergrid, threadsperblock](
-    #     ref_img, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl,
-    #     moving_lvl, alignment, tile_size, config.ica.tuning.n_iter)   
+    np_y, np_x, _ = alignment.shape
 
     # New way, 1 thread/pixel
     threadsperblock = (tile_size, tile_size)
-    blockspergrid_x = math.ceil(n_patch_x)
-    blockspergrid_y = math.ceil(n_patch_y)
+    blockspergrid_x = np_x
+    blockspergrid_y = np_y
     blockspergrid = (blockspergrid_x, blockspergrid_y)
     if tile_size == 8:
         cuda_kernel = ica_kernel_8
@@ -495,36 +561,30 @@ def align_lvl_ica(ref_img, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl,
         cuda_kernel = ica_kernel_32
     elif tile_size == 64:
         cuda_kernel = ica_kernel_64
+        threadsperblock = (32, 32)  # because each thread handles 4 pixels
     else:
         raise NotImplementedError("ICA kernel for tile size {} not implemented".format(tile_size))
     cuda_kernel[blockspergrid, threadsperblock](
         ref_img, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl,
         moving_lvl, alignment, config.ica.tuning.n_iter)
 
-
 @cuda.jit
-def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter):
-    tile_size = 16
-    imsize_y, imsize_x = moving.shape
-    n_patchs_y, n_patchs_x, _ = alignment.shape
+def ica_kernel_8(ref_img, gradx, grady, hessian, moving, alignment, niter):
+    # 1 thread/pixel, 1 block/patch
+    TILE_SIZE = 8
+    h, w = moving.shape
+    np_y, np_x, _ = alignment.shape
     x, y  = cuda.grid(2)
-    patch_idx = cuda.blockIdx.x
-    patch_idy = cuda.blockIdx.y
+    px = cuda.blockIdx.x
+    py = cuda.blockIdx.y
     tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
-    tid = ty * tile_size + tx
-    # NOTE: There can be patches partialy out of frame. In this case, some x,y are out of image bounds.
-    # I strip them out of the sums by setting relevant quantities to 0.
+    tid = ty * TILE_SIZE + tx
 
-    if not(0 <= patch_idy < n_patchs_y and
-        0 <= patch_idx < n_patchs_x):
-        return
-    
-    is_inbound = x < imsize_x and y < imsize_y
-    
-    A00 = hessian[patch_idy, patch_idx, 0, 0]
-    A01 = hessian[patch_idy, patch_idx, 0, 1]
-    A10 = hessian[patch_idy, patch_idx, 1, 0]
-    A11 = hessian[patch_idy, patch_idx, 1, 1]
+    # x,y are inbound by design
+    A00 = hessian[py, px, 0, 0]
+    A01 = hessian[py, px, 0, 1]
+    A10 = hessian[py, px, 1, 0]
+    A11 = hessian[py, px, 1, 1]
 
     det = A00 * A11 - A01 * A10
     if abs(det) < 1e-10: # system is Not solvable
@@ -533,17 +593,16 @@ def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter):
 
     s_alignment = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
     if tid == 0:
-        s_alignment[0] = alignment[patch_idy, patch_idx, 0]
-        s_alignment[1] = alignment[patch_idy, patch_idx, 1]
+        s_alignment[0] = alignment[py, px, 0]
+        s_alignment[1] = alignment[py, px, 1]
 
-    l_grad = cuda.local.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
-    l_grad[0] = gradx[y, x] if is_inbound else 0.0
-    l_grad[1] = grady[y, x] if is_inbound else 0.0
+    l_gradx = gradx[y, x]
+    l_grady = grady[y, x]
 
-    s_B_0 = cuda.shared.array((16 * 16), dtype = DEFAULT_CUDA_FLOAT_TYPE)
-    s_B_1 = cuda.shared.array((16 * 16), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    s_B0 = cuda.shared.array((8 * 8), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    s_B1 = cuda.shared.array((8 * 8), dtype = DEFAULT_CUDA_FLOAT_TYPE)
 
-    ref_c = ref_img[y, x] if is_inbound else 0.0
+    ref_c = ref_img[y, x]
 
     for _ in range(niter):
         cuda.syncthreads()
@@ -556,11 +615,11 @@ def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter):
         frac_y, _ = math.modf(s_alignment[1])
         # Note: in theory frac_x, floor_x = math.modf(x + alignment[0]) in 1 shot. But it is surprisingly faster to compute it from s_alignment this way 
 
-        floor_x = clamp(floor_x, 0, imsize_x - 1)
-        floor_y = clamp(floor_y, 0, imsize_y - 1)
+        floor_x = clamp(floor_x, 0, w - 1)
+        floor_y = clamp(floor_y, 0, h - 1)
 
-        ceil_x = clamp(floor_x + 1, 0, imsize_x - 1)
-        ceil_y = clamp(floor_y + 1, 0, imsize_y - 1)
+        ceil_x = clamp(floor_x + 1, 0, w - 1)
+        ceil_y = clamp(floor_y + 1, 0, h - 1)
 
         m00 = moving[floor_y, floor_x]
         m01 = moving[floor_y, ceil_x]
@@ -571,33 +630,321 @@ def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter):
         lerpx_bot = m10 + (m11 - m10) * frac_x
         mov_interp = lerpx_top + (lerpx_bot - lerpx_top) * frac_y
 
-        
         gradt = mov_interp - ref_c
 
         ##### Reduce within the block (=sum)
         # The reduce methods using shfl on warps is slower than this, idk why
-        s_B_0[tid] = -l_grad[0] * gradt
-        s_B_1[tid] = -l_grad[1] * gradt
-        N = tile_size * tile_size // 2
+        s_B0[tid] = -l_gradx * gradt
+        s_B1[tid] = -l_grady * gradt
+        N = TILE_SIZE * TILE_SIZE // 2
         while N > 0:
             cuda.syncthreads()
             if tid < N:
-                s_B_0[tid] += s_B_0[tid + N]
-                s_B_1[tid] += s_B_1[tid + N]
+                s_B0[tid] += s_B0[tid + N]
+                s_B1[tid] += s_B1[tid + N]
             N = N // 2
         #############
 
         if tid == 0:
-            B0 = s_B_0[0]
-            B1 = s_B_1[0]
+            B0 = s_B0[0]
+            B1 = s_B1[0]
 
             # solve Ax = B
             s_alignment[0] += det_inv * (A11 * B0 - A01 * B1)
             s_alignment[1] += det_inv * (-A10 * B0 + A00 * B1)
 
     if tid == 0:
-        alignment[patch_idy, patch_idx, 0] = s_alignment[0]
-        alignment[patch_idy, patch_idx, 1] = s_alignment[1]
+        alignment[py, px, 0] = s_alignment[0]
+        alignment[py, px, 1] = s_alignment[1]
+
+@cuda.jit
+def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter):
+    # 1 thread/pixel, 1 block/patch
+    TILE_SIZE = 16
+    h, w = moving.shape
+    x, y  = cuda.grid(2)
+    px = cuda.blockIdx.x
+    py = cuda.blockIdx.y
+    tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
+    tid = ty * TILE_SIZE + tx
+
+    # x,y are inbound by design
+    A00 = hessian[py, px, 0, 0]
+    A01 = hessian[py, px, 0, 1]
+    A10 = hessian[py, px, 1, 0]
+    A11 = hessian[py, px, 1, 1]
+
+    det = A00 * A11 - A01 * A10
+    if abs(det) < 1e-10: # system is Not solvable
+        return  # 1 Hessian per block, so all threads exit
+    det_inv = 1.0 / det
+
+    s_alignment = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    if tid == 0:
+        s_alignment[0] = alignment[py, px, 0]
+        s_alignment[1] = alignment[py, px, 1]
+
+    l_gradx = gradx[y, x]
+    l_grady = grady[y, x]
+
+    s_B0 = cuda.shared.array((16 * 16), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    s_B1 = cuda.shared.array((16 * 16), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+
+    ref_c = ref_img[y, x]
+
+    for _ in range(niter):
+        cuda.syncthreads()
+        # Warp I with W(x; p) to compute I(W(x; p))
+
+        ## bilinear interpolation at new_x, new_y
+        floor_x = x + int(s_alignment[0])
+        floor_y = y + int(s_alignment[1])
+        frac_x, _ = math.modf(s_alignment[0])
+        frac_y, _ = math.modf(s_alignment[1])
+        # Note: in theory frac_x, floor_x = math.modf(x + alignment[0]) in 1 shot. But it is surprisingly faster to compute it from s_alignment this way 
+
+        floor_x = clamp(floor_x, 0, w - 1)
+        floor_y = clamp(floor_y, 0, h - 1)
+
+        ceil_x = clamp(floor_x + 1, 0, w - 1)
+        ceil_y = clamp(floor_y + 1, 0, h - 1)
+
+        m00 = moving[floor_y, floor_x]
+        m01 = moving[floor_y, ceil_x]
+        m10 = moving[ceil_y, floor_x]
+        m11 = moving[ceil_y, ceil_x]
+
+        lerpx_top = m00 + (m01 - m00) * frac_x
+        lerpx_bot = m10 + (m11 - m10) * frac_x
+        mov_interp = lerpx_top + (lerpx_bot - lerpx_top) * frac_y
+
+        gradt = mov_interp - ref_c
+
+        ##### Reduce within the block (=sum)
+        # The reduce methods using shfl on warps is slower than this, idk why
+        s_B0[tid] = -l_gradx * gradt
+        s_B1[tid] = -l_grady * gradt
+        N = TILE_SIZE * TILE_SIZE // 2
+        while N > 0:
+            cuda.syncthreads()
+            if tid < N:
+                s_B0[tid] += s_B0[tid + N]
+                s_B1[tid] += s_B1[tid + N]
+            N = N // 2
+        #############
+
+        if tid == 0:
+            B0 = s_B0[0]
+            B1 = s_B1[0]
+
+            # solve Ax = B
+            s_alignment[0] += det_inv * (A11 * B0 - A01 * B1)
+            s_alignment[1] += det_inv * (-A10 * B0 + A00 * B1)
+
+    if tid == 0:
+        alignment[py, px, 0] = s_alignment[0]
+        alignment[py, px, 1] = s_alignment[1]
+
+@cuda.jit
+def ica_kernel_32(ref_img, gradx, grady, hessian, moving, alignment, niter):
+    # 1 thread/pixel, 1 block/patch
+    TILE_SIZE = 32
+    h, w = moving.shape
+    x, y  = cuda.grid(2)
+    px = cuda.blockIdx.x
+    py = cuda.blockIdx.y
+    tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
+    tid = ty * TILE_SIZE + tx
+
+    # x,y are inbound by design
+    A00 = hessian[py, px, 0, 0]
+    A01 = hessian[py, px, 0, 1]
+    A10 = hessian[py, px, 1, 0]
+    A11 = hessian[py, px, 1, 1]
+
+    det = A00 * A11 - A01 * A10
+    if abs(det) < 1e-10: # system is Not solvable
+        return  # 1 Hessian per block, so all threads exit
+    det_inv = 1.0 / det
+
+    s_alignment = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    if tid == 0:
+        s_alignment[0] = alignment[py, px, 0]
+        s_alignment[1] = alignment[py, px, 1]
+
+    l_gradx = gradx[y, x]
+    l_grady = grady[y, x]
+
+    s_B0 = cuda.shared.array((32 * 32), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    s_B1 = cuda.shared.array((32 * 32), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+
+    ref_c = ref_img[y, x]
+
+    for _ in range(niter):
+        cuda.syncthreads()
+        # Warp I with W(x; p) to compute I(W(x; p))
+
+        ## bilinear interpolation at new_x, new_y
+        floor_x = x + int(s_alignment[0])
+        floor_y = y + int(s_alignment[1])
+        frac_x, _ = math.modf(s_alignment[0])
+        frac_y, _ = math.modf(s_alignment[1])
+        # Note: in theory frac_x, floor_x = math.modf(x + alignment[0]) in 1 shot. But it is surprisingly faster to compute it from s_alignment this way 
+
+        floor_x = clamp(floor_x, 0, w - 1)
+        floor_y = clamp(floor_y, 0, h - 1)
+
+        ceil_x = clamp(floor_x + 1, 0, w - 1)
+        ceil_y = clamp(floor_y + 1, 0, h - 1)
+
+        m00 = moving[floor_y, floor_x]
+        m01 = moving[floor_y, ceil_x]
+        m10 = moving[ceil_y, floor_x]
+        m11 = moving[ceil_y, ceil_x]
+
+        lerpx_top = m00 + (m01 - m00) * frac_x
+        lerpx_bot = m10 + (m11 - m10) * frac_x
+        mov_interp = lerpx_top + (lerpx_bot - lerpx_top) * frac_y
+
+        gradt = mov_interp - ref_c
+
+        ##### Reduce within the block (=sum)
+        # The reduce methods using shfl on warps is slower than this, idk why
+        s_B0[tid] = -l_gradx * gradt
+        s_B1[tid] = -l_grady * gradt
+        N = TILE_SIZE * TILE_SIZE // 2
+        while N > 0:
+            cuda.syncthreads()
+            if tid < N:
+                s_B0[tid] += s_B0[tid + N]
+                s_B1[tid] += s_B1[tid + N]
+            N = N // 2
+        #############
+
+        if tid == 0:
+            B0 = s_B0[0]
+            B1 = s_B1[0]
+
+            # solve Ax = B
+            s_alignment[0] += det_inv * (A11 * B0 - A01 * B1)
+            s_alignment[1] += det_inv * (-A10 * B0 + A00 * B1)
+
+    if tid == 0:
+        alignment[py, px, 0] = s_alignment[0]
+        alignment[py, px, 1] = s_alignment[1]
+
+@cuda.jit
+def ica_kernel_64(ref_img, gradx, grady, hessian, moving, alignment, niter):
+    # THis kernel is special, because we cant use 1 threads/pixel. 1 thread accumulates 4 horizontal pixels
+    TILE_SIZE = 64
+    h, w = moving.shape
+    np_y, np_x, _ = alignment.shape
+    px = cuda.blockIdx.x
+    py = cuda.blockIdx.y
+    tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
+    ti = ty * cuda.blockDim.x + tx
+    x = px * TILE_SIZE + tx * 4
+    y = py * TILE_SIZE + ty
+
+    if not(0 <= py < np_y and 0 <= px < np_x):
+        return
+
+    is_inbound = x < w and y < h
+
+    A00 = hessian[py, px, 0, 0]
+    A01 = hessian[py, px, 0, 1]
+    A10 = hessian[py, px, 1, 0]
+    A11 = hessian[py, px, 1, 1]
+
+    det = A00 * A11 - A01 * A10
+    if abs(det) < 1e-10: # system is Not solvable
+        return  # 1 Hessian per block, so all threads exit
+    det_inv = 1.0 / det
+
+    s_alignment = cuda.shared.array(2, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    if ti == 0:
+        s_alignment[0] = alignment[py, px, 0]
+        s_alignment[1] = alignment[py, px, 1]
+
+    # Specific to 64x64: patchs: the threads manages 4 pixels, so we store 4 gradients
+    l_gradx = cuda.local.array(4, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    l_grady = cuda.local.array(4, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    l_gradx[0] = gradx[y, x] if is_inbound else 0.0
+    l_grady[0] = grady[y, x] if is_inbound else 0.0
+    l_gradx[1] = gradx[y, x + 1] if is_inbound and (x + 1) < w else 0.0
+    l_grady[1] = grady[y, x + 1] if is_inbound and (x + 1) < h else 0.0
+    l_gradx[2] = gradx[y, x + 2] if is_inbound and (x + 2) < w else 0.0
+    l_grady[2] = grady[y, x + 2] if is_inbound and (x + 2) < h else 0.0
+    l_gradx[3] = gradx[y, x + 3] if is_inbound and (x + 3) < w else 0.0
+    l_grady[3] = grady[y, x + 3] if is_inbound and (x + 3) < h else 0.0
+                    
+
+    s_B0 = cuda.shared.array((32 * 32), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    s_B1 = cuda.shared.array((32 * 32), dtype = DEFAULT_CUDA_FLOAT_TYPE)
+
+    ref_c = cuda.local.array(4, dtype = DEFAULT_CUDA_FLOAT_TYPE)
+    ref_c[0] = ref_img[y, x] if is_inbound else 0.0
+    ref_c[1] = ref_img[y, x + 1] if is_inbound and (x + 1) < w else 0.0
+    ref_c[2] = ref_img[y, x + 2] if is_inbound and (x + 2) < w else 0.0
+    ref_c[3] = ref_img[y, x + 3] if is_inbound and (x + 3) < w else 0.0  
+
+
+    for _ in range(niter):
+        cuda.syncthreads()
+        # Warp I with W(x; p) to compute I(W(x; p))
+
+        ## bilinear interpolation at new_x, new_y
+        s_B0[ti] = 0.0
+        s_B1[ti] = 0.0
+
+        for j in range(4):
+            floor_x = x + j + int(s_alignment[0])
+            floor_y = y + int(s_alignment[1])
+            frac_x, _ = math.modf(s_alignment[0])
+            frac_y, _ = math.modf(s_alignment[1])
+            # Note: in theory frac_x, floor_x = math.modf(x + alignment[0]) in 1 shot. But it is surprisingly faster to compute it from s_alignment this way 
+
+            floor_x = clamp(floor_x, 0, w - 1)
+            floor_y = clamp(floor_y, 0, h - 1)
+
+            ceil_x = clamp(floor_x + 1, 0, w - 1)
+            ceil_y = clamp(floor_y + 1, 0, h - 1)
+
+            m00 = moving[floor_y, floor_x]
+            m01 = moving[floor_y, ceil_x]
+            m10 = moving[ceil_y, floor_x]
+            m11 = moving[ceil_y, ceil_x]
+
+            lerpx_top = m00 + (m01 - m00) * frac_x
+            lerpx_bot = m10 + (m11 - m10) * frac_x
+            mov_interp = lerpx_top + (lerpx_bot - lerpx_top) * frac_y
+
+            gradt = mov_interp - ref_c[j]
+
+        ##### Reduce within the block (=sum)
+        # The reduce methods using shfl on warps is slower than this, idk why
+            s_B0[ti] += -l_gradx[j] * gradt
+            s_B1[ti] += -l_grady[j] * gradt
+
+        N = 32 * 32 // 2
+        while N > 0:
+            cuda.syncthreads()
+            if ti < N:
+                s_B0[ti] += s_B0[ti + N]
+                s_B1[ti] += s_B1[ti + N]
+            N = N // 2
+        ###########
+        if ti == 0:
+            B0 = s_B0[0]
+            B1 = s_B1[0]
+
+            # solve Ax = B
+            s_alignment[0] += det_inv * (A11 * B0 - A01 * B1)
+            s_alignment[1] += det_inv * (-A10 * B0 + A00 * B1)
+
+    if ti == 0:
+        alignment[py, px, 0] = s_alignment[0]
+        alignment[py, px, 1] = s_alignment[1]
 
 @cuda.jit
 def cuda_ica(ref_img, gradx, grady, hessian, moving, alignment, tile_size, niter):
