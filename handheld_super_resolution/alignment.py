@@ -259,6 +259,7 @@ def align_lvl_block_matching_L2(tyled_pyr_lvl, ref_fft_lvl, moving_lvl, alignmen
     else:
         raise NotImplementedError("Box filter for tile size {} not implemented".format(tileSize))
     
+    # TODO there may be a faster and smarter way than conv2d for this, but this is not the bottleneck so far
     L2_search = torch.nn.functional.conv2d(
         search_area.view(-1, 1, search_size, search_size).square(), box_filter, padding="valid")
     L2_search = L2_search.view(search_area.shape[0], search_area.shape[1], L2_search.shape[-2], L2_search.shape[-1])
@@ -302,56 +303,63 @@ def align_lvl_block_matching_L1(ref_lvl, moving_lvl, alignments, l, config):
 
 @cuda.jit
 def cuda_L1_local_search_new(ref, moving, tile_size, search_radius, alignments):
-    n_patchs_y, n_patchs_x, _ = alignments.shape
+    h, w = moving.shape
     x, y = cuda.grid(2)
     tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
     tile_x = cuda.blockIdx.x
     tile_y = cuda.blockIdx.y
     tid = ty * tile_size + tx
-    is_inbound = (0 <= x < moving.shape[1] and 
-                  0 <= y < moving.shape[0])
     
-    local_flow = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
-    local_flow[0] = alignments[tile_y, tile_x, 0]
-    local_flow[1] = alignments[tile_y, tile_x, 1]
+    local_flow = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
+    if tid == 0:
+        local_flow[0] = round(alignments[tile_y, tile_x, 0])
+        local_flow[1] = round(alignments[tile_y, tile_x, 1])
 
     # Load ref patch into shared memory
     s_ref = cuda.shared.array((16, 16), DEFAULT_CUDA_FLOAT_TYPE)
-    s_ref[ty, tx] = ref[y, x]
+    s_ref[ty, tx] = ref[y, x] if (0 <= x < w and 0 <= y < h) else 0.0
+    cuda.syncthreads()
 
-    s_mov = cuda.shared.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
     mov_y = y + int(local_flow[1]) - search_radius
     mov_x = x + int(local_flow[0]) - search_radius
-    s_mov[ty, tx] = moving[mov_y, mov_x] if is_inbound else 0.0
+
+    s_mov = cuda.shared.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
+    s_mov[ty, tx] = moving[mov_y, mov_x] if 0 <= mov_x < w and 0 <= mov_y < h else 0.0
 
     # Load the remaining pixels
     if tx < 2 * search_radius:
-        s_mov[ty, tx + tile_size] = moving[mov_y, mov_x + tile_size] if is_inbound else 0.0
+        s_mov[ty, tx + tile_size] = moving[mov_y, mov_x + tile_size] if 0 <= mov_x + tile_size < w and 0 <= mov_y < h else 0.0
     if ty < 2 * search_radius:
-        s_mov[ty + tile_size, tx] = moving[mov_y + tile_size, mov_x] if is_inbound else 0.0
+        s_mov[ty + tile_size, tx] = moving[mov_y + tile_size, mov_x] if 0 <= mov_x < w and 0 <= mov_y + tile_size < h else 0.0
     if tx < 2 * search_radius and ty < 2 * search_radius:
-        s_mov[ty + tile_size, tx + tile_size] = moving[mov_y + tile_size, mov_x + tile_size] if is_inbound else 0.0
+        s_mov[ty + tile_size, tx + tile_size] = moving[mov_y + tile_size, mov_x + tile_size] if 0 <= mov_x + tile_size < w and 0 <= mov_y + tile_size < h else 0.0
     cuda.syncthreads()
 
     s_l1_map = cuda.shared.array(16 * 16, DEFAULT_CUDA_FLOAT_TYPE)
     s_err = cuda.shared.array((16, 16), DEFAULT_CUDA_FLOAT_TYPE)
     for shift_y in range(-search_radius, search_radius + 1):
         for shift_x in range(-search_radius, search_radius + 1):
-            error = s_ref[ty, tx] - s_mov[ty + shift_y + search_radius, tx + shift_x + search_radius]
+            ### Fancy reduce = sum accros threads
+            l1_sum = abs(s_ref[ty, tx] - s_mov[ty + shift_y + search_radius, tx + shift_x + search_radius])
+            t_per_warp = 32
+            w_per_block = (tile_size * tile_size) // t_per_warp
+            offset = t_per_warp // 2
+            # Sum thread among warps first
+            while offset > 0:
+                l1_sum += cuda.shfl_down_sync(0xffffffff, l1_sum, offset)
+                offset //= 2
+            if tid % t_per_warp == 0:
+                s_l1_map[tid] = l1_sum
+            cuda.syncthreads()
+            # Then sum warps
+            if tid == 0:
+                for w_id in range(t_per_warp, w_per_block * t_per_warp, t_per_warp):
+                    s_l1_map[0] += s_l1_map[w_id]
+            ###########
 
-            s_l1_map[tid] = error
-
-            # Reduce within the block
-            N = (tile_size * tile_size) // 2
-            while N > 0:
-                cuda.syncthreads()
-                if tid < N:
-                    s_l1_map[tid] += abs(s_l1_map[tid + N])
-                N = N // 2
             
             if tid == 0:
                 s_err[shift_y + search_radius, shift_x + search_radius] = s_l1_map[0]
-            cuda.syncthreads()
     
     # Now find the minimum error and corresponding shift
     if tid == 0:
@@ -566,10 +574,10 @@ def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter):
         
         gradt = mov_interp - ref_c
 
+        ##### Reduce within the block (=sum)
+        # The reduce methods using shfl on warps is slower than this, idk why
         s_B_0[tid] = -l_grad[0] * gradt
         s_B_1[tid] = -l_grad[1] * gradt
-
-        # Reduce within the block (=sum)
         N = tile_size * tile_size // 2
         while N > 0:
             cuda.syncthreads()
@@ -577,6 +585,7 @@ def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter):
                 s_B_0[tid] += s_B_0[tid + N]
                 s_B_1[tid] += s_B_1[tid + N]
             N = N // 2
+        #############
 
         if tid == 0:
             B0 = s_B_0[0]
