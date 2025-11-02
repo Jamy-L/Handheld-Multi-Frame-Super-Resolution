@@ -134,41 +134,39 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, cfa_pat
     else:
         guide_imshape = imshape_y, imshape_x
           
-    if r_on : 
-        r = cuda.device_array(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
+    if not r_on : 
+        temp = np.ones_like(comp_img, DEFAULT_NUMPY_FLOAT_TYPE)
+        return cuda.to_device(temp)
+    r = cuda.device_array(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
+    
+    cuda_std_curve, cuda_diff_curve = noise_model
         
-        cuda_std_curve, cuda_diff_curve = noise_model
-            
-        # Computing guide image
-        if bayer_mode:
-            guide_img = compute_guide_image_(comp_img, cfa_pattern, white_balance)
-        else:
-            guide_img = comp_img.reshape((1, imshape_y, imshape_x)) # Adding 1 channel
-            
+    # Computing guide image
+    if bayer_mode:
+        guide_img = compute_guide_image_(comp_img, cfa_pattern, white_balance)
+    else:
+        guide_img = comp_img.reshape((1, imshape_y, imshape_x)) # Adding 1 channel
+        
 
-        # Computing local stats (before applying optical flow)
-        comp_local_means, _ = compute_local_stats_(guide_img)
-        
-        # Upscale and warp local means
-        comp_local_means = upscale_warp_stats_(comp_local_means, 
-                                               tile_size, flows)
-        
-        # computing d
-        d_p = compute_dist_(ref_local_means, comp_local_means)
-        
-        
-        # leveraging the noise model
-        d_sq, sigma_sq = apply_noise_model_(d_p, ref_local_means, ref_local_stds,
-                                            cuda_std_curve, cuda_diff_curve)
-        
-        # applying flow discontinuity penalty
-        S = compute_s_(flows, Mt, s1, s2)
-        R = robustness_threshold_(d_sq, sigma_sq, S, t, tile_size, bayer_mode)
-        r = local_min_(R)
-        
-    else: 
-        temp = np.ones(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
-        r = cuda.to_device(temp)
+    # Computing local stats (before applying optical flow)
+    comp_local_means, _ = compute_local_stats_(guide_img)
+    
+    # Upscale and warp local means
+    comp_local_means = upscale_warp_stats_(comp_local_means, 
+                                            tile_size, flows)
+    
+    # computing d
+    d_p = compute_dist_(ref_local_means, comp_local_means)
+    
+    
+    # leveraging the noise model
+    d_sq, sigma_sq = apply_noise_model_(d_p, ref_local_means, ref_local_stds,
+                                        cuda_std_curve, cuda_diff_curve)
+    
+    # applying flow discontinuity penalty
+    S = compute_s_(flows, Mt, s1, s2)
+    R = robustness_threshold_(d_sq, sigma_sq, S, t, tile_size, bayer_mode)
+    r = local_min_(R)        
     return r
 
 
