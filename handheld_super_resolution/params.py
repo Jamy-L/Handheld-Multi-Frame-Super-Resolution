@@ -59,13 +59,6 @@ def update_snr_config(config, SNR):
         Ts = 32
     else:
         Ts = 16
-
-    # TODO this could be adressed by reworking the block matching module
-    if Ts > 32:
-        Ts = 32
-        warnings.warn("Warning.... Tile sizes of more than 32 cannot be \
-                      processed by the block matching module at the moment.\
-                      Falling back to Ts=32")
     
     if config.block_matching.tuning.tile_size != "SNR_based":
         assert isinstance(config.block_matching.tuning.tile_size, int), "tile_size should be an integer or 'SNR_based'"
