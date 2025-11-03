@@ -6,6 +6,7 @@ from numba import cuda
 import torch
 
 from .utils import clamp, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
+FLOAT = DEFAULT_NUMPY_FLOAT_TYPE
 
 BOX_FILTER_8 = torch.as_tensor(np.ones((1,1,8,8)), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
 BOX_FILTER_8.requires_grad = False
@@ -91,7 +92,7 @@ def align_lvl_block_matching_L1(ref_lvl, moving_lvl, alignments, l, config):
         kernel = cuda_L1_local_search32
     elif tile_size == 64:
         kernel = cuda_L1_local_search64
-        threadsperblock = (32, 32)  # because each thread handles 4 pixels
+        threadsperblock = (64, 16)  # because each thread handles 4 pixels
     else:
         raise NotImplementedError("L1 local search kernel for tile size {} not implemented".format(tile_size))
     blockspergrid_x = nx
@@ -180,6 +181,7 @@ def cuda_L1_local_search16(ref, moving, search_radius, alignments):
 @cuda.jit
 def cuda_L1_local_search32(ref, moving, search_radius, alignments):
     TILE_SIZE = 32
+    N_THREADS = 32*32
     h, w = moving.shape
     x, y = cuda.grid(2)
     tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
@@ -192,43 +194,50 @@ def cuda_L1_local_search32(ref, moving, search_radius, alignments):
         s_flow[0] = round(alignments[tile_y, tile_x, 0])
         s_flow[1] = round(alignments[tile_y, tile_x, 1])
 
-    # Load ref patch into shared memory
-    s_ref = cuda.shared.array((32, 32), DEFAULT_CUDA_FLOAT_TYPE)
-    s_ref[ty, tx] = ref[y, x] if (0 <= x < w and 0 <= y < h) else 0.0
-    cuda.syncthreads()
+    ref_c = ref[y, x]
 
+    cuda.syncthreads()
     mov_y = y + int(s_flow[1])
     mov_x = x + int(s_flow[0])
+
+    s_mov = cuda.shared.array((48, 48), DEFAULT_CUDA_FLOAT_TYPE) # contains the patch of 32x32 + search_radius padding (maximum 32, because 32 + 2*8 = 48)
+    s_mov[ty, tx] = moving[mov_y - search_radius, mov_x - search_radius] if 0 <= mov_x - search_radius < w and 0 <= mov_y - search_radius < h else FLOAT(0.0)
+    # Load the remaining pixels
+    if tx < 2 * search_radius:
+        s_mov[ty, tx + TILE_SIZE] = moving[mov_y - search_radius, mov_x - search_radius + TILE_SIZE] if 0 <= mov_x - search_radius + TILE_SIZE < w and 0 <= mov_y - search_radius < h else FLOAT(0.0)
+    if ty < 2 * search_radius:
+        s_mov[ty + TILE_SIZE, tx] = moving[mov_y - search_radius + TILE_SIZE, mov_x - search_radius] if 0 <= mov_x - search_radius < w and 0 <= mov_y - search_radius + TILE_SIZE < h else FLOAT(0.0)
+    if tx < 2 * search_radius and ty < 2 * search_radius:
+        s_mov[ty + TILE_SIZE, tx + TILE_SIZE] = moving[mov_y - search_radius + TILE_SIZE, mov_x - search_radius + TILE_SIZE] if 0 <= mov_x - search_radius + TILE_SIZE < w and 0 <= mov_y - search_radius + TILE_SIZE < h else FLOAT(0.0)
+    cuda.syncthreads()
     
-    s_l1_map = cuda.shared.array(32 * 32, DEFAULT_CUDA_FLOAT_TYPE)
+    s_l1_map = cuda.shared.array(N_THREADS, DEFAULT_CUDA_FLOAT_TYPE)
     s_err = cuda.shared.array((16, 16), DEFAULT_CUDA_FLOAT_TYPE)
     for shift_y in range(-search_radius, search_radius + 1):
         for shift_x in range(-search_radius, search_radius + 1):
             ### Fancy reduce = sum across threads
-            l1_sum = abs(s_ref[ty, tx] - moving[mov_y + shift_y, mov_x + shift_x]) if 0 <= mov_x + shift_x < w and 0 <= mov_y + shift_y < h else 1/0
-            t_per_warp = 32
-            w_per_block = (TILE_SIZE * TILE_SIZE) // t_per_warp
-            offset = t_per_warp // 2
+            l1_sum = abs(ref_c - s_mov[ty + shift_y + search_radius, tx + shift_x + search_radius])
+            WARP_SIZE = 32
+            WARPS_PER_BLOCK = N_THREADS // WARP_SIZE
+            offset = WARP_SIZE // 2
             # Sum thread among warps first
             while offset > 0:
                 l1_sum += cuda.shfl_down_sync(0xffffffff, l1_sum, offset)
                 offset //= 2
-            if tid % t_per_warp == 0:
+            if tid % WARP_SIZE == 0:
                 s_l1_map[tid] = l1_sum
             cuda.syncthreads()
             # Then sum warps
             if tid == 0:
-                for w_id in range(t_per_warp, w_per_block * t_per_warp, t_per_warp):
+                for w_id in range(WARP_SIZE, WARPS_PER_BLOCK * WARP_SIZE, WARP_SIZE):
                     s_l1_map[0] += s_l1_map[w_id]
-            ###########
-
             
-            if tid == 0:
                 s_err[shift_y + search_radius, shift_x + search_radius] = s_l1_map[0]
+            ###########
     
     # Now find the minimum error and corresponding shift
     if tid == 0:
-        err = s_err[0, 0]
+        err = FLOAT(float("inf"))
         for i in range(2*search_radius + 1):
             for j in range(2*search_radius + 1):
                 min = s_err[i, j]
@@ -244,58 +253,84 @@ def cuda_L1_local_search32(ref, moving, search_radius, alignments):
 @cuda.jit
 def cuda_L1_local_search64(ref, moving, search_radius, alignments):
     TILE_SIZE = 64
+    N_THREADS = 32*32
     h, w = moving.shape
-    x, y = cuda.grid(2)
     tx, ty = cuda.threadIdx.x, cuda.threadIdx.y
-    tile_x = cuda.blockIdx.x
-    tile_y = cuda.blockIdx.y
+    px = cuda.blockIdx.x
+    py = cuda.blockIdx.y
     tid = ty * cuda.blockDim.x + tx
+    x = px * TILE_SIZE + tx
+    y = py * TILE_SIZE + ty * 4
 
     s_flow = cuda.shared.array(2, DEFAULT_CUDA_FLOAT_TYPE)
     if tid == 0:
-        s_flow[0] = round(alignments[tile_y, tile_x, 0])
-        s_flow[1] = round(alignments[tile_y, tile_x, 1])
+        s_flow[0] = round(alignments[py, px, 0])
+        s_flow[1] = round(alignments[py, px, 1])
+
+    ref_0 = ref[y + 0, x]
+    ref_1 = ref[y + 1, x]
+    ref_2 = ref[y + 2, x]
+    ref_3 = ref[y + 3, x]
+    
     cuda.syncthreads()
 
     mov_y = y + int(s_flow[1])
     mov_x = x + int(s_flow[0])
 
-    s_l1_map = cuda.shared.array(32 * 32, DEFAULT_CUDA_FLOAT_TYPE)
-    s_err = cuda.shared.array((16, 16), DEFAULT_CUDA_FLOAT_TYPE) # This one in voluntarly large, we use only (2*search_radius + 1)**2 values
+    # Move the moving patch with padding is shared memory
+    s_mov = cuda.shared.array((80, 80), DEFAULT_CUDA_FLOAT_TYPE) # contains the patch of 64x64 + search_radius padding (maximum 8, because 64 + 2*8 = 80)
+    s_mov[ty * 4 + 0, tx] = moving[mov_y - search_radius + 0, mov_x - search_radius] if 0 <= mov_x - search_radius < w and 0 <= mov_y - search_radius + 0 < h else FLOAT(0.0)
+    s_mov[ty * 4 + 1, tx] = moving[mov_y - search_radius + 1, mov_x - search_radius] if 0 <= mov_x - search_radius < w and 0 <= mov_y - search_radius + 1 < h else FLOAT(0.0)
+    s_mov[ty * 4 + 2, tx] = moving[mov_y - search_radius + 2, mov_x - search_radius] if 0 <= mov_x - search_radius < w and 0 <= mov_y - search_radius + 2 < h else FLOAT(0.0)
+    s_mov[ty * 4 + 3, tx] = moving[mov_y - search_radius + 3, mov_x - search_radius] if 0 <= mov_x - search_radius < w and 0 <= mov_y - search_radius + 3 < h else FLOAT(0.0)
+    # Load the remaining pixels
+    if tx < 2 * search_radius: # Missing on the right
+        s_mov[ty * 4 + 0, tx + TILE_SIZE] = moving[mov_y - search_radius + 0, mov_x - search_radius + TILE_SIZE] if 0 <= mov_x - search_radius + TILE_SIZE < w and 0 <= mov_y - search_radius + 0 < h else FLOAT(0.0)
+        s_mov[ty * 4 + 1, tx + TILE_SIZE] = moving[mov_y - search_radius + 1, mov_x - search_radius + TILE_SIZE] if 0 <= mov_x - search_radius + TILE_SIZE < w and 0 <= mov_y - search_radius + 1 < h else FLOAT(0.0)
+        s_mov[ty * 4 + 2, tx + TILE_SIZE] = moving[mov_y - search_radius + 2, mov_x - search_radius + TILE_SIZE] if 0 <= mov_x - search_radius + TILE_SIZE < w and 0 <= mov_y - search_radius + 2 < h else FLOAT(0.0)
+        s_mov[ty * 4 + 3, tx + TILE_SIZE] = moving[mov_y - search_radius + 3, mov_x - search_radius + TILE_SIZE] if 0 <= mov_x - search_radius + TILE_SIZE < w and 0 <= mov_y - search_radius + 3 < h else FLOAT(0.0)
+    if ty < 2 * search_radius: # Missing on the bottom assuming that there are enough threads (ty < 16)
+        mov_y_ = py*TILE_SIZE + ty + TILE_SIZE + int(s_flow[1])
+        s_mov[ty + TILE_SIZE, tx] = moving[mov_y_ - search_radius, mov_x - search_radius] if 0 <= mov_x - search_radius < w and 0 <= mov_y_ - search_radius < h else FLOAT(0.0)
+    if tx < 2 * search_radius and ty < 2 * search_radius:
+        mov_y_ = py*TILE_SIZE + ty + TILE_SIZE + int(s_flow[1])
+        s_mov[ty + TILE_SIZE, tx + TILE_SIZE] = moving[mov_y_ - search_radius, mov_x - search_radius + TILE_SIZE] if 0 <= mov_x - search_radius + TILE_SIZE < w and 0 <= mov_y_ - search_radius < h else FLOAT(0.0)
+    cuda.syncthreads()
+
+    s_l1_map = cuda.shared.array(N_THREADS, DEFAULT_CUDA_FLOAT_TYPE) # This 1D array is a buffer to accumulate l1 between threads
+    s_err = cuda.shared.array((16, 16), DEFAULT_CUDA_FLOAT_TYPE) # This one in voluntarly too large, we use only (2*search_radius + 1)**2 values among the 16x16 available
     for shift_y in range(-search_radius, search_radius + 1):
         for shift_x in range(-search_radius, search_radius + 1):
             ### Fancy reduce = sum across threads
             # A presum is made here: a thread manages 4 pixels because the block is 32x32 for a tile size of 64x64
-            l1_sum = abs(ref[y, x] - moving[mov_y + shift_y, mov_x + shift_x]) if 0 <= mov_x + shift_x < w and 0 <= mov_y + shift_y < h else 0.0
-            l1_sum += abs(ref[y, x + 32] - moving[mov_y + shift_y, mov_x + shift_x + 32]) if 0 <= mov_x + shift_x + 32 < w and 0 <= mov_y + shift_y < h else 0.0
-            l1_sum += abs(ref[y + 32, x] - moving[mov_y + shift_y + 32, mov_x + shift_x]) if 0 <= mov_x + shift_x < w and 0 <= mov_y + shift_y + 32 < h else 0.0
-            l1_sum += abs(ref[y + 32, x + 32] - moving[mov_y + shift_y + 32, mov_x + shift_x + 32]) if 0 <= mov_x + shift_x + 32 < w and 0 <= mov_y + shift_y + 32 < h else 0.0
-
-
-            t_per_warp = 32
-            w_per_block = (32 * 32) // t_per_warp
-            offset = t_per_warp // 2
-            # Sum thread among warps first
+            l1_sum  = abs(ref_0 - s_mov[ty * 4 + 0 + search_radius, tx + search_radius])
+            l1_sum += abs(ref_1 - s_mov[ty * 4 + 1 + search_radius, tx + search_radius])
+            l1_sum += abs(ref_2 - s_mov[ty * 4 + 2 + search_radius, tx + search_radius])
+            l1_sum += abs(ref_3 - s_mov[ty * 4 + 3 + search_radius, tx + search_radius])
+            
+            WARP_SIZE = 32 # Hardcoded and hardware based
+            WARPS_PER_BLOCK = N_THREADS // WARP_SIZE # 32x32 is not a mistake, its the hardcoded number of threads we run
+            offset = WARP_SIZE // 2
+            # Sum threads among warps first
             while offset > 0:
                 l1_sum += cuda.shfl_down_sync(0xffffffff, l1_sum, offset)
                 offset //= 2
-            if tid % t_per_warp == 0:
+            if tid % WARP_SIZE == 0:
                 s_l1_map[tid] = l1_sum
             cuda.syncthreads()
-            # Then sum warps
-            if tid == 0:
-                for w_id in range(t_per_warp, w_per_block * t_per_warp, t_per_warp):
-                    s_l1_map[0] += s_l1_map[w_id]
-            ###########
 
-            
+            # Then sum warps using reductions
             if tid == 0:
+                for w_id in range(WARP_SIZE, WARPS_PER_BLOCK * WARP_SIZE, WARP_SIZE):
+                    s_l1_map[0] += s_l1_map[w_id]
+
                 s_err[shift_y + search_radius, shift_x + search_radius] = s_l1_map[0]
+            ###########
 
 
     # Now find the minimum error and corresponding shift
     if tid == 0:
-        err = s_err[0, 0]
+        err = FLOAT(float("inf"))
         for i in range(2*search_radius + 1):
             for j in range(2*search_radius + 1):
                 min = s_err[i, j]
@@ -305,8 +340,8 @@ def cuda_L1_local_search64(ref, moving, search_radius, alignments):
                     min_shift_x = j - search_radius
 
 
-    alignments[tile_y, tile_x, 0] = s_flow[0] + min_shift_x
-    alignments[tile_y, tile_x, 1] = s_flow[1] + min_shift_y
+    alignments[py, px, 0] = s_flow[0] + min_shift_x
+    alignments[py, px, 1] = s_flow[1] + min_shift_y
 
 
 def extract_flow_patches(frame_tgt, flow, patch_size, radius):
