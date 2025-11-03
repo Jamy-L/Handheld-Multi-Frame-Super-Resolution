@@ -17,6 +17,10 @@ SOBEL_X = torch.as_tensor(np.array([[-1,0,1]]), dtype=DEFAULT_TORCH_FLOAT_TYPE, 
 SOBEL_Y.requires_grad = False
 SOBEL_X.requires_grad = False
 
+_ICA_TIMINGS = []
+_BM_TIMINGS = []
+
+
 def init_alignment(ref_img, config):
     h, w = ref_img.shape
 
@@ -133,15 +137,21 @@ def align_lvl(ref_lvl, tyled_pyr_lvl, ref_fft_lvl, ref_gradx_lvl, ref_grady_lvl,
         raise ValueError("Unknown block matching metric {}".format(config.block_matching.metric))
 
     if verbose:
+        t0 = currentTime
         cuda.synchronize()
         currentTime = getTime(currentTime, ' -- Block matching level {}'.format(l))
+        if l == 0:
+            _BM_TIMINGS.append(currentTime - t0)
 
     align_lvl_ica(ref_lvl, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl,
                   moving_lvl, alignments, l, config)
     
     if verbose:
+        t0 = currentTime
         cuda.synchronize()
         currentTime = getTime(currentTime, ' -- ICA level {}'.format(l))
+        if l == 0:
+            _ICA_TIMINGS.append(currentTime - t0)
 
 
 def upscale_lvl(alignments, npatchs, l, config):
