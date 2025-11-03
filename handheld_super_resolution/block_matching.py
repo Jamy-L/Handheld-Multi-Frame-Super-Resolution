@@ -255,6 +255,7 @@ def cuda_L1_local_search64(ref, moving, search_radius, alignments):
     if tid == 0:
         s_flow[0] = round(alignments[tile_y, tile_x, 0])
         s_flow[1] = round(alignments[tile_y, tile_x, 1])
+    cuda.syncthreads()
 
     mov_y = y + int(s_flow[1])
     mov_x = x + int(s_flow[0])
