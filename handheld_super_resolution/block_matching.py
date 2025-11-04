@@ -93,6 +93,7 @@ def align_lvl_block_matching_L1(ref_lvl, moving_lvl, alignments, l, config):
     elif tile_size == 64:
         kernel = cuda_L1_local_search64
         threadsperblock = (64, 16)  # because each thread handles 4 pixels
+        assert 2 * search_radius <= 16, f"Cant handle search radius {search_radius} with tile size {tile_size} in L1 local search kernel."
     else:
         raise NotImplementedError("L1 local search kernel for tile size {} not implemented".format(tile_size))
     blockspergrid_x = nx
