@@ -97,7 +97,6 @@ def main(ref_img, comp_imgs, config):
     cuda.synchronize()
     cuda_std_curve = cuda.to_device(np.array(config.noise_model.std_curve))
     cuda_diff_curve = cuda.to_device(np.array(config.noise_model.diff_curve))
-    from .alignment import _ICA_TIMINGS, _BM_TIMINGS
     
     if verbose :
         print("\nProcessing reference image ---------\n")
@@ -129,11 +128,9 @@ def main(ref_img, comp_imgs, config):
         getTime(t1, '\nRef Img processed (Total)')
 
 
+    # comp_imgs = comp_imgs[:1]
     n_images = comp_imgs.shape[0]
-    REPEAT = 4 # repeat compute for better timing stats
-    n_images *= REPEAT
     for im_id in range(n_images):
-        im_id = im_id % (n_images//REPEAT)
         if verbose :
             cuda.synchronize()
             print("\nProcessing image {} ---------\n".format(im_id+1))
@@ -174,43 +171,7 @@ def main(ref_img, comp_imgs, config):
         if debug_mode : 
             debug_dict['robustness'].append(cuda_robustness.copy_to_host())
         stream.synchronize()
-    #########
-    from scipy import stats
-    _ICA_TIMINGS.pop(0)
-    _BM_TIMINGS.pop(0)
-    # Compute statistics
-    n_ica = len(_ICA_TIMINGS)
-    n_bm = len(_BM_TIMINGS)
-
-    mean_ica = np.mean(_ICA_TIMINGS)
-    mean_bm = np.mean(_BM_TIMINGS)
-
-    # Use sample standard deviation (ddof=1)
-    std_ica = np.std(_ICA_TIMINGS, ddof=1)
-    std_bm = np.std(_BM_TIMINGS, ddof=1)
-
-    # Compute 95% confidence intervals for the mean using t-distribution
-    conf_level = 0.95
-    alpha = 1 - conf_level
-
-    t_ica = stats.t.ppf(1 - alpha/2, df=n_ica - 1)
-    t_bm = stats.t.ppf(1 - alpha/2, df=n_bm - 1)
-
-    ci_ica = t_ica * std_ica / np.sqrt(n_ica)
-    ci_bm = t_bm * std_bm / np.sqrt(n_bm)
-
-    # Convert to milliseconds
-    mean_ica_ms = mean_ica * 1000.0
-    mean_bm_ms = mean_bm * 1000.0
-    ci_ica_ms = ci_ica * 1000.0
-    ci_bm_ms = ci_bm * 1000.0
-
-    # Print results
-    print('\n\nAlignment timings statistics:')
-    print(f'ICA : mean time per frame : {mean_ica_ms:.2f} ± {ci_ica_ms:.2f} ms (95% CI)')
-    print(f'BM  : mean time per frame : {mean_bm_ms:.2f} ± {ci_bm_ms:.2f} ms (95% CI)')
-    # print(f'Total alignment time per frame : {mean_ica_ms + mean_bm_ms:.2f} ms\n\n')
-    breakpoint()
+    
     #### Ref kernel estimation
     cuda_kernels = estimate_kernels_(cuda_ref_img, config)
     
