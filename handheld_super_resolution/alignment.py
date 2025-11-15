@@ -102,6 +102,9 @@ def align(ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessi
         ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian, moving_pyramid)):
 
         list_id = len(ref_pyramid) - l - 1
+        # PyTorch uses per-thread default streams; Numba uses the CUDA default stream (presumably)
+        # Without this barrier, PyTorch could read 'alignment' before the kernel writes finish.
+        cuda.synchronize()
         if alignments is None:
             alignments = torch.zeros((*ref_tiled_fft_lvl.shape[:2], 2), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
         else:
