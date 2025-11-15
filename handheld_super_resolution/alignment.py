@@ -102,6 +102,9 @@ def align(ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessi
         ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian, moving_pyramid)):
 
         list_id = len(ref_pyramid) - l - 1
+        # PyTorch uses per-thread default streams; Numba uses the CUDA default stream (presumably)
+        # Without this barrier, PyTorch could read 'alignment' before the kernel writes finish.
+        cuda.synchronize()
         if alignments is None:
             alignments = torch.zeros((*ref_tiled_fft_lvl.shape[:2], 2), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
         else:
@@ -152,9 +155,9 @@ def upscale_lvl(alignments, npatchs, l, config):
 
     repeat_factor = upsampling_factor // (new_tile_size // prev_tile_size)
 
-    upsampled_alignments = torch.repeat_interleave(
-        torch.repeat_interleave(
-            alignments, repeat_factor, dim=0), repeat_factor, dim=1)
+    upsampled_alignments = F.interpolate(
+        alignments.permute(2, 0, 1)[None], scale_factor=repeat_factor,
+        mode=config.block_matching.tuning.flow_upscale_mode)[0].permute(1, 2, 0)
     upsampled_alignments *= upsampling_factor
 
     # Add a potential tile with 0 flow on the bottom or the right

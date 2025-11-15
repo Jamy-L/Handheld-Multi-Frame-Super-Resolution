@@ -202,6 +202,7 @@ block_matching:
     tile_size_factors: [1, 1, 1, 0.5] # How the tile size shape evloves at each scale
     search_radii: [1, 4, 4, 4] # The search radius for block matching
     metrics: ['L1', 'L2', 'L2', 'L2'] # The metric to minimize during search at each scale
+    flow_upscale_mode: nearest  # How to upscale the optical flow when the number of patches increases between two pyramid scales. nearest, bilinear, bicubic
 
 ica:
   tuning:
@@ -268,4 +269,3 @@ The default floating number representation and the default threads per block num
 
 ### Known Issues
 - The threshold functions and all the hyper-parameters mentionned in the IPOL article have only been partially tweaked : better results are expected with an in depth optimization.
-- For images whose estimated SNR is under 14, the tile size should be 64 but the block matching module cannot handle that.

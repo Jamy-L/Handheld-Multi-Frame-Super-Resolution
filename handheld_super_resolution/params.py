@@ -49,6 +49,12 @@ def sanitize_config(config, imshape):
                                  imshape, lvl,
                                  (lvl_imshape_y, lvl_imshape_x),
                                  ts))
+
+    # Esnure that the flow upscaling mode is valid
+    valid_upsample_modes = ['nearest', 'bilinear', 'bicubic']
+    assert config.block_matching.tuning.flow_upscale_mode in valid_upsample_modes, \
+        f"Unknown flow upscaling mode {config.block_matching.tuning.flow_upscale_mode}, " \
+        f"should be one of {valid_upsample_modes}."
     
 def update_snr_config(config, SNR):
     SNR = np.clip(SNR, 6, 30)
@@ -74,15 +80,15 @@ def update_snr_config(config, SNR):
     else:
         assert isinstance(config.merging.tuning.k_detail, float), "k_detail should be a float or 'SNR_based'"
     if config.merging.tuning.k_denoise == "SNR_based":
-        config.merging.tuning.k_denoise = lerp(SNR, [6, 30], [3.0, 5.0])
+        config.merging.tuning.k_denoise = lerp(SNR, [6, 30], [5.0, 3.0])
     else:
         assert isinstance(config.merging.tuning.k_denoise, float), "k_denoise should be a float or 'SNR_based'"
     if config.merging.tuning.D_th == "SNR_based":
-        config.merging.tuning.D_th = lerp(SNR, [6, 30], [0.71, 0.81])
+        config.merging.tuning.D_th = lerp(SNR, [6, 30], [0.81, 0.71])
     else:
         assert isinstance(config.merging.tuning.D_th, float), "D_th should be a float or 'SNR_based'"
     if config.merging.tuning.D_tr == "SNR_based":
-        config.merging.tuning.D_tr = lerp(SNR, [6, 30], [1, 1.24])
+        config.merging.tuning.D_tr = lerp(SNR, [6, 30], [1.24, 1])
     else:
         assert isinstance(config.merging.tuning.D_tr, float), "D_tr should be a float or 'SNR_based'"
 
