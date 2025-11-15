@@ -15,6 +15,7 @@ block_matching:
     tile_size_factors: [1, 1, 1, 0.5]
     search_radii: [1, 4, 4, 4]
     metrics: ['L1', 'L2', 'L2', 'L2']
+    flow_upscale_mode: nearest  # options: nearest, bilinear, bicubic
 ica:
   tuning:
     n_iter: 3

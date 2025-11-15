@@ -49,6 +49,12 @@ def sanitize_config(config, imshape):
                                  imshape, lvl,
                                  (lvl_imshape_y, lvl_imshape_x),
                                  ts))
+
+    # Esnure that the flow upscaling mode is valid
+    valid_upsample_modes = ['nearest', 'bilinear', 'bicubic']
+    assert config.block_matching.tuning.flow_upscale_mode in valid_upsample_modes, \
+        f"Unknown flow upscaling mode {config.block_matching.tuning.flow_upscale_mode}, " \
+        f"should be one of {valid_upsample_modes}."
     
 def update_snr_config(config, SNR):
     SNR = np.clip(SNR, 6, 30)

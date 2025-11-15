@@ -155,9 +155,9 @@ def upscale_lvl(alignments, npatchs, l, config):
 
     repeat_factor = upsampling_factor // (new_tile_size // prev_tile_size)
 
-    upsampled_alignments = torch.repeat_interleave(
-        torch.repeat_interleave(
-            alignments, repeat_factor, dim=0), repeat_factor, dim=1)
+    upsampled_alignments = F.interpolate(
+        alignments.permute(2, 0, 1)[None], scale_factor=repeat_factor,
+        mode=config.block_matching.tuning.flow_upscale_mode)[0].permute(1, 2, 0)
     upsampled_alignments *= upsampling_factor
 
     # Add a potential tile with 0 flow on the bottom or the right
