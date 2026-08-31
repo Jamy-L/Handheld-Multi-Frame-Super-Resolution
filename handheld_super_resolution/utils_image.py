@@ -290,13 +290,13 @@ def cfa_to_rggb(x: np.ndarray, source_cfa: np.ndarray):
         return np.flip(x, axis=(-1, -2))
     
     # GBRG
-    if np.array_equal(source_cfa, np.array([[2, 1], [1, 0]])):
+    if np.array_equal(source_cfa, np.array([[1, 0], [2, 1]])):
         return np.flip(x, axis=-1)
     # GRGB
     if np.array_equal(source_cfa, np.array([[1, 2], [0, 1]])):
         return np.flip(x, axis=-2)
     
-    raise NotImplementedError(f"Unsupported CFA pattern {x}")
+    raise NotImplementedError(f"Unsupported CFA pattern {source_cfa}")
 
 def rggb_to_cfa(x: np.ndarray, target_cfa: np.ndarray):
     # the function is its own inverse...
