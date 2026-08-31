@@ -31,7 +31,7 @@ def parse_args(args=None):
     return tyro.cli(CliConfig, args=args)
 
 
-def print_parameters(config):
+def print_parameters(config: Config):
     print("\nParameters:\n")
     print("  Upscaling factor:       {}\n".format(config.scale))
 
@@ -50,9 +50,6 @@ def print_parameters(config):
         print("  s1:                     {:.2f}".format(config.robustness.s1))
         print("  s2:                     {:.2f}".format(config.robustness.s2))
         print("  Mt:                     {:.2f}".format(config.robustness.Mt))
-        denoisers = config.accumulated_robustness_denoiser
-        if any([denoisers.median.enabled, denoisers.gauss.enabled, denoisers.merge.enabled]):
-            print("  Robustness denoising:   enabled")
     else:
         print("\n  Robustness:             disabled")
 

@@ -35,7 +35,7 @@ from .robustness import init_robustness, compute_robustness
 from .utils_dng import load_dng_burst
 from .fast_monte_carlo import run_fast_MC
 from .kernels import estimate_kernels
-from .merge import merge, merge_ref
+from .merge import merge
 from . import raw2rgb
 
 NOISE_MODEL_PATH = Path(os.path.dirname(__file__)).parent / 'data' 
@@ -78,7 +78,6 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
     compute_robustness_ = timer(compute_robustness, verbose_2, '\nEstimating robustness', 'Robustness estimated (Total)')
     estimate_kernels_ = timer(estimate_kernels, verbose_2, '\nEstimating kernels', 'Kernels estimated (Total)')
     merge_ = timer(merge, verbose_2, '\nAccumulating Image', 'Image accumulated (Total)')
-    merge_ref_ = timer(merge_ref, verbose_2, '\nAccumulating ref Img', 'Ref Img accumulated (Total)')    
     divide_ = timer(divide, verbose_2, end_s='\n------------------------\nImage normalized (Total)')
     init_alignment_ = timer(init_alignment, verbose_2, '\nInitializing alignment', 'Alignment initialized (Total)')
     align_ = timer(align, verbose_2, '\nBeginning alignment', 'Image aligned (Total)')
@@ -87,8 +86,6 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
     debug_mode = config.debug
     debug_dict = {"robustness":[],
                   "flow":[]}
-
-    accumulate_r = config.accumulated_robustness_denoiser.enabled or config.robustness.save_mask
 
     assert config.exif is not None, "Exif data missing from conf"
     #### Moving to GPU
@@ -122,7 +119,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
 
     
     accumulated_r = None
-    if accumulate_r and config.robustness.enabled:
+    if config.robustness.save_mask and config.robustness.enabled:
         assert ref_local_means
         accumulated_r = cuda.to_device(np.zeros(ref_local_means.shape[1:]))
 
@@ -203,7 +200,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
         s = '\nTotal ellapsed time : '
         print(s, ' ' * (50 - len(s)), ': ', round((time.perf_counter() - t1), 2), 'seconds')
     
-    if accumulate_r :
+    if config.robustness.save_mask and config.robustness.enabled:
         debug_dict['accumulated robustness'] = accumulated_r
         
     return num, debug_dict
@@ -294,13 +291,6 @@ def process(burst_path: Union[Path, str], config: Config):
 
     config.noise_model.std_curve = std_curve.tolist()
     config.noise_model.diff_curve = diff_curve.tolist()
-
-    if any([x.enabled for x in [config.accumulated_robustness_denoiser.median,
-                                config.accumulated_robustness_denoiser.gauss,
-                                config.accumulated_robustness_denoiser.merge]]):
-        config.accumulated_robustness_denoiser.enabled = True
-    else:
-        config.accumulated_robustness_denoiser.enabled = False
     
     
     #### Running the handheld pipeline
