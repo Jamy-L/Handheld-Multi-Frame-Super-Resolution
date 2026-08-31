@@ -20,14 +20,14 @@ import warnings
 
 from pathlib import Path
 import numpy as np
-from omegaconf import OmegaConf
 from numba import cuda
 import rawpy
 
 from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame_count_denoising_median, apply_orientation
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso, timer
 from .alignment import align, init_alignment
-from .params import sanitize_config, update_snr_config
+from .config import Config, ExifConfig
+from .params import runtime_config, sanitize_config, update_snr_config
 from .robustness import init_robustness, compute_robustness
 from .utils_dng import load_dng_burst
 from .fast_monte_carlo import run_fast_MC
@@ -50,7 +50,7 @@ def main(ref_img, comp_imgs, config):
     comp_imgs : Array[N-1, imshape_y, imshape_x]
         Remaining frames of the burst J_2, ..., J_N
         
-    config : OmegaConf object
+    config : Config
         parameters.
 
     Returns
@@ -200,7 +200,7 @@ def main(ref_img, comp_imgs, config):
     return num, debug_dict
 
 
-def process(burst_path, config):
+def process(burst_path, config: Config):
     """
     Processes the burst
 
@@ -208,7 +208,7 @@ def process(burst_path, config):
     ----------
     burst_path : str or Path
         Path of the folder where the .dng burst is located
-    config : OmegaConf object
+    config : Config
         parameters.
 
     Returns
@@ -217,6 +217,8 @@ def process(burst_path, config):
         The processed image
 
     """
+    config = runtime_config(config)
+
     currentTime, verbose_1, verbose_2 = (time.perf_counter(),
                                          config.verbose >= 1,
                                          config.verbose >= 2)
@@ -224,7 +226,7 @@ def process(burst_path, config):
     # reading image stack
     ref_raw, raw_comp, ISO, tags, CFA, xyz2cam, white_balance, ref_path = load_dng_burst(burst_path)
     
-    if config.noise_model.get("alpha", None) is not None:
+    if config.noise_model.alpha is not None:
         # User provided custom values.
         print("Using user provided alpha and beta values")
         alpha = config.noise_model.alpha
@@ -236,10 +238,8 @@ def process(burst_path, config):
     else:
         alpha = sum([x[0] for x in tags['Image Tag 0xC761'].values[::2]])/3
         beta = sum([x[0] for x in tags['Image Tag 0xC761'].values[1::2]])/3
-    config.noise_model.update({
-        "alpha": alpha,
-        "beta": beta
-        })
+    config.noise_model.alpha = alpha
+    config.noise_model.beta = beta
     #### Packing noise model related to picture ISO
     # curve_iso = round_iso(ISO) # Rounds non standart ISO to regular ISO (100, 200, 400, ...)
     # std_noise_model_label = 'noise_model_std_ISO_{}'.format(curve_iso)
@@ -277,16 +277,14 @@ def process(burst_path, config):
     sanitize_config(config, ref_raw.shape)
     
 
-    config.exif = OmegaConf.create({
-        "cfa_pattern": CFA.tolist(), # omegaconf doesnt like numpy...
-        "iso": ISO,
-        "white_balance": white_balance,
-        })
+    config.exif = ExifConfig(
+        cfa_pattern=CFA.tolist(),
+        iso=ISO,
+        white_balance=list(white_balance),
+    )
 
-    config.noise_model.update({
-        "std_curve": std_curve.tolist(),
-        "diff_curve": diff_curve.tolist(),
-        })
+    config.noise_model.std_curve = std_curve.tolist()
+    config.noise_model.diff_curve = diff_curve.tolist()
 
     if any([x.enabled for x in [config.accumulated_robustness_denoiser.median,
                                 config.accumulated_robustness_denoiser.gauss,

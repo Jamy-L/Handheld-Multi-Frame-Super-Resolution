@@ -39,7 +39,7 @@ def estimate_kernels(img, config):
         Raw image J_n
     options : dict
         options
-    config : OmegaConf object
+    config : Config
         parameters.
 
     Returns

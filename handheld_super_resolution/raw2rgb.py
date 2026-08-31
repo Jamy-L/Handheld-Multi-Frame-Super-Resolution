@@ -227,15 +227,9 @@ def postprocess(raw, img=None, do_color_correction=True, do_tonemapping=True,
             img = np.clip(img, 0.0, 1.0)
         ## Sharpening
         if sharpening_config is not None and sharpening_config.enabled:
-            if "radius" in sharpening_config and "amount" in sharpening_config:
-                img = filters.unsharp_mask(img, radius=sharpening_config.radius,
-                                           amount=sharpening_config.amount,
-                                           channel_axis=2, preserve_range=True)
-            else:
-                warnings.warn('Sharpening config is missing radius or amount parameter, using default values.')
-                img = filters.unsharp_mask(img, radius=3,
-                                           amount=0.5,
-                                           channel_axis=2, preserve_range=True)
+            img = filters.unsharp_mask(img, radius=sharpening_config.radius,
+                                       amount=sharpening_config.amount,
+                                       channel_axis=2, preserve_range=True)
         ## Devignette
         if do_devignette:
             img = devignette(img)

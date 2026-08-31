@@ -1,0 +1,155 @@
+"""Typed configuration schema for handheld super-resolution."""
+
+from dataclasses import dataclass, field
+from typing import List, Literal, Optional, Union
+
+import tyro
+
+
+SNR_BASED = "SNR_based"
+SNRBasedFloat = Union[float, Literal["SNR_based"]]
+TileSize = Union[int, Literal["SNR_based"]]
+
+
+@dataclass
+class NoiseModelConfig:
+    """Sensor noise model. Values are read from DNG metadata when omitted."""
+
+    alpha: Optional[float] = None
+    beta: Optional[float] = None
+    std_curve: tyro.conf.Suppress[List[float]] = field(default_factory=list, init=False, repr=False)
+    diff_curve: tyro.conf.Suppress[List[float]] = field(default_factory=list, init=False, repr=False)
+
+
+@dataclass
+class BlockMatchingTuningConfig:
+    factors: List[int] = field(default_factory=lambda: [1, 2, 4, 4])
+    tile_size: TileSize = SNR_BASED
+    tile_size_factors: List[float] = field(default_factory=lambda: [1, 1, 1, 0.5])
+    search_radii: List[int] = field(default_factory=lambda: [1, 4, 4, 4])
+    metrics: List[Literal["L1", "L2"]] = field(default_factory=lambda: ["L1", "L2", "L2", "L2"])
+    flow_upscale_mode: Literal["nearest", "bilinear", "bicubic"] = "nearest"
+    tile_sizes: tyro.conf.Suppress[List[int]] = field(default_factory=list, init=False)
+
+
+@dataclass
+class BlockMatchingConfig:
+    tuning: BlockMatchingTuningConfig = field(default_factory=BlockMatchingTuningConfig)
+
+
+@dataclass
+class ICATuningConfig:
+    n_iter: int = 3
+    sigma_blur: float = 0
+
+
+@dataclass
+class ICAConfig:
+    tuning: ICATuningConfig = field(default_factory=ICATuningConfig)
+
+
+@dataclass
+class RobustnessTuningConfig:
+    t: float = 0.12
+    s1: float = 2
+    s2: float = 12
+    Mt: float = 0.8
+
+
+@dataclass
+class RobustnessConfig:
+    enabled: bool = True
+    save_mask: bool = True
+    tuning: RobustnessTuningConfig = field(default_factory=RobustnessTuningConfig)
+
+
+@dataclass
+class MergingTuningConfig:
+    k_detail: SNRBasedFloat = SNR_BASED
+    k_denoise: SNRBasedFloat = SNR_BASED
+    D_th: SNRBasedFloat = SNR_BASED
+    D_tr: SNRBasedFloat = SNR_BASED
+    k_stretch: float = 4
+    k_shrink: float = 2
+
+
+@dataclass
+class MergingConfig:
+    kernel: Literal["steerable", "iso"] = "steerable"
+    selection_law: Literal["hard_threshold", "linear"] = "linear"
+    tuning: MergingTuningConfig = field(default_factory=MergingTuningConfig)
+
+
+@dataclass
+class SharpeningConfig:
+    enabled: bool = True
+    amount: float = 1.5
+    radius: float = 3
+
+
+@dataclass
+class PostprocessingConfig:
+    enabled: bool = True
+    do_color_correction: bool = False
+    do_gamma_correction: bool = True
+    do_tonemapping: bool = False
+    sharpening: SharpeningConfig = field(default_factory=SharpeningConfig)
+    do_devignetting: bool = False
+
+
+@dataclass
+class MedianDenoiserConfig:
+    enabled: bool = False
+    radius_max: int = 3
+    max_frame_count: int = 8
+
+
+@dataclass
+class GaussDenoiserConfig:
+    enabled: bool = False
+    sigma_max: float = 1.5
+    max_frame_count: int = 8
+
+
+@dataclass
+class MergeDenoiserConfig:
+    enabled: bool = False
+    rad_max: int = 2
+    max_multiplier: float = 8
+    max_frame_count: int = 2
+
+
+@dataclass
+class AccumulatedRobustnessDenoiserConfig:
+    median: MedianDenoiserConfig = field(default_factory=MedianDenoiserConfig)
+    gauss: GaussDenoiserConfig = field(default_factory=GaussDenoiserConfig)
+    merge: MergeDenoiserConfig = field(default_factory=MergeDenoiserConfig)
+    enabled: tyro.conf.Suppress[bool] = field(default=False, init=False)
+
+
+@dataclass
+class ExifConfig:
+    cfa_pattern: List[List[int]]
+    iso: float
+    white_balance: List[float]
+
+
+@dataclass
+class Config:
+    """Configuration for the handheld multi-frame super-resolution pipeline."""
+
+    scale: float = 1
+    mode: Literal["bayer", "grey"] = "bayer"
+    debug: bool = False
+    verbose: int = 1
+    grey_method: Literal["FFT"] = "FFT"
+    noise_model: NoiseModelConfig = field(default_factory=NoiseModelConfig)
+    block_matching: BlockMatchingConfig = field(default_factory=BlockMatchingConfig)
+    ica: ICAConfig = field(default_factory=ICAConfig)
+    robustness: RobustnessConfig = field(default_factory=RobustnessConfig)
+    merging: MergingConfig = field(default_factory=MergingConfig)
+    postprocessing: PostprocessingConfig = field(default_factory=PostprocessingConfig)
+    accumulated_robustness_denoiser: AccumulatedRobustnessDenoiserConfig = field(
+        default_factory=AccumulatedRobustnessDenoiserConfig
+    )
+    exif: tyro.conf.Suppress[Optional[ExifConfig]] = field(default=None, init=False, repr=False)

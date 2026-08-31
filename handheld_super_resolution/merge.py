@@ -36,7 +36,7 @@ def merge_ref(ref_img, kernels, num, den, cfa_pattern, config, acc_rob=None):
         Numerator of the accumulator
     den : device Array[s*imshape_y, s*imshape_x, c]
         Denominator of the accumulator
-    config : OmegaConf object
+    config : Config
         parameters.
     acc_rob : [imshape_y, imshape_x], optional
         accumulated robustness mask. The default is None.
@@ -255,7 +255,7 @@ def merge(comp_img, alignments, covs, r, num, den, cfa_pattern, config):
     den : device Array[s*imshape_y, s*imshape_x, c]
         Denominator of the accumulator
         
-    config : OmegaConf object
+    config : Config
         parameters.
 
     Returns

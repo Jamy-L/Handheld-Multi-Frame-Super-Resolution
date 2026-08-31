@@ -83,7 +83,7 @@ def load_dng_burst(burst_path):
 
     #### Read dng as numpy arrays
     # Get the list of raw images in the burst path
-    raw_path_list = glob.glob(os.path.join(burst_path.as_posix(), '*.dng'))
+    raw_path_list = sorted(glob.glob(os.path.join(burst_path.as_posix(), '*.dng')))
     assert len(raw_path_list) != 0, 'At least one raw .dng file must be present in the burst folder.'
     # Read the raw bayer data from the DNG files
     for index, raw_path in enumerate(raw_path_list):

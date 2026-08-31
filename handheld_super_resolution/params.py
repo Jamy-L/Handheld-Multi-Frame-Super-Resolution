@@ -1,5 +1,16 @@
-import warnings
+from copy import deepcopy
+
 import numpy as np
+
+from .config import Config
+
+
+def runtime_config(config):
+    """Return a mutable runtime copy, leaving the caller's config reusable."""
+    if not isinstance(config, Config):
+        raise TypeError("config must be an instance of handheld_super_resolution.config.Config")
+    return deepcopy(config)
+
 
 def sanitize_config(config, imshape):
     if config.mode == "grey" and config.grey_method != "FFT":

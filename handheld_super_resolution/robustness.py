@@ -33,7 +33,7 @@ def init_robustness(ref_img, cfa_pattern, white_balance, config):
         Bayer pattern
     white_balance : device Array[3]
         White balance gains
-    config : OmegaConf object
+    config : Config
         parameters. 
 
     Returns
@@ -96,7 +96,7 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, cfa_pat
         Bayer pattern
     white_balance : device Array[3]
         White balance gains
-    config : OmegaConf object
+    config : Config
         parameters.
 
     Returns

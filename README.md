@@ -57,33 +57,20 @@ python run_handheld.py --impath test_burst --outpath output.png
 
 You can also use the following canvas in your own scripts:
 ```python
-from handeld_super_resolution import process
-from omegaconf import OmegaConf
+from handheld_super_resolution.config import Config
+from handheld_super_resolution.super_resolution import process
 
-# Load the default configuration
-default_conf = OmegaConf.load("configs/default.yaml")
-
-# Set your config like that.
-my_custom_conf = OmegaConf.create({
-    "scale": 2,
-})
-# Alternatively, put this custom conf in a yaml file and load it with:
-# my_custom_conf = OmegaConf.load("path_to_your_custom_config.yaml")
-
-# Merge user config over the default config
-config = OmegaConf.merge(default_conf, my_custom_conf)
+# Typed dataclasses contain all defaults.
+config = Config(scale=2)
 
 # calling the pipeline
 burst_path = './test_burst/Samsung/'
 output_img = process(burst_path, config)[0]
 ```
 
-The core of the algorithm is in `handheld_super_resolution.process(burst_path, options, params)` where :
-<ul>
-  <li><code>burst_path</code> is a string containing the file containing .dng files.</li>
-  <li><code>options</code> is an optionnal dictionnary containing the verbose option, where higher number means more details during the execution <code>{'verbose' : 1}</code> for example.</li>
-  <li><code>params</code> is an optional dictionanry containing all the parameters of the pipleine (such as the upscaling factor). The pipeline is designed to automatically pick some of the parameters based on an estimation of the image SNR and the rest are set to default values, but they can be overwritten by simply assignin a value in <code>params</code>.</li>
-</ul>
+The core API is `handheld_super_resolution.process(burst_path, config)`, where
+`config` is an instance of `handheld_super_resolution.Config`. The function makes
+a private runtime copy, so the same configuration object can be reused safely.
 
 To obtain the bursts used in the publication, please download the latest release of the repo. It contains the code and two raw bursts of respectively 13 images from [[Bhat et al., ICCV21]](https://arxiv.org/abs/2108.08286) and 20 images from [[Lecouat et al., SIGGRAPH22]](https://arxiv.org/abs/2207.14671). Otherwise specify the path to any burst of raw images, e.g., `*.dng`, `*.ARW` or `*.CR2` for instance. The result is found in the `./results/` folder. Remember that if you have activated the post-processing flag, the predicted image will be further tone-mapped and sharpened. Deactivate it if you want to plug in your own ISP.
 
@@ -174,88 +161,26 @@ If this code or the implementation details of the companion IPOL publication are
 ```
 
 ## Parameters
-All the settings of the algorithm are tweakable. They are available in `configs/default.yaml` that is detailed below. If you want to use a different value for one of these settings, you can set it in a `custom.yaml` and run
+All settings are typed dataclass fields in `handheld_super_resolution.config`.
+The command line is generated from those types with tyro:
+
+```bash
+python run_handheld.py --impath test_burst --outpath output.png \
+  --scale 2 --merging.kernel iso \
+  --noise-model.alpha 0.0000123 --noise-model.beta 0.000001
 ```
-python run_handheld.py --impath test_burst --outpath output.png --config custom.yaml
+
+Boolean options use tyro's paired flags. For example, disable post-processing
+with `--postprocessing.no-enabled`. Lists are space-separated:
+
+```bash
+python run_handheld.py --impath test_burst --outpath output.png \
+  --block-matching.tuning.factors 1 2 4 4
 ```
 
-Alternatively, you can directly indicate it without yaml with the syntax:
-```
-python run_handheld.py --impath test_burst --outpath output.png scale=2 noise_model.alpha=0.0000123
-```
-
-```yaml
-scale: 1 # The upscaling factor, can be floating but should remain bewteen 1 and 3.
-mode: bayer # bayer or grey ; the pipeline can processe grey or color image.
-debug: false # If turned on, other debug informations can be returned
-verbose: 1 
-grey_method: FFT # The method to estimate grey images from raw
-noise_model: # You can specify alpha and beta here. If left empty, they will be read from the dng metadata
-  alpha: 
-  beta:
-
-block_matching:
-  tuning:
-    # Defined fine-to-coarse
-    factors: [1, 2, 4, 4] # the downsample factor between each scale
-    tile_size: "SNR_based" # The tile size (for the finest scale). You can also give an int here
-    tile_size_factors: [1, 1, 1, 0.5] # How the tile size shape evloves at each scale
-    search_radii: [1, 4, 4, 4] # The search radius for block matching
-    metrics: ['L1', 'L2', 'L2', 'L2'] # The metric to minimize during search at each scale
-    flow_upscale_mode: nearest  # How to upscale the optical flow when the number of patches increases between two pyramid scales. nearest, bilinear, bicubic
-
-ica:
-  tuning:
-    n_iter: 3 # Number of ICA iterations
-    sigma_blur: 0 # If > 0 a gaussian blur will be applied before compute the gradients for the hessian
-
-robustness:
-  enabled: true # enable or disable the robustness mask
-  save_mask: true # Save or not the accumulated robustness mask as a .png
-  tuning: # The threshold paramters described in the article
-    t: 0.12
-    s1: 2
-    s2: 12
-    Mt: 0.8
-
-merging:
-  kernel: steerable # iso or steerable. The sahpe of the kernel
-  selection_law: linear # options: hard_threshold, linear. How to compute k1 and k2 from A, k_strech and k_shrink. hard threshold sets k1=k2 if A < 1.95, else steerable. Linear is the original version with a linear stretch.
-  tuning: # The kernel settings
-    k_detail: SNR_based
-    k_denoise: SNR_based
-    D_th: SNR_based
-    D_tr: SNR_based
-    k_stretch: 4
-    k_shrink: 2
-
-postprocessing:
-  enabled: true
-  do_color_correction: true # Apply the color matrix to convert from camera space to sRGB space
-  do_gamma_correction: true # Apply gamma correction (sRGB)
-  do_tonemapping: false # Apply tonemapping (Reinhard)
-  sharpening:
-    enabled: true
-    amount: 1.5
-    radius: 3
-  do_devignetting: false
-
-accumulated_robustness_denoiser: # These are the accumulated robustness denoising options
-  median:
-    enabled: False
-    radius_max: 3
-    max_frame_count: 8
-  gauss:
-    enabled: False
-    sigma_max: 1.5
-    max_frame_count: 8
-    
-  merge:
-    enabled: True
-    rad_max: 2
-    max_multiplier: 8 # Multiplier of the covariance for single frame SR
-    max_frame_count: 8 # # number of merged frames above which no blur is applied
-```
+Run `python run_handheld.py --help` for the complete configuration reference,
+including defaults and allowed choices. YAML configuration and positional
+`key=value` overrides are no longer supported.
 
 ## Troubleshooting
 If you encounter any bug, please open an issue and/or sent an email at jamy.lafenetre@ens-paris-saclay.fr and thomas.eboli@ens-paris-saclay.fr.

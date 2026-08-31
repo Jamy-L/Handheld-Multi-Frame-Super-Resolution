@@ -11,4 +11,5 @@ dependencies:
   - numba
   - pip
   - pip:
+      - tyro
       - -r requirements.txt

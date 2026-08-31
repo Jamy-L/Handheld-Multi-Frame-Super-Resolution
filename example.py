@@ -13,25 +13,16 @@ Make sure that the example bursts have been downloaded from the release version!
 
 import os
 import matplotlib.pyplot as plt
-from handheld_super_resolution import process
+from handheld_super_resolution.config import Config, MergingConfig
+from handheld_super_resolution.super_resolution import process
 from skimage import img_as_ubyte
-from omegaconf import OmegaConf
 
-# Load the default configuration
-default_conf = OmegaConf.load("configs/default.yaml")
-
-# Set your config like that.
-my_custom_conf = OmegaConf.create({
-    "verbose": 2, 
-    "scale": 2,
-    "merging" : {'kernel': 'steerable'},
-    'post processing' : {'enabled':True}
-})
-# Alterbnatively, put this custom conf in a yaml file and load it with:
-# my_custom_conf = OmegaConf.load("path_to_your_custom_config.yaml")
-
-# Merge user config over the default config
-config = OmegaConf.merge(default_conf, my_custom_conf)
+# Typed dataclasses contain all defaults. Override only what you need.
+config = Config(
+    verbose=2,
+    scale=2,
+    merging=MergingConfig(kernel="steerable"),
+)
 
 # calling the pipeline
 burst_path = './test_burst/Samsung/'
@@ -48,4 +39,3 @@ plt.imshow(output_img, interpolation = 'none')
 plt.xticks([])
 plt.yticks([])
 plt.show()
-
