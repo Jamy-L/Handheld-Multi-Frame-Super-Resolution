@@ -26,7 +26,7 @@ from numba import cuda
 from numba.cuda.cudadrv.devicearray import DeviceNDArray
 import rawpy
 
-from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame_count_denoising_median, apply_orientation
+from .utils_image import compute_grey_images, apply_orientation
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso, timer
 from .alignment import align, init_alignment
 from .config import Config, ExifConfig

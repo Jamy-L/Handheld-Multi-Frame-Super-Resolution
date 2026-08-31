@@ -32,56 +32,6 @@ def solve_2x2(A, B, X):
 
     X[0] = (A[1, 1]*B[0] - A[0, 1]*B[1])/det_A
     X[1] = (A[0, 0]*B[1] - A[1, 0]*B[0])/det_A
-    
-
-@cuda.jit(device=True)
-def invert_2x2(M, M_i):
-    """
-    inverts the 2x2 M array
-
-    Parameters
-    ----------
-    M : Array[2, 2]
-        Array to invert
-    M_i : Array[2, 2]
-
-    Returns
-    -------
-    None.
-
-    """
-    det = M[0, 0]*M[1, 1] - M[0, 1]*M[1, 0]
-    if abs(det) > EPSILON_DIV:
-        det_i = 1/det
-        M_i[0, 0] = M[1,1]*det_i
-        M_i[0, 1] = -M[0, 1]*det_i
-        M_i[1, 0] = -M[1, 0]*det_i
-        M_i[1, 1] = M[0, 0]*det_i
-    else:
-        M_i[0, 0] = 1
-        M_i[0, 1] = 0
-        M_i[1, 0] = 0
-        M_i[1, 1] = 1
-    
-@cuda.jit(device=True)
-def quad_mat_prod(A, X1, X2):
-    """
-    With X = [X1, X2], performs the quadratique form :
-        X.transpose() @ A @ X
-
-    Parameters
-    ----------
-    A : device Array[2, 2]
-    X1 : float
-    X2 : float
-
-    Returns
-    -------
-    y : float
-
-    """
-    y = A[0, 0]*X1*X1 + X1*X2*(A[0, 1] + A[1, 0]) + A[1, 1]*X2*X2
-    return y
 
 @cuda.jit(device=True)
 def get_real_polyroots_2(a, b, c, roots):
@@ -183,21 +133,6 @@ def get_eigen_elmts_2x2(M, l, e1, e2):
     
     get_eigen_val_2x2(M, l)
     get_eigen_vect_2x2(M, l, e1, e2)
-    
-    
-     
-@cuda.jit(device=True) 
-def interpolate_cov(covs, center_pos, interpolated_cov):
-    reframed_posx, _ = math.modf(center_pos[1]) # these positions are between 0 and 1
-    reframed_posy, _ = math.modf(center_pos[0])
-    # cov 00 is in (0,0) ; cov 01 in (0, 1) ; cov 01 in (1, 0), cov 11 in (1, 1)
-    
-    for i in range(2):
-        for j in range(2):
-            interpolated_cov[i, j] = (covs[0,0,i,j]*(1 - reframed_posx)*(1 - reframed_posy) +
-                                      covs[0,1,i,j]*(reframed_posx)*(1 - reframed_posy) + 
-                                      covs[1,0,i,j]*(1 - reframed_posx)*(reframed_posy) + 
-                                      covs[1,1,i,j]*reframed_posx*reframed_posy)
 
 @cuda.jit(device=True)
 def bilinear_interpolation(values, pos):

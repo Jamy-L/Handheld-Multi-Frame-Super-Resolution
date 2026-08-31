@@ -18,8 +18,6 @@ from numba.cuda.cudadrv.devicearray import DeviceNDArray
 from typing import Union
 
 from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS
-from .utils_image import denoise_power_merge, denoise_range_merge
-from .linalg import quad_mat_prod, invert_2x2, interpolate_cov
 from .config import Config
 
     
