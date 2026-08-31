@@ -169,7 +169,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
             temp = np.ones_like(cuda_img, DEFAULT_NUMPY_FLOAT_TYPE)
             robustness = cuda.to_device(temp)
 
-        if accumulate_r:
+        if accumulated_r is not None:
             add(accumulated_r, robustness)
         
         #### Kernel estimation
@@ -364,7 +364,7 @@ def process(burst_path: Union[Path, str], config: Config):
         warnings.warn('The Image Orientation EXIF tag could not be found. \
                       The image may be mirrored or misoriented.')
     output_image = apply_orientation(output_image, ori)
-    if 'accumulated robustness' in debug_dict.keys():
+    if debug_dict.get('accumulated robustness'):
         debug_dict['accumulated robustness'] = apply_orientation(debug_dict['accumulated robustness'], ori)
     
     

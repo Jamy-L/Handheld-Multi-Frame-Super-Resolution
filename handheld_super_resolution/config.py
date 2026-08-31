@@ -81,7 +81,7 @@ class SharpeningConfig:
 @dataclass
 class PostprocessingConfig:
     enabled: bool = True
-    do_color_correction: bool = False
+    do_color_correction: bool = True
     do_gamma_correction: bool = True
     do_tonemapping: bool = False
     sharpening: SharpeningConfig = field(default_factory=SharpeningConfig)
