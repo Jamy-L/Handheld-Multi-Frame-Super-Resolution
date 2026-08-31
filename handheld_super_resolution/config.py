@@ -22,34 +22,32 @@ class NoiseModelConfig:
 
 
 @dataclass
-class BlockMatchingTuningConfig:
-    factors: List[int] = field(default_factory=lambda: [1, 2, 4, 4])
-    tile_size: TileSize = SNR_BASED
-    tile_size_factors: List[float] = field(default_factory=lambda: [1, 1, 1, 0.5])
+class BlockMatchingConfig:
     search_radii: List[int] = field(default_factory=lambda: [1, 4, 4, 4])
     metrics: List[Literal["L1", "L2"]] = field(default_factory=lambda: ["L1", "L2", "L2", "L2"])
-    flow_upscale_mode: Literal["nearest", "bilinear", "bicubic"] = "nearest"
-    tile_sizes: tyro.conf.Suppress[List[int]] = field(default_factory=list, init=False)
 
 
 @dataclass
-class BlockMatchingConfig:
-    tuning: BlockMatchingTuningConfig = field(default_factory=BlockMatchingTuningConfig)
-
-
-@dataclass
-class ICATuningConfig:
+class ICAConfig:
     n_iter: int = 3
     sigma_blur: float = 0
 
 
 @dataclass
-class ICAConfig:
-    tuning: ICATuningConfig = field(default_factory=ICATuningConfig)
+class AlignmentConfig:
+    flow_upscale_mode: Literal["nearest", "bilinear", "bicubic"] = "nearest"
+    factors: List[int] = field(default_factory=lambda: [1, 2, 4, 4])
+    tile_size: TileSize = SNR_BASED
+    tile_size_factors: List[float] = field(default_factory=lambda: [1, 1, 1, 0.5])
+    tile_sizes: tyro.conf.Suppress[List[int]] = field(default_factory=list, init=False)
+    block_matching: BlockMatchingConfig = field(default_factory=BlockMatchingConfig)
+    ica: ICAConfig = field(default_factory=ICAConfig)
 
 
 @dataclass
-class RobustnessTuningConfig:
+class RobustnessConfig:
+    enabled: bool = True
+    save_mask: bool = True
     t: float = 0.12
     s1: float = 2
     s2: float = 12
@@ -57,14 +55,7 @@ class RobustnessTuningConfig:
 
 
 @dataclass
-class RobustnessConfig:
-    enabled: bool = True
-    save_mask: bool = True
-    tuning: RobustnessTuningConfig = field(default_factory=RobustnessTuningConfig)
-
-
-@dataclass
-class MergingTuningConfig:
+class KernelConfig:
     k_detail: SNRBasedFloat = SNR_BASED
     k_denoise: SNRBasedFloat = SNR_BASED
     D_th: SNRBasedFloat = SNR_BASED
@@ -75,9 +66,9 @@ class MergingTuningConfig:
 
 @dataclass
 class MergingConfig:
-    kernel: Literal["steerable", "iso"] = "steerable"
+    kernel_type: Literal["steerable", "iso"] = "steerable"
     selection_law: Literal["hard_threshold", "linear"] = "linear"
-    tuning: MergingTuningConfig = field(default_factory=MergingTuningConfig)
+    kernel: KernelConfig = field(default_factory=KernelConfig)
 
 
 @dataclass
@@ -144,8 +135,7 @@ class Config:
     verbose: int = 1
     grey_method: Literal["FFT"] = "FFT"
     noise_model: NoiseModelConfig = field(default_factory=NoiseModelConfig)
-    block_matching: BlockMatchingConfig = field(default_factory=BlockMatchingConfig)
-    ica: ICAConfig = field(default_factory=ICAConfig)
+    alignment: AlignmentConfig = field(default_factory=AlignmentConfig)
     robustness: RobustnessConfig = field(default_factory=RobustnessConfig)
     merging: MergingConfig = field(default_factory=MergingConfig)
     postprocessing: PostprocessingConfig = field(default_factory=PostprocessingConfig)

@@ -14,12 +14,14 @@ This script contains :
 import math
 
 from numba import uint8, cuda
+from numba.cuda.cudadrv.devicearray import DeviceNDArray
 
 from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS
 from .utils_image import denoise_power_merge, denoise_range_merge
 from .linalg import quad_mat_prod, invert_2x2, interpolate_cov
+from .config import Config
 
-def merge_ref(ref_img, kernels, num, den, cfa_pattern, config, acc_rob=None):
+def merge_ref(ref_img, kernels, num, den, cfa_pattern, config: Config, acc_rob=None):
     """
     Implementation of Alg. 11: AccumulationReference
     Accumulates the reference frame into num and den, while considering
@@ -233,7 +235,8 @@ def accumulate_ref(ref_img, covs, bayer_mode, iso_kernel, scale, CFA_pattern,
             den[output_pixel_idy, output_pixel_idx, chan] += acc[chan]
           
     
-def merge(comp_img, alignments, covs, r, num, den, cfa_pattern, config):
+def merge(comp_img: DeviceNDArray, alignments: DeviceNDArray, covs: DeviceNDArray, r: DeviceNDArray,
+          num: DeviceNDArray, den: DeviceNDArray, cfa_pattern: DeviceNDArray, config: Config):
     """
     Implementation of Alg. 4: Accumulation
     Accumulates comp_img (J_n, n>1) into num and den, based on the alignment
@@ -267,7 +270,7 @@ def merge(comp_img, alignments, covs, r, num, den, cfa_pattern, config):
 
     bayer_mode = config.mode == 'bayer'
     iso_kernel = config.merging.kernel == 'iso'
-    tile_size = config.block_matching.tuning.tile_size
+    tile_size = config.alignment.tile_size
 
     native_im_size = comp_img.shape
     # casting to integer to account for floating scale

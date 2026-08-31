@@ -2,17 +2,20 @@ import math
 
 import numpy as np
 from numba import cuda
+from numba.cuda.cudadrv.devicearray import DeviceNDArray
 import torch
 import torch.nn.functional as F
 
 from .utils import clamp, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
+from .config import Config
+
 FLOAT = DEFAULT_NUMPY_FLOAT_TYPE
 SOBEL_Y = torch.as_tensor(np.array([[-1], [0], [1]]), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
 SOBEL_X = torch.as_tensor(np.array([[-1,0,1]]), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
 SOBEL_Y.requires_grad = False
 SOBEL_X.requires_grad = False
 
-def init_ica(image, tile_size, config):
+def init_ica(image: torch.Tensor, tile_size: int, config: Config):
     imsize_y, imsize_x = image.shape
     n_patch_y = imsize_y // tile_size 
     n_patch_x = imsize_x // tile_size
@@ -29,7 +32,7 @@ def init_ica(image, tile_size, config):
     blockspergrid_x = math.ceil(n_patch_x / threadsperblock[1])
     blockspergrid_y = math.ceil(n_patch_y / threadsperblock[0])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
-    compute_hessian[blockspergrid, threadsperblock](gradx, grady, tile_size, hessian)
+    compute_hessian[blockspergrid, threadsperblock](gradx, grady, tile_size, hessian) # type: ignore
 
     return gradx, grady, hessian
 
@@ -75,10 +78,15 @@ def compute_hessian(gradx, grady, tile_size, hessian):
     hessian[patch_idy, patch_idx, 1, 0] = local_hessian[1, 0]
     hessian[patch_idy, patch_idx, 1, 1] = local_hessian[1, 1]
 
-def align_lvl_ica(ref_img, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl,
-                  moving_lvl, alignment, l, config):
+def align_lvl_ica(ref_img: DeviceNDArray,
+                  ref_gradx_lvl: DeviceNDArray,
+                  ref_grady_lvl: DeviceNDArray,
+                  ref_hessian_lvl: DeviceNDArray,
+                  moving_lvl: DeviceNDArray,
+                  alignment: torch.Tensor,
+                  l: int, config: Config):
     verbose_3 = config.verbose >= 3
-    tile_size = config.block_matching.tuning.tile_sizes[l]
+    tile_size = config.alignment.tile_sizes[l]
 
     np_y, np_x, _ = alignment.shape
 
@@ -98,9 +106,9 @@ def align_lvl_ica(ref_img, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl,
         threadsperblock = (64, 16)  # because each thread handles 4 pixels
     else:
         raise NotImplementedError("ICA kernel for tile size {} not implemented".format(tile_size))
-    cuda_kernel[blockspergrid, threadsperblock](
+    cuda_kernel[blockspergrid, threadsperblock]( # type: ignore
         ref_img, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl,
-        moving_lvl, alignment, config.ica.tuning.n_iter)
+        moving_lvl, alignment, config.alignment.ica.n_iter)
 
 @cuda.jit
 def ica_kernel_8(ref_img, gradx, grady, hessian, moving, alignment, niter):

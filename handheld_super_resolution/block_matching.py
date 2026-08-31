@@ -3,9 +3,11 @@ import math
 
 import numpy as np
 from numba import cuda
+from numba.cuda.cudadrv.devicearray import DeviceNDArray
 import torch
 
 from .utils import clamp, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
+from .config import Config
 FLOAT = DEFAULT_NUMPY_FLOAT_TYPE
 
 BOX_FILTER_8 = torch.as_tensor(np.ones((1,1,8,8)), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
@@ -17,12 +19,12 @@ BOX_FILTER_32.requires_grad = False
 BOX_FILTER_64 = torch.as_tensor(np.ones((1,1,64,64)), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
 BOX_FILTER_64.requires_grad = False
 
-def align_lvl_block_matching_L2(tyled_pyr_lvl, ref_fft_lvl, moving_lvl, alignment, l, config):
+def align_lvl_block_matching_L2(tyled_pyr_lvl, ref_fft_lvl: torch.Tensor, moving_lvl: DeviceNDArray, alignment: torch.Tensor, l: int, config: Config):
     verbose = config.verbose > 2
     currentTime = time.perf_counter()
-    tileSize = config.block_matching.tuning.tile_sizes[l]
-    searchRadius = config.block_matching.tuning.search_radii[l]
-    distanceMetric = config.block_matching.tuning.metrics[l]
+    tileSize = config.alignment.tile_sizes[l]
+    searchRadius = config.alignment.block_matching.search_radii[l]
+    distanceMetric = config.alignment.block_matching.metrics[l]
 
     imshape = moving_lvl.shape
     
@@ -75,10 +77,10 @@ def align_lvl_block_matching_L2(tyled_pyr_lvl, ref_fft_lvl, moving_lvl, alignmen
     alignment[:, :, 0] += dx
     alignment[:, :, 1] += dy
     
-def align_lvl_block_matching_L1(ref_lvl, moving_lvl, alignments, l, config):
+def align_lvl_block_matching_L1(ref_lvl: DeviceNDArray, moving_lvl: DeviceNDArray, alignments: torch.Tensor, l: int, config: Config):
     h, w, _ = alignments.shape
-    tile_size = config.block_matching.tuning.tile_sizes[l]
-    search_radius = config.block_matching.tuning.search_radii[l]
+    tile_size = config.alignment.tile_sizes[l]
+    search_radius = config.alignment.block_matching.search_radii[l]
     ny, nx, _ = alignments.shape
 
     # New way, 1 thread per pixel
@@ -99,8 +101,9 @@ def align_lvl_block_matching_L1(ref_lvl, moving_lvl, alignments, l, config):
     blockspergrid_x = nx
     blockspergrid_y = ny
     blockspergrid = (blockspergrid_x, blockspergrid_y)
-    kernel[blockspergrid, threadsperblock](
+    kernel[blockspergrid, threadsperblock](# type: ignore
         ref_lvl, moving_lvl, search_radius, alignments)
+    
 
 @cuda.jit
 def cuda_L1_local_search16(ref, moving, search_radius, alignments):
@@ -345,12 +348,12 @@ def cuda_L1_local_search64(ref, moving, search_radius, alignments):
     alignments[py, px, 1] = s_flow[1] + min_shift_y
 
 
-def extract_flow_patches(frame_tgt, flow, patch_size, radius):
+def extract_flow_patches(frame_tgt: DeviceNDArray, flow: torch.Tensor, patch_size: int, radius: int):
     ny, nx, _ = flow.shape
     p = patch_size
     r = radius
     P_search = 2 * r + p
-    frame_tgt = torch.as_tensor(frame_tgt, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+    frame_tgt = torch.as_tensor(frame_tgt, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda") # type: ignore
     flow = flow.round().long()
 
     dx = flow[..., 0]
@@ -374,5 +377,5 @@ def extract_flow_patches(frame_tgt, flow, patch_size, radius):
     y_flat = y_coords.reshape(-1)
     x_flat = x_coords.reshape(-1)
 
-    aligned_patches = frame_tgt[y_flat, x_flat].view(ny, nx, P_search, P_search)
+    aligned_patches = frame_tgt[y_flat, x_flat].view((ny, nx, P_search, P_search))
     return aligned_patches

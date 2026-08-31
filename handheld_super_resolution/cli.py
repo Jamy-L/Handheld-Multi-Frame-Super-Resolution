@@ -46,10 +46,10 @@ def print_parameters(config):
     if config.robustness.enabled:
         print("\n  Robustness:             enabled")
         print("  ------------------------------")
-        print("  t:                      {:.2f}".format(config.robustness.tuning.t))
-        print("  s1:                     {:.2f}".format(config.robustness.tuning.s1))
-        print("  s2:                     {:.2f}".format(config.robustness.tuning.s2))
-        print("  Mt:                     {:.2f}".format(config.robustness.tuning.Mt))
+        print("  t:                      {:.2f}".format(config.robustness.t))
+        print("  s1:                     {:.2f}".format(config.robustness.s1))
+        print("  s2:                     {:.2f}".format(config.robustness.s2))
+        print("  Mt:                     {:.2f}".format(config.robustness.Mt))
         denoisers = config.accumulated_robustness_denoiser
         if any([denoisers.median.enabled, denoisers.gauss.enabled, denoisers.merge.enabled]):
             print("  Robustness denoising:   enabled")
@@ -58,14 +58,14 @@ def print_parameters(config):
 
     print("\n  Alignment:")
     print("  ------------------------------")
-    print("  ICA Iterations:         {}".format(config.ica.tuning.n_iter))
+    print("  ICA Iterations:         {}".format(config.alignment.ica.n_iter))
     print("\n  Fusion:")
     print("  ------------------------------")
     print("  Kernel shape:           {}".format(config.merging.kernel))
-    print("  k_stretch:              {:.2f}".format(config.merging.tuning.k_stretch))
-    print("  k_shrink:               {:.2f}".format(config.merging.tuning.k_shrink))
+    print("  k_stretch:              {:.2f}".format(config.merging.kernel.k_stretch))
+    print("  k_shrink:               {:.2f}".format(config.merging.kernel.k_shrink))
     for label in ("k_detail", "k_denoise"):
-        value = getattr(config.merging.tuning, label)
+        value = getattr(config.merging.kernel, label)
         rendered = "SNR based" if isinstance(value, str) else "{:.2f}".format(value)
         print("  {:<23} {}".format(label + ":", rendered))
 
@@ -110,7 +110,7 @@ def main(args=None):
     accumulated = debug.get("accumulated robustness")
     if config.robustness.save_mask and accumulated is not None:
         image_count = len(glob.glob(os.path.join(options.impath, "*.dng")))
-        robustness = accumulated.copy_to_host() / (image_count - 1)
+        robustness = accumulated / (image_count - 1)
         robustness = np.repeat(robustness[..., None], 3, axis=-1)
         robustness = cv2.resize(
             robustness,

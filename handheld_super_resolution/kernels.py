@@ -14,19 +14,21 @@ import math
 
 import numpy as np
 from numba import cuda
+from numba.cuda.cudadrv.devicearray import DeviceNDArray
 import torch as th
 import torch.nn.functional as F
 
 from .linalg import get_eigen_elmts_2x2
 from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS, getTime, timer
 from .utils_image import compute_grey_images, GAT
+from .config import Config
 
 
 SEL_HARD_THRESHOLD = 0
 SEL_LINEAR = 1
 
 
-def estimate_kernels(img, config):
+def estimate_kernels(img: DeviceNDArray, config: Config):
     """
     Implementation of Alg. 5: ComputeKernelCovariance
     Returns the kernels covariance matrices for the frame J_n, sampled at the
@@ -54,12 +56,12 @@ def estimate_kernels(img, config):
     GAT_ = timer(GAT, verbose_3, end_s="- Variance Stabilized")
     compute_grey_images_ = timer(compute_grey_images, verbose_3, end_s="- Decimated Image")
 
-    k_detail = config.merging.tuning.k_detail
-    k_denoise = config.merging.tuning.k_denoise
-    D_th = config.merging.tuning.D_th
-    D_tr = config.merging.tuning.D_tr
-    k_stretch = config.merging.tuning.k_stretch
-    k_shrink = config.merging.tuning.k_shrink
+    k_detail = config.merging.kernel.k_detail
+    k_denoise = config.merging.kernel.k_denoise
+    D_th = config.merging.kernel.D_th
+    D_tr = config.merging.kernel.D_tr
+    k_stretch = config.merging.kernel.k_stretch
+    k_shrink = config.merging.kernel.k_shrink
     
     if config.merging.selection_law == 'hard_threshold':
         selection_law = SEL_HARD_THRESHOLD

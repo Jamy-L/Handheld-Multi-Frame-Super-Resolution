@@ -16,11 +16,15 @@ import math
 
 import numpy as np
 from numba import cuda, uint8
+from numba.cuda.cudadrv.devicearray import DeviceNDArray
+import torch
+from typing import Union, Tuple
 
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE,DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS, clamp, timer
 from .utils_image import dogson_biquadratic_kernel, dogson_quadratic_kernel
+from .config import Config
 
-def init_robustness(ref_img, cfa_pattern, white_balance, config):
+def init_robustness(ref_img: DeviceNDArray, cfa_pattern: DeviceNDArray, white_balance: DeviceNDArray, config: Config):
     """
     Initialiazes the robustness etimation procedure by
     computing the local stats of the reference image
@@ -54,29 +58,26 @@ def init_robustness(ref_img, cfa_pattern, white_balance, config):
     imshape_y, imshape_x = ref_img.shape
 
     bayer_mode = config.mode=='bayer'
-    r_on = config.robustness.enabled
 
-    if r_on :         
-        # Computing guide image
-
-        if bayer_mode:
-            guide_ref_img = compute_guide_image_(ref_img, cfa_pattern, white_balance)
-        else:
-            # Numba friendly code to add 1 channel
-            guide_ref_img = ref_img.reshape((1, imshape_y, imshape_x)) 
-            
-        local_means, local_stds = compute_local_stats_(guide_ref_img)
-        
-        # Upscale stats to raw coarse scale
-        local_means = upscale_warp_stats(local_means)
-        local_stds = upscale_warp_stats_(local_stds)
-        
-        return local_means, local_stds
+    # Computing guide image
+    if bayer_mode:
+        guide_ref_img = compute_guide_image_(ref_img, cfa_pattern, white_balance)
     else:
-        return None, None
+        # Numba friendly code to add 1 channel
+        guide_ref_img = ref_img.reshape((1, imshape_y, imshape_x)) 
+        
+    local_means, local_stds = compute_local_stats_(guide_ref_img)
+    
+    # Upscale stats to raw coarse scale
+    local_means = upscale_warp_stats(local_means)
+    local_stds = upscale_warp_stats_(local_stds)
+    
+    return local_means, local_stds
     
     
-def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, cfa_pattern, white_balance, noise_model, config):
+def compute_robustness(comp_img: DeviceNDArray, ref_local_means: DeviceNDArray, ref_local_stds: DeviceNDArray,
+                       flows: DeviceNDArray, cfa_pattern: DeviceNDArray, white_balance: DeviceNDArray,
+                       noise_model: Tuple[DeviceNDArray, DeviceNDArray], config: Config) -> DeviceNDArray:
     """
     this is the implementation of Algorithm 6: ComputeRobustness
     Returns the robustnesses of the compared image J_n (n>1), based on the
@@ -121,11 +122,12 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, cfa_pat
     bayer_mode = config.mode=='bayer'
     r_on = config.robustness.enabled
 
-    tile_size = config.block_matching.tuning.tile_size
-    t = config.robustness.tuning.t
-    s1 = config.robustness.tuning.s1
-    s2 = config.robustness.tuning.s2
-    Mt = config.robustness.tuning.Mt
+    tile_size = config.alignment.tile_size
+    assert isinstance(tile_size, int), f"Got invalide tile size {tile_size}"
+    t = config.robustness.t
+    s1 = config.robustness.s1
+    s2 = config.robustness.s2
+    Mt = config.robustness.Mt
 
     n_patch_y, n_patch_x, _ = flows.shape
     
@@ -134,9 +136,6 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, cfa_pat
     else:
         guide_imshape = imshape_y, imshape_x
           
-    if not r_on : 
-        temp = np.ones_like(comp_img, DEFAULT_NUMPY_FLOAT_TYPE)
-        return cuda.to_device(temp)
     r = cuda.device_array(guide_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
     
     cuda_std_curve, cuda_diff_curve = noise_model
@@ -166,11 +165,11 @@ def compute_robustness(comp_img, ref_local_means, ref_local_stds, flows, cfa_pat
     # applying flow discontinuity penalty
     S = compute_s_(flows, Mt, s1, s2)
     R = robustness_threshold_(d_sq, sigma_sq, S, t, tile_size, bayer_mode)
-    r = local_min_(R)        
+    r = local_min_(R)
     return r
 
 
-def compute_guide_image(raw_img, cfa_pattern, white_balance):
+def compute_guide_image(raw_img: DeviceNDArray, cfa_pattern: DeviceNDArray, white_balance: DeviceNDArray):
     """
     This is the implementation of Algorithm 7: ComputeGuideImage
     Return the guide image G associated with the raw frame J
@@ -225,7 +224,7 @@ def cuda_compute_guide_image(raw_img, guide_img, CFA, wb):
                 guide_img[c, ty, tx] = x
     guide_img[1, ty, tx] = g/2
 
-def compute_local_stats(guide_img):
+def compute_local_stats(guide_img: DeviceNDArray):
     """
     Implementation of Algorithm 8: ComputeLocalStatistics
     Computes the mean color and variance associated for each 3 by 3 patches of
@@ -293,7 +292,7 @@ def cuda_compute_local_stats(guide_img, local_means, local_stds):
     local_means[channel, idy, idx] = channel_mean
     local_stds[channel, idy, idx] = local_stats_[1]/9 - channel_mean*channel_mean
 
-def upscale_warp_stats(local_stats, tile_size=None, flow=None):
+def upscale_warp_stats(local_stats: DeviceNDArray, tile_size: Union[None, int]=None, flow:Union[DeviceNDArray, None]=None):
     """
     Upscales and warps a map of local statistics using Dogson's biquadratic approximation 
 
@@ -418,7 +417,7 @@ def cuda_uspcale_dogson(LR, s, is_ref, flow, tile_size, HR):
         HR[c, y, x] = buffer[c]/w_acc
             
 
-def compute_dist(means_1, means_2):
+def compute_dist(means_1: DeviceNDArray, means_2: DeviceNDArray):
     """
     Computes the color distance between the two frames. They must be warped.
 
@@ -462,7 +461,7 @@ def cuda_compute_dist(means_1, means_2, diff):
     diff[c, y, x] = abs(means_1[c, y, x] - means_2[c, y, x])
 
 
-def apply_noise_model(d_p, ref_local_means, ref_local_stds, std_curve, diff_curve):
+def apply_noise_model(d_p: DeviceNDArray, ref_local_means: DeviceNDArray, ref_local_stds: DeviceNDArray, std_curve: DeviceNDArray, diff_curve: DeviceNDArray):
     """
     Applying noise model to update d^2 and sigma^2
 
@@ -533,7 +532,7 @@ def cuda_apply_noise_model(d_p, ref_local_means, ref_local_stds,
     d_sq[idy, idx] = d_sq_    
     
                      
-def compute_s(flows, M_th, s1, s2):
+def compute_s(flows: DeviceNDArray, M_th: float, s1: float, s2: float):
     """ Computes s at every position based on flow irregularities
     
 
@@ -610,7 +609,7 @@ def cuda_compute_s(flows, M_th, s1, s2, S):
     else:
         S[patch_idy, patch_idx] = s2
 
-def robustness_threshold(d_sq, sigma_sq, S, t, tile_size, bayer_mode):
+def robustness_threshold(d_sq: DeviceNDArray, sigma_sq: DeviceNDArray, S: DeviceNDArray, t: float, tile_size: int, bayer_mode: bool):
     imshape = d_sq.shape 
     R = cuda.device_array(imshape, DEFAULT_NUMPY_FLOAT_TYPE)
     
@@ -638,7 +637,7 @@ def cuda_robustness_threshold(d_sq, sigma_sq, S, t, tile_size, bayer_mode, R):
     R[idy, idx] = clamp(S[patch_idy, patch_idx] * math.exp(-d_sq[idy, idx]/sigma_sq[idy, idx]) - t,
                         0, 1)
 
-def local_min(R):
+def local_min(R: DeviceNDArray):
     """
     Implementation of Algorithm 9: ComputeLocalMin
     For each pixel of R, the minimum in a 5 by 5 window is estimated

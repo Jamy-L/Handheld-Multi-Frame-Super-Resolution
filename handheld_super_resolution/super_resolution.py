@@ -19,8 +19,11 @@ import time
 import warnings
 
 from pathlib import Path
+from typing import Union, Tuple, Dict
 import numpy as np
+from numpy.typing import NDArray
 from numba import cuda
+from numba.cuda.cudadrv.devicearray import DeviceNDArray
 import rawpy
 
 from .utils_image import compute_grey_images, frame_count_denoising_gauss, frame_count_denoising_median, apply_orientation
@@ -38,7 +41,7 @@ from . import raw2rgb
 NOISE_MODEL_PATH = Path(os.path.dirname(__file__)).parent / 'data' 
         
 
-def main(ref_img, comp_imgs, config):
+def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: Config) -> Tuple[DeviceNDArray, Dict[str, list]]:
     """
     This is the implementation of Alg. 1: HandheldBurstSuperResolution.
     Some part of Alg. 2: Registration are also integrated for optimisation.
@@ -87,6 +90,7 @@ def main(ref_img, comp_imgs, config):
 
     accumulate_r = config.accumulated_robustness_denoiser.enabled or config.robustness.save_mask
 
+    assert config.exif is not None, "Exif data missing from conf"
     #### Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
     white_balance = cuda.to_device(np.array(config.exif.white_balance))
@@ -111,9 +115,15 @@ def main(ref_img, comp_imgs, config):
     ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian = init_alignment_(cuda_ref_grey, config)
 
     #### Local stats estimation
-    ref_local_means, ref_local_stds = init_robustness_(cuda_ref_img, cfa_pattern, white_balance, config)
+    if config.robustness.enabled:
+        ref_local_means, ref_local_stds = init_robustness_(cuda_ref_img, cfa_pattern, white_balance, config)
+    else:
+        ref_local_means, ref_local_stds = None, None
 
-    if accumulate_r:
+    
+    accumulated_r = None
+    if accumulate_r and config.robustness.enabled:
+        assert ref_local_means
         accumulated_r = cuda.to_device(np.zeros(ref_local_means.shape[1:]))
 
     scale = config.scale
@@ -128,16 +138,13 @@ def main(ref_img, comp_imgs, config):
         getTime(t1, '\nRef Img processed (Total)')
 
 
-    # comp_imgs = comp_imgs[:1]
-    n_images = comp_imgs.shape[0]
-    for im_id in range(n_images):
+    for im_id in range(comp_imgs.shape[0]):
         if verbose :
             cuda.synchronize()
             print("\nProcessing image {} ---------\n".format(im_id+1))
             im_time = time.perf_counter()
         
         #### Moving to GPU
-        # cuda_img = cuda.to_device(comp_imgs[im_id])
         cuda.to_device(comp_imgs[im_id], to=cuda_img, stream=stream)
         
         #### Compute Grey Images
@@ -145,31 +152,38 @@ def main(ref_img, comp_imgs, config):
             cuda_im_grey = compute_grey_images(comp_imgs[im_id], grey_method)
         else:
             cuda_im_grey = cuda_img
-        
-        cuda_final_alignment = align_(ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian,
+
+        final_alignment = align_(ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian,
                         cuda_im_grey, config)
         
         if debug_mode:
-            debug_dict["flow"].append(cuda_final_alignment.copy_to_host())
+            debug_dict["flow"].append(final_alignment.copy_to_host())
             
         #### Robustness
-        cuda_robustness = compute_robustness_(cuda_img, ref_local_means, ref_local_stds, cuda_final_alignment,
-                                            cfa_pattern, white_balance, (cuda_std_curve, cuda_diff_curve), config)
+        if config.robustness.enabled:
+            assert ref_local_means is not None
+            assert ref_local_stds is not None
+            robustness = compute_robustness_(cuda_img, ref_local_means, ref_local_stds, final_alignment,
+                                                    cfa_pattern, white_balance, (cuda_std_curve, cuda_diff_curve), config)
+        else:
+            temp = np.ones_like(cuda_img, DEFAULT_NUMPY_FLOAT_TYPE)
+            robustness = cuda.to_device(temp)
+
         if accumulate_r:
-            add(accumulated_r, cuda_robustness)
+            add(accumulated_r, robustness)
         
         #### Kernel estimation
         cuda_kernels = estimate_kernels_(cuda_img, config)
         
         #### Merging
-        merge_(cuda_img, cuda_final_alignment, cuda_kernels, cuda_robustness, num, den, cfa_pattern, config)
+        merge_(cuda_img, final_alignment, cuda_kernels, robustness, num, den, cfa_pattern, config)
         
         if verbose :
             cuda.synchronize()
             getTime(im_time, '\nImage processed (Total)')
             
-        if debug_mode : 
-            debug_dict['robustness'].append(cuda_robustness.copy_to_host())
+        if debug_mode and config.robustness.enabled: 
+            debug_dict['robustness'].append(robustness.copy_to_host())
         stream.synchronize()
     
     #### Ref kernel estimation
@@ -200,7 +214,7 @@ def main(ref_img, comp_imgs, config):
     return num, debug_dict
 
 
-def process(burst_path, config: Config):
+def process(burst_path: Union[Path, str], config: Config):
     """
     Processes the burst
 
@@ -347,7 +361,7 @@ def process(burst_path, config: Config):
         ori = tags['Image Orientation'].values[0]
     else:
         ori = 1
-        warnings.warns('The Image Orientation EXIF tag could not be found. \
+        warnings.warn('The Image Orientation EXIF tag could not be found. \
                       The image may be mirrored or misoriented.')
     output_image = apply_orientation(output_image, ori)
     if 'accumulated robustness' in debug_dict.keys():
