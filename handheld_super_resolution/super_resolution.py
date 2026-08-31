@@ -26,7 +26,7 @@ from numba import cuda
 from numba.cuda.cudadrv.devicearray import DeviceNDArray
 import rawpy
 
-from .utils_image import compute_grey_images, apply_orientation
+from .utils_image import compute_grey_images, apply_orientation, rggb_to_cfa
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso, timer
 from .alignment import align, init_alignment
 from .config import Config, ExifConfig
@@ -41,7 +41,7 @@ from . import raw2rgb
 NOISE_MODEL_PATH = Path(os.path.dirname(__file__)).parent / 'data' 
         
 
-def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: Config) -> Tuple[DeviceNDArray, Dict[str, list]]:
+def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: Config) -> Tuple[NDArray, Dict[str, list]]:
     """
     This is the implementation of Alg. 1: HandheldBurstSuperResolution.
     Some part of Alg. 2: Registration are also integrated for optimisation.
@@ -91,7 +91,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
     #### Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
     white_balance = cuda.to_device(np.array(config.exif.white_balance))
-    cfa_pattern = cuda.to_device(np.array(config.exif.cfa_pattern))
+
     # This running buffer is for the image being processed
     stream = cuda.stream()
     cuda_img = cuda.device_array_like(comp_imgs[0], stream=stream)
@@ -113,7 +113,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
 
     #### Local stats estimation
     if config.robustness.enabled:
-        ref_local_means, ref_local_stds = init_robustness_(cuda_ref_img, cfa_pattern, white_balance, config)
+        ref_local_means, ref_local_stds = init_robustness_(cuda_ref_img, white_balance, config)
     else:
         ref_local_means, ref_local_stds = None, None
 
@@ -136,7 +136,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
     ##### Merge ref
     dummy_alignment = cuda.to_device(np.zeros(ref_hessian[-1].shape[:-1], dtype = DEFAULT_NUMPY_FLOAT_TYPE))
     dummy_r = cuda.to_device(np.ones(cuda_ref_img.shape, dtype = DEFAULT_NUMPY_FLOAT_TYPE))
-    merge_(cuda_ref_img, dummy_alignment, cuda_kernels, dummy_r, num, den, cfa_pattern, config)
+    merge_(cuda_ref_img, dummy_alignment, cuda_kernels, dummy_r, num, den, config)
     
     if verbose :
         cuda.synchronize()
@@ -168,8 +168,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
         if config.robustness.enabled:
             assert ref_local_means is not None
             assert ref_local_stds is not None
-            robustness = compute_robustness_(cuda_img, ref_local_means, ref_local_stds, final_alignment,
-                                                    cfa_pattern, white_balance, (cuda_std_curve, cuda_diff_curve), config)
+            robustness = compute_robustness_(cuda_img, ref_local_means, ref_local_stds, final_alignment, white_balance, (cuda_std_curve, cuda_diff_curve), config)
         else:
             temp = np.ones_like(cuda_img, DEFAULT_NUMPY_FLOAT_TYPE)
             robustness = cuda.to_device(temp)
@@ -181,7 +180,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
         cuda_kernels = estimate_kernels_(cuda_img, config)
         
         #### Merging
-        merge_(cuda_img, final_alignment, cuda_kernels, robustness, num, den, cfa_pattern, config)
+        merge_(cuda_img, final_alignment, cuda_kernels, robustness, num, den, config)
         
         if verbose :
             cuda.synchronize()
@@ -200,10 +199,10 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
         s = '\nTotal ellapsed time : '
         print(s, ' ' * (50 - len(s)), ': ', round((time.perf_counter() - t1), 2), 'seconds')
     
-    if config.robustness.save_mask and config.robustness.enabled:
-        debug_dict['accumulated robustness'] = accumulated_r
+    if config.robustness.save_mask and config.robustness.enabled and accumulated_r:
+        debug_dict['accumulated robustness'] = accumulated_r.copy_to_host()
         
-    return num, debug_dict
+    return num.copy_to_host(), debug_dict
 
 
 def process(burst_path: Union[Path, str], config: Config):
@@ -294,10 +293,15 @@ def process(burst_path: Union[Path, str], config: Config):
     
     
     #### Running the handheld pipeline
-    handheld_output, debug_dict = main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), config)
-    
-    
+    hr_output, debug_dict = main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), config)
 
+    #### Deflip the image
+    hr_output = np.moveaxis(hr_output, -1, 0)
+    hr_output = rggb_to_cfa(hr_output, CFA)
+    hr_output = np.moveaxis(hr_output, 0, -1)
+    if 'accumulated robustness' in debug_dict:
+        debug_dict['accumulated robustness'] = rggb_to_cfa(debug_dict['accumulated robustness'], CFA)
+    
 
     #### post processing
     post_processing_enabled = config.postprocessing.enabled
@@ -307,7 +311,7 @@ def process(burst_path: Union[Path, str], config: Config):
             print('-- Post processing image')
         
         raw = rawpy.imread(ref_path)
-        output_image = raw2rgb.postprocess(raw, handheld_output.copy_to_host(),
+        hr_output = raw2rgb.postprocess(raw, hr_output,
                                            config.postprocessing.do_color_correction,
                                            config.postprocessing.do_tonemapping,
                                            config.postprocessing.do_gamma_correction,
@@ -315,8 +319,6 @@ def process(burst_path: Union[Path, str], config: Config):
                                            config.postprocessing.do_devignetting,
                                            xyz2cam,
                                            ) 
-    else:
-        output_image = handheld_output.copy_to_host()
         
     # Applying image orientation
     if 'Image Orientation' in tags.keys():
@@ -325,8 +327,9 @@ def process(burst_path: Union[Path, str], config: Config):
         ori = 1
         warnings.warn('The Image Orientation EXIF tag could not be found. \
                       The image may be mirrored or misoriented.')
-    output_image = apply_orientation(output_image, ori)
-    if debug_dict.get('accumulated robustness'):
+        
+    output_image = apply_orientation(hr_output, ori)
+    if 'accumulated robustness' in debug_dict:
         debug_dict['accumulated robustness'] = apply_orientation(debug_dict['accumulated robustness'], ori)
     
     

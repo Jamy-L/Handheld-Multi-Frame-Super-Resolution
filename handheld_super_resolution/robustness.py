@@ -24,7 +24,7 @@ from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE,DEFAULT_NUMPY_FLOAT_TYPE, DE
 from .utils_image import dogson_biquadratic_kernel, dogson_quadratic_kernel
 from .config import Config
 
-def init_robustness(ref_img: DeviceNDArray, cfa_pattern: DeviceNDArray, white_balance: DeviceNDArray, config: Config):
+def init_robustness(ref_img: DeviceNDArray, white_balance: DeviceNDArray, config: Config):
     """
     Initialiazes the robustness etimation procedure by
     computing the local stats of the reference image
@@ -33,8 +33,6 @@ def init_robustness(ref_img: DeviceNDArray, cfa_pattern: DeviceNDArray, white_ba
     ----------
     ref_img : device Array[imshape_y, imshape_x]
         Raw reference image J_1
-    cfa_pattern : device Array[2,2]
-        Bayer pattern
     white_balance : device Array[3]
         White balance gains
     config : Config
@@ -61,7 +59,7 @@ def init_robustness(ref_img: DeviceNDArray, cfa_pattern: DeviceNDArray, white_ba
 
     # Computing guide image
     if bayer_mode:
-        guide_ref_img = compute_guide_image_(ref_img, cfa_pattern, white_balance)
+        guide_ref_img = compute_guide_image_(ref_img, white_balance)
     else:
         # Numba friendly code to add 1 channel
         guide_ref_img = ref_img.reshape((1, imshape_y, imshape_x)) 
@@ -76,7 +74,7 @@ def init_robustness(ref_img: DeviceNDArray, cfa_pattern: DeviceNDArray, white_ba
     
     
 def compute_robustness(comp_img: DeviceNDArray, ref_local_means: DeviceNDArray, ref_local_stds: DeviceNDArray,
-                       flows: DeviceNDArray, cfa_pattern: DeviceNDArray, white_balance: DeviceNDArray,
+                       flows: DeviceNDArray, white_balance: DeviceNDArray,
                        noise_model: Tuple[DeviceNDArray, DeviceNDArray], config: Config) -> DeviceNDArray:
     """
     this is the implementation of Algorithm 6: ComputeRobustness
@@ -93,8 +91,6 @@ def compute_robustness(comp_img: DeviceNDArray, ref_local_means: DeviceNDArray, 
         Local standard deviations of the reference image
     flows : device Array[n_patchs_y, n_patchs_y, 2]
         patch-wise optical flows of the compared image V_n(p)
-    cfa_pattern : device Array[2,2]
-        Bayer pattern
     white_balance : device Array[3]
         White balance gains
     config : Config
@@ -142,7 +138,7 @@ def compute_robustness(comp_img: DeviceNDArray, ref_local_means: DeviceNDArray, 
         
     # Computing guide image
     if bayer_mode:
-        guide_img = compute_guide_image_(comp_img, cfa_pattern, white_balance)
+        guide_img = compute_guide_image_(comp_img, white_balance)
     else:
         guide_img = comp_img.reshape((1, imshape_y, imshape_x)) # Adding 1 channel
         
@@ -169,7 +165,7 @@ def compute_robustness(comp_img: DeviceNDArray, ref_local_means: DeviceNDArray, 
     return r
 
 
-def compute_guide_image(raw_img: DeviceNDArray, cfa_pattern: DeviceNDArray, white_balance: DeviceNDArray):
+def compute_guide_image(raw_img: DeviceNDArray, white_balance: DeviceNDArray):
     """
     This is the implementation of Algorithm 7: ComputeGuideImage
     Return the guide image G associated with the raw frame J
@@ -178,8 +174,6 @@ def compute_guide_image(raw_img: DeviceNDArray, cfa_pattern: DeviceNDArray, whit
     ----------
     raw_img : device Array[imshape_y, imshape_x]
         Raw frame J_n.
-    cfa_pattern : device Array[2, 2]
-        Bayer pattern
     white_balance : device Array[3]
         White balance gains
 
@@ -198,31 +192,22 @@ def compute_guide_image(raw_img: DeviceNDArray, cfa_pattern: DeviceNDArray, whit
     blockspergrid_y = math.ceil(guide_imshape_y/threadsperblock[0])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
             
-    cuda_compute_guide_image[blockspergrid, threadsperblock](raw_img, guide_img, cfa_pattern, white_balance)
+    cuda_compute_guide_image[blockspergrid, threadsperblock](raw_img, guide_img, white_balance)
     
     return guide_img
     
 @cuda.jit
-def cuda_compute_guide_image(raw_img, guide_img, CFA, wb):
+def cuda_compute_guide_image(raw_img, guide_img, wb):
     tx, ty = cuda.grid(2)
     _, h, w = guide_img.shape
     
     if not (0 <= ty < h and
             0 <= tx < w):
         return
-        
-    g = 0
-    
-    for i in range(2):
-        for j in range(2):
-            c = uint8(CFA[i, j])
-            x = raw_img[2*ty + i, 2*tx + j] / wb[c] # Undo whitebalance
-            
-            if c == 1: # green
-                g += x
-            else:
-                guide_img[c, ty, tx] = x
-    guide_img[1, ty, tx] = g/2
+
+    guide_img[0, ty, tx] = raw_img[2*ty, 2*tx] / wb[0]
+    guide_img[1, ty, tx] = 0.5*(raw_img[2*ty, 2*tx+1] + raw_img[2*ty+1, 2*tx]) / wb[1]
+    guide_img[2, ty, tx] = raw_img[2*ty+1, 2*tx+1] / wb[2]
 
 def compute_local_stats(guide_img: DeviceNDArray):
     """

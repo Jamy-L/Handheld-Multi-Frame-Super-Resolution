@@ -277,3 +277,27 @@ def computePSNR(image, noisyImage):
     else:
         print('WARNING: images have different sizes: {}, {}. Returning None'.format(image.shape, noisyImage.shape))
         return None
+
+def cfa_to_rggb(x: np.ndarray, source_cfa: np.ndarray):
+    assert x.ndim in (2, 3), f"Expected 2 or 3 dim, got {x.shape}"
+    assert source_cfa.shape == (2, 2), f"expected cfa of shape (2, 2), got {source_cfa.shape}"
+
+    if np.array_equal(source_cfa, np.array([[0, 1], [1, 2]])):
+        return x
+
+    # BGGR
+    if np.array_equal(source_cfa, np.array([[2, 1], [1, 0]])):
+        return np.flip(x, axis=(-1, -2))
+    
+    # GBRG
+    if np.array_equal(source_cfa, np.array([[2, 1], [1, 0]])):
+        return np.flip(x, axis=-1)
+    # GRGB
+    if np.array_equal(source_cfa, np.array([[1, 2], [0, 1]])):
+        return np.flip(x, axis=-2)
+    
+    raise NotImplementedError(f"Unsupported CFA pattern {x}")
+
+def rggb_to_cfa(x: np.ndarray, target_cfa: np.ndarray):
+    # the function is its own inverse...
+    return cfa_to_rggb(x, target_cfa)

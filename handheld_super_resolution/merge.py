@@ -22,7 +22,7 @@ from .config import Config
 
     
 def merge(comp_img: DeviceNDArray, alignments: DeviceNDArray, covs: DeviceNDArray, r: DeviceNDArray,
-          num: DeviceNDArray, den: DeviceNDArray, cfa_pattern: DeviceNDArray, config: Config):
+          num: DeviceNDArray, den: DeviceNDArray, config: Config):
     """
     Implementation of Alg. 4: Accumulation
     Accumulates comp_img (J_n, n>1) into num and den, based on the alignment
@@ -71,14 +71,14 @@ def merge(comp_img: DeviceNDArray, alignments: DeviceNDArray, covs: DeviceNDArra
                     
     accumulate[blockspergrid, threadsperblock](
         comp_img, alignments, covs, r,
-        bayer_mode, iso_kernel, scale, tile_size, cfa_pattern,
+        bayer_mode, iso_kernel, scale, tile_size,
         num, den)
 
 
 
 @cuda.jit
 def accumulate(comp_img, alignments, covs, r,
-               bayer_mode, iso_kernel, scale, tile_size, CFA_pattern,
+               bayer_mode, iso_kernel, scale, tile_size,
                num, den):
     hr_j, hr_i = cuda.grid(2)
 
@@ -97,13 +97,6 @@ def accumulate(comp_img, alignments, covs, r,
         n_channels = 1
         acc = cuda.local.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
         val = cuda.local.array(1, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-
-    l_cfa = cuda.local.array((2,2), uint8)
-    l_cfa[0,0] = uint8(CFA_pattern[0,0])
-    l_cfa[0,1] = uint8(CFA_pattern[0,1])
-    l_cfa[1,0] = uint8(CFA_pattern[1,0])
-    l_cfa[1,1] = uint8(CFA_pattern[1,1])
-
 
     lr_x = (hr_j + 0.5) / scale
     lr_y = (hr_i + 0.5) / scale
@@ -196,7 +189,12 @@ def accumulate(comp_img, alignments, covs, r,
                     0 <= i < lr_h):
                 continue
 
-            channel = l_cfa[i%2, j%2] if bayer_mode else 0
+            if bayer_mode:
+                # rggb harcoded. so i,j even -> 0; both odd -> 2, else 1
+                channel = i%2 + j%2
+            else:
+                channel = 0
+
             c = comp_img[i, j]
         
             # computing distance

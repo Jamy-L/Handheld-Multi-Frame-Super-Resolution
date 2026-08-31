@@ -18,6 +18,7 @@ import warnings
 
 from . import raw2rgb
 from .utils import DEFAULT_NUMPY_FLOAT_TYPE
+from .utils_image import cfa_to_rggb
 
 # Paths of exiftool and dng validate. Only necessary to output dng.
 EXIFTOOL_PATH = 'exiftool' # Assumes exiftool is in PATH, but you can also paste the path here
@@ -160,6 +161,10 @@ def load_dng_burst(burst_path):
                 raw_comp[:, i::2, j::2] *= k
     else:
         warnings.warn('Input DNG images are not in integer format: is the input valid RAW data?')
+
+    # Flip to rggb
+    ref_raw = cfa_to_rggb(ref_raw, CFA)
+    raw_comp = cfa_to_rggb(raw_comp, CFA)
 
     return ref_raw, raw_comp, ISO, tags, CFA, xyz2cam, white_balance, raw_path_list[ref_id]
 
