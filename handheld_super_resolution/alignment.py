@@ -60,7 +60,7 @@ def init_alignment(ref_img: DeviceNDArray, config: Config):
         tiled = lvl.unfold(0, ts, ts).unfold(1, ts, ts)
 
         # Pad the crops with 0 to get size 2*R + 1
-        r = config.alignment.block_matching.search_radii[len(factors) - i - 1]
+        r = config.alignment.search_radii[len(factors) - i - 1]
         tiled = torch.nn.functional.pad(tiled, (r, r, r, r), mode='constant', value=0)
         fft = torch.fft.rfft2(tiled, dim=(-2, -1)) # The order of the dim tuple is EXTREMELY important !!! (and undocumented :)))))))
         assert isinstance(fft, torch.Tensor), f"Got invalid fft {fft}"

@@ -23,7 +23,6 @@ class NoiseModelConfig:
 
 @dataclass
 class BlockMatchingConfig:
-    search_radii: List[int] = field(default_factory=lambda: [1, 4, 4, 4])
     metrics: List[Literal["L1", "L2"]] = field(default_factory=lambda: ["L1", "L2", "L2", "L2"])
 
 
@@ -31,11 +30,13 @@ class BlockMatchingConfig:
 class ICAConfig:
     n_iter: int = 3
     sigma_blur: float = 0
+    clip: bool = True
 
 
 @dataclass
 class AlignmentConfig:
-    flow_upscale_mode: Literal["nearest", "bilinear", "bicubic"] = "nearest"
+    search_radii: List[int] = field(default_factory=lambda: [1, 4, 4, 4])
+    flow_upscale_mode: Literal["nearest", "bilinear", "bicubic"] = "bilinear"
     factors: List[int] = field(default_factory=lambda: [1, 2, 4, 4])
     tile_size: TileSize = SNR_BASED
     tile_size_factors: List[float] = field(default_factory=lambda: [1, 1, 1, 0.5])

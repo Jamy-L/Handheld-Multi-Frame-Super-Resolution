@@ -23,7 +23,7 @@ def align_lvl_block_matching_L2(tyled_pyr_lvl, ref_fft_lvl: torch.Tensor, moving
     verbose = config.verbose > 2
     currentTime = time.perf_counter()
     tileSize = config.alignment.tile_sizes[l]
-    searchRadius = config.alignment.block_matching.search_radii[l]
+    searchRadius = config.alignment.search_radii[l]
     distanceMetric = config.alignment.block_matching.metrics[l]
 
     imshape = moving_lvl.shape
@@ -80,7 +80,7 @@ def align_lvl_block_matching_L2(tyled_pyr_lvl, ref_fft_lvl: torch.Tensor, moving
 def align_lvl_block_matching_L1(ref_lvl: DeviceNDArray, moving_lvl: DeviceNDArray, alignments: torch.Tensor, l: int, config: Config):
     h, w, _ = alignments.shape
     tile_size = config.alignment.tile_sizes[l]
-    search_radius = config.alignment.block_matching.search_radii[l]
+    search_radius = config.alignment.search_radii[l]
     ny, nx, _ = alignments.shape
 
     # New way, 1 thread per pixel

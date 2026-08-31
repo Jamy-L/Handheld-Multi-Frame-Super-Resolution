@@ -87,6 +87,11 @@ def align_lvl_ica(ref_img: DeviceNDArray,
                   l: int, config: Config):
     verbose_3 = config.verbose >= 3
     tile_size = config.alignment.tile_sizes[l]
+    if config.alignment.ica.clip:
+        search_radius = config.alignment.search_radii[l]
+    else:
+        search_radius = 32,767 # Max int16 possible
+
 
     np_y, np_x, _ = alignment.shape
 
@@ -106,12 +111,12 @@ def align_lvl_ica(ref_img: DeviceNDArray,
         threadsperblock = (64, 16)  # because each thread handles 4 pixels
     else:
         raise NotImplementedError("ICA kernel for tile size {} not implemented".format(tile_size))
-    cuda_kernel[blockspergrid, threadsperblock]( # type: ignore
+    cuda_kernel[blockspergrid, threadsperblock](
         ref_img, ref_gradx_lvl, ref_grady_lvl, ref_hessian_lvl,
-        moving_lvl, alignment, config.alignment.ica.n_iter)
+        moving_lvl, alignment, config.alignment.ica.n_iter, search_radius)
 
 @cuda.jit
-def ica_kernel_8(ref_img, gradx, grady, hessian, moving, alignment, niter):
+def ica_kernel_8(ref_img, gradx, grady, hessian, moving, alignment, niter, clip_radius):
     # 1 thread/pixel, 1 block/patch
     TILE_SIZE = 8
     h, w = moving.shape
@@ -182,8 +187,8 @@ def ica_kernel_8(ref_img, gradx, grady, hessian, moving, alignment, niter):
         while N > 0:
             cuda.syncthreads()
             if tid < N:
-                s_B0[tid] += s_B0[tid + N]
-                s_B1[tid] += s_B1[tid + N]
+                s_B0[tid] += max(min(s_B0[tid + N], clip_radius), -clip_radius)
+                s_B1[tid] += max(min(s_B1[tid + N], clip_radius), -clip_radius)
             N = N // 2
         #############
 
@@ -200,7 +205,7 @@ def ica_kernel_8(ref_img, gradx, grady, hessian, moving, alignment, niter):
         alignment[py, px, 1] = s_alignment[1]
 
 @cuda.jit
-def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter):
+def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter, clip_radius):
     # 1 thread/pixel, 1 block/patch
     TILE_SIZE = 16
     h, w = moving.shape
@@ -274,15 +279,15 @@ def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter):
             B1 = s_B1[0]
 
             # solve Ax = B
-            s_alignment[0] += det_inv * (A11 * B0 - A01 * B1)
-            s_alignment[1] += det_inv * (-A10 * B0 + A00 * B1)
+            s_alignment[0] += max(min(det_inv * (A11 * B0 - A01 * B1), clip_radius), -clip_radius)
+            s_alignment[1] += max(min(det_inv * (-A10 * B0 + A00 * B1), clip_radius), -clip_radius)
 
     if tid == 0:
         alignment[py, px, 0] = s_alignment[0]
         alignment[py, px, 1] = s_alignment[1]
 
 @cuda.jit
-def ica_kernel_32(ref_img, gradx, grady, hessian, moving, alignment, niter):
+def ica_kernel_32(ref_img, gradx, grady, hessian, moving, alignment, niter, clip_radius):
     # 1 thread/pixel, 1 block/patch
     # No use of shared mem for interpolated patch because it just makes it slower
     TILE_SIZE = 32
@@ -364,15 +369,15 @@ def ica_kernel_32(ref_img, gradx, grady, hessian, moving, alignment, niter):
                 B1 += s_B1[i]
 
             # solve Ax = B
-            s_alignment[0] += det_inv * (A11 * B0 - A01 * B1)
-            s_alignment[1] += det_inv * (-A10 * B0 + A00 * B1)
+            s_alignment[0] += max(min(det_inv * (A11 * B0 - A01 * B1), clip_radius), -clip_radius)
+            s_alignment[1] += max(min(det_inv * (-A10 * B0 + A00 * B1), clip_radius), -clip_radius)
 
     if tid == 0:
         alignment[py, px, 0] = s_alignment[0]
         alignment[py, px, 1] = s_alignment[1]
 
 @cuda.jit
-def ica_kernel_64(ref_img, gradx, grady, hessian, moving, alignment, niter):
+def ica_kernel_64(ref_img, gradx, grady, hessian, moving, alignment, niter, clip_radius):
     ### 1 thread handles 4 pixels vertically, 1 block/patch
     # The reads from global mem are suprisingly well coalesced, so moving to shared mem would just waste time
     # - Each thread compute its 4 interpolated pixels and the corresponding B0,B1
@@ -482,8 +487,8 @@ def ica_kernel_64(ref_img, gradx, grady, hessian, moving, alignment, niter):
                 B1 += s_B1[i]
 
             # solve Ax = B
-            s_alignment[0] += det_inv * (A11 * B0 - A01 * B1)
-            s_alignment[1] += det_inv * (-A10 * B0 + A00 * B1)
+            s_alignment[0] += max(min(det_inv * (A11 * B0 - A01 * B1), clip_radius), -clip_radius)
+            s_alignment[1] += max(min(det_inv * (-A10 * B0 + A00 * B1), clip_radius), -clip_radius)
 
     if ti == 0:
         alignment[py, px, 0] = s_alignment[0]
