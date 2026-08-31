@@ -155,8 +155,8 @@ def cuda_estimate_kernel(full_grads,
     if is_iso:
         covs[pixel_idy, pixel_idx, 0, 0] = k_detail
         covs[pixel_idy, pixel_idx, 0, 1] = 0.0
-        covs[pixel_idy, pixel_idx, 1, 0] = k_detail
-        covs[pixel_idy, pixel_idx, 1, 1] = 0.0
+        covs[pixel_idy, pixel_idx, 1, 0] = 0.0
+        covs[pixel_idy, pixel_idx, 1, 1] = k_detail
         return
     
     structure_tensor = cuda.local.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
