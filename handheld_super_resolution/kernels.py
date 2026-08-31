@@ -122,6 +122,7 @@ def estimate_kernels(img: DeviceNDArray, config: Config):
         t1 = getTime(t1, "- Gradients computed")
         
     covs = cuda.device_array(grey_imshape + (2,2), DEFAULT_NUMPY_FLOAT_TYPE)
+    is_iso = config.merging.kernel_type == "iso"
 
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
     blockspergrid_x = math.ceil(grey_imshape_x/threadsperblock[1])
@@ -130,7 +131,7 @@ def estimate_kernels(img: DeviceNDArray, config: Config):
     
     cuda_estimate_kernel[blockspergrid, threadsperblock](cuda_full_grads,
                                     k_detail, k_denoise, D_th, D_tr, k_stretch, k_shrink,
-                                    covs, selection_law)  
+                                    covs, selection_law, is_iso)  
     if verbose_3:
         cuda.synchronize()
         t1 = getTime(t1, "- Covariances estimated")
@@ -143,12 +144,19 @@ def cuda_estimate_kernel(full_grads,
                          D_th, D_tr,
                          k_stretch, k_shrink,
                          covs,
-                         selection_law):
+                         selection_law, is_iso):
     pixel_idx, pixel_idy = cuda.grid(2)
     imshape_y, imshape_x, _, _ = covs.shape
 
     if not(0 <= pixel_idy < imshape_y and
            0 <= pixel_idx < imshape_x) :
+        return
+
+    if is_iso:
+        covs[pixel_idy, pixel_idx, 0, 0] = k_detail
+        covs[pixel_idy, pixel_idx, 0, 1] = 0.0
+        covs[pixel_idy, pixel_idx, 1, 0] = k_detail
+        covs[pixel_idy, pixel_idx, 1, 1] = 0.0
         return
     
     structure_tensor = cuda.local.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
@@ -166,13 +174,13 @@ def cuda_estimate_kernel(full_grads,
             if (0 <= y < full_grads.shape[0] and
                 0 <= x < full_grads.shape[1]):
                 
-                full_grad_x = full_grads[y, x, 0]
-                full_grad_y = full_grads[y, x, 1]
+                gx = full_grads[y, x, 0]
+                gy = full_grads[y, x, 1]
 
-                structure_tensor[0, 0] += full_grad_x * full_grad_x
-                structure_tensor[1, 0] += full_grad_x * full_grad_y
-                structure_tensor[0, 1] += full_grad_x * full_grad_y
-                structure_tensor[1, 1] += full_grad_y * full_grad_y
+                structure_tensor[0, 0] += gx * gx
+                structure_tensor[1, 0] += gx * gy
+                structure_tensor[0, 1] += gx * gy
+                structure_tensor[1, 1] += gy * gy
     
     l = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
     e1 = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)

@@ -55,7 +55,6 @@ def merge(comp_img: DeviceNDArray, alignments: DeviceNDArray, covs: DeviceNDArra
     scale = config.scale
 
     bayer_mode = config.mode == 'bayer'
-    iso_kernel = config.merging.kernel == 'iso'
     tile_size = config.alignment.tile_size
 
     native_im_size = comp_img.shape
@@ -71,14 +70,14 @@ def merge(comp_img: DeviceNDArray, alignments: DeviceNDArray, covs: DeviceNDArra
                     
     accumulate[blockspergrid, threadsperblock](
         comp_img, alignments, covs, r,
-        bayer_mode, iso_kernel, scale, tile_size,
+        bayer_mode, scale, tile_size,
         num, den)
 
 
 
 @cuda.jit
 def accumulate(comp_img, alignments, covs, r,
-               bayer_mode, iso_kernel, scale, tile_size,
+               bayer_mode, scale, tile_size,
                num, den):
     hr_j, hr_i = cuda.grid(2)
 
@@ -127,53 +126,52 @@ def accumulate(comp_img, alignments, covs, r,
         return
     
     # computing kernel
-    if not iso_kernel:
-        if bayer_mode :
-            kmap_j = lr_mov_x/2 - 0.5 # grey grid is offseted and twice more sparse
-            kmap_i = lr_mov_y/2 - 0.5
-        else:
-            kmap_j = lr_mov_x - 0.5 # grey grid is exactly the coarse grid
-            kmap_i = lr_mov_y - 0.5
+    if bayer_mode :
+        kmap_j = lr_mov_x/2 - 0.5 # grey grid is offseted and twice more sparse
+        kmap_i = lr_mov_y/2 - 0.5
+    else:
+        kmap_j = lr_mov_x - 0.5 # grey grid is exactly the coarse grid
+        kmap_i = lr_mov_y - 0.5
 
-        ## clipping bilinear interpolation of the covariance matrix
-        frac_x, _ = math.modf(kmap_j)
-        frac_y, _ = math.modf(kmap_i)
+    ## clipping bilinear interpolation of the covariance matrix
+    frac_x, _ = math.modf(kmap_j)
+    frac_y, _ = math.modf(kmap_i)
 
-        floor_x = max(int(kmap_j), 0)
-        floor_y = max(int(kmap_i), 0)
-        ceil_x = min(floor_x + 1, covs.shape[1]-1)
-        ceil_y = min(floor_y + 1, covs.shape[0]-1)
+    floor_x = max(int(kmap_j), 0)
+    floor_y = max(int(kmap_i), 0)
+    ceil_x = min(floor_x + 1, covs.shape[1]-1)
+    ceil_y = min(floor_y + 1, covs.shape[0]-1)
 
-        tr_cov_xx = covs[floor_y, floor_x, 0, 0]
-        tr_cov_xy = covs[floor_y, floor_x, 0, 1]
-        tr_cov_yy = covs[floor_y, floor_x, 1, 1]
-        tl_cov_xx = covs[floor_y, ceil_x, 0, 0]
-        tl_cov_xy = covs[floor_y, ceil_x, 0, 1]
-        tl_cov_yy = covs[floor_y, ceil_x, 1, 1]
-        br_cov_xx = covs[ceil_y, floor_x, 0, 0]
-        br_cov_xy = covs[ceil_y, floor_x, 0, 1]
-        br_cov_yy = covs[ceil_y, floor_x, 1, 1]
-        bl_cov_xx = covs[ceil_y, ceil_x, 0, 0]
-        bl_cov_xy = covs[ceil_y, ceil_x, 0, 1]
-        bl_cov_yy = covs[ceil_y, ceil_x, 1, 1]
+    tr_cov_xx = covs[floor_y, floor_x, 0, 0]
+    tr_cov_xy = covs[floor_y, floor_x, 0, 1]
+    tr_cov_yy = covs[floor_y, floor_x, 1, 1]
+    tl_cov_xx = covs[floor_y, ceil_x, 0, 0]
+    tl_cov_xy = covs[floor_y, ceil_x, 0, 1]
+    tl_cov_yy = covs[floor_y, ceil_x, 1, 1]
+    br_cov_xx = covs[ceil_y, floor_x, 0, 0]
+    br_cov_xy = covs[ceil_y, floor_x, 0, 1]
+    br_cov_yy = covs[ceil_y, floor_x, 1, 1]
+    bl_cov_xx = covs[ceil_y, ceil_x, 0, 0]
+    bl_cov_xy = covs[ceil_y, ceil_x, 0, 1]
+    bl_cov_yy = covs[ceil_y, ceil_x, 1, 1]
 
-        lerp_top_xx = tr_cov_xx + frac_x * (tl_cov_xx - tr_cov_xx)
-        lerp_top_xy = tr_cov_xy + frac_x * (tl_cov_xy - tr_cov_xy)
-        lerp_top_yy = tr_cov_yy + frac_x * (tl_cov_yy - tr_cov_yy)
-        lerp_bot_xx = br_cov_xx + frac_x * (bl_cov_xx - br_cov_xx)
-        lerp_bot_xy = br_cov_xy + frac_x * (bl_cov_xy - br_cov_xy)
-        lerp_bot_yy = br_cov_yy + frac_x * (bl_cov_yy - br_cov_yy)
+    lerp_top_xx = tr_cov_xx + frac_x * (tl_cov_xx - tr_cov_xx)
+    lerp_top_xy = tr_cov_xy + frac_x * (tl_cov_xy - tr_cov_xy)
+    lerp_top_yy = tr_cov_yy + frac_x * (tl_cov_yy - tr_cov_yy)
+    lerp_bot_xx = br_cov_xx + frac_x * (bl_cov_xx - br_cov_xx)
+    lerp_bot_xy = br_cov_xy + frac_x * (bl_cov_xy - br_cov_xy)
+    lerp_bot_yy = br_cov_yy + frac_x * (bl_cov_yy - br_cov_yy)
 
-        interp_cov_xx = lerp_top_xx + frac_y * (lerp_bot_xx - lerp_top_xx)
-        interp_cov_xy = lerp_top_xy + frac_y * (lerp_bot_xy - lerp_top_xy)
-        interp_cov_yy = lerp_top_yy + frac_y * (lerp_bot_yy - lerp_top_yy)
-        # inverting
-        det = interp_cov_xx * interp_cov_yy - interp_cov_xy * interp_cov_xy # Invertible by design
-        inv_det = 1.0 / det
+    interp_cov_xx = lerp_top_xx + frac_y * (lerp_bot_xx - lerp_top_xx)
+    interp_cov_xy = lerp_top_xy + frac_y * (lerp_bot_xy - lerp_top_xy)
+    interp_cov_yy = lerp_top_yy + frac_y * (lerp_bot_yy - lerp_top_yy)
+    # inverting
+    det = interp_cov_xx * interp_cov_yy - interp_cov_xy * interp_cov_xy # Invertible by design
+    inv_det = 1.0 / det
 
-        cov_i_xx =  inv_det * interp_cov_yy
-        cov_i_xy = -inv_det * interp_cov_xy
-        cov_i_yy =  inv_det * interp_cov_xx
+    cov_i_xx =  inv_det * interp_cov_yy
+    cov_i_xy = -inv_det * interp_cov_xy
+    cov_i_yy =  inv_det * interp_cov_xx
 
     center_j = int(lr_mov_x)
     center_i = int(lr_mov_y)
@@ -202,12 +200,9 @@ def accumulate(comp_img, alignments, covs, r,
             dist_y = i - lr_mov_i
 
             ### Computing w
-            if iso_kernel: 
-                z = 2 * (dist_x*dist_x + dist_y*dist_y)
-            else:
-                z = cov_i_xx * dist_x * dist_x + 2 * cov_i_xy * dist_x * dist_y + cov_i_yy * dist_y * dist_y
-                # z can be slightly negative because of numerical precision.
-                # I clamp it to not explode the error with exp
+            z = cov_i_xx * dist_x * dist_x + 2 * cov_i_xy * dist_x * dist_y + cov_i_yy * dist_y * dist_y
+            # z can be slightly negative because of numerical precision.
+            # I clamp it to not explode the error with exp
             z = max(0, z)
 
             w = math.exp(-0.5*z)
