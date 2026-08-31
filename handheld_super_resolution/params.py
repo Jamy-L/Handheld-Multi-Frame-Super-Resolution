@@ -20,19 +20,8 @@ def sanitize_config(config: Config, imshape: Tuple[int, int]):
         
     assert config.scale >= 1
 
-    if not config.robustness.enabled and (config.accumulated_robustness_denoiser.median.enabled or
-                                             config.accumulated_robustness_denoiser.gauss.enabled or
-                                             config.accumulated_robustness_denoiser.merge.enabled):
-        raise ValueError("Accumulated robustness denoiser cannot be enabled if robustness is disabled.")
-
-
     assert config.merging.kernel_type in ['steerable', 'iso'], f"Unknown kernel type {config.merging.kernel_type}"
     assert config.mode in ["bayer", 'grey'], f"Unknown mode {config.mode}"
-
-    if sum([1 if x.enabled else 0 for x in [config.accumulated_robustness_denoiser.median,
-                                            config.accumulated_robustness_denoiser.gauss,
-                                            config.accumulated_robustness_denoiser.merge]]) > 1:
-        raise ValueError("Only one accumulated robustness denoiser can be enabled at a time.")
 
     assert config.alignment.ica.n_iter > 0, "Number of ICA iterations should be positive."
     assert config.alignment.ica.sigma_blur >= 0, f"Invalid sigma blur {config.alignment.ica.sigma_blur}."

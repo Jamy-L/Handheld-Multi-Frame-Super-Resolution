@@ -89,36 +89,6 @@ class PostprocessingConfig:
 
 
 @dataclass
-class MedianDenoiserConfig:
-    enabled: bool = False
-    radius_max: int = 3
-    max_frame_count: int = 8
-
-
-@dataclass
-class GaussDenoiserConfig:
-    enabled: bool = False
-    sigma_max: float = 1.5
-    max_frame_count: int = 8
-
-
-@dataclass
-class MergeDenoiserConfig:
-    enabled: bool = False
-    rad_max: int = 2
-    max_multiplier: float = 8
-    max_frame_count: int = 2
-
-
-@dataclass
-class AccumulatedRobustnessDenoiserConfig:
-    median: MedianDenoiserConfig = field(default_factory=MedianDenoiserConfig)
-    gauss: GaussDenoiserConfig = field(default_factory=GaussDenoiserConfig)
-    merge: MergeDenoiserConfig = field(default_factory=MergeDenoiserConfig)
-    enabled: tyro.conf.Suppress[bool] = field(default=False, init=False)
-
-
-@dataclass
 class ExifConfig:
     cfa_pattern: List[List[int]]
     iso: float
@@ -139,7 +109,4 @@ class Config:
     robustness: RobustnessConfig = field(default_factory=RobustnessConfig)
     merging: MergingConfig = field(default_factory=MergingConfig)
     postprocessing: PostprocessingConfig = field(default_factory=PostprocessingConfig)
-    accumulated_robustness_denoiser: AccumulatedRobustnessDenoiserConfig = field(
-        default_factory=AccumulatedRobustnessDenoiserConfig
-    )
     exif: tyro.conf.Suppress[Optional[ExifConfig]] = field(default=None, init=False, repr=False)

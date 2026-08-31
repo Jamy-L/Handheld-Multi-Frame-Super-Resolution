@@ -132,6 +132,14 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
     # zeros init of num and den
     num = cuda.to_device(np.zeros((*output_size, 3), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
     den = cuda.to_device(np.zeros((*output_size, 3), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
+
+    #### Ref kernel estimation
+    cuda_kernels = estimate_kernels_(cuda_ref_img, config)
+    
+    ##### Merge ref
+    dummy_alignment = cuda.to_device(np.zeros(ref_hessian[-1].shape[:-1], dtype = DEFAULT_NUMPY_FLOAT_TYPE))
+    dummy_r = cuda.to_device(np.ones(cuda_ref_img.shape, dtype = DEFAULT_NUMPY_FLOAT_TYPE))
+    merge_(cuda_ref_img, dummy_alignment, cuda_kernels, dummy_r, num, den, cfa_pattern, config)
     
     if verbose :
         cuda.synchronize()
@@ -185,19 +193,6 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
         if debug_mode and config.robustness.enabled: 
             debug_dict['robustness'].append(robustness.copy_to_host())
         stream.synchronize()
-    
-    #### Ref kernel estimation
-    cuda_kernels = estimate_kernels_(cuda_ref_img, config)
-    
-    #### Merge ref
-    if accumulate_r:     
-        merge_ref_(cuda_ref_img, cuda_kernels,
-                   num, den, cfa_pattern,
-                   config, accumulated_r)
-    else:
-        merge_ref_(cuda_ref_img, cuda_kernels,
-                   num, den, cfa_pattern,
-                   config)
 
 
         
@@ -312,33 +307,10 @@ def process(burst_path: Union[Path, str], config: Config):
     handheld_output, debug_dict = main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), config)
     
     
-    #### Performing frame count aware denoising if enabled
-    median_config = config.accumulated_robustness_denoiser.median
-    gauss_config = config.accumulated_robustness_denoiser.gauss
-
-    median = median_config.enabled
-    gauss = gauss_config.enabled
-    post_frame_count_denoise = (median or gauss)
-
-    post_processing_enabled = config.postprocessing.enabled
-
-    if post_frame_count_denoise or post_processing_enabled:
-        if verbose_1:
-            print('Beginning post processing')
-    
-    if post_frame_count_denoise : 
-        if verbose_2:
-            print('-- Robustness aware bluring')
-        
-        if median:
-            handheld_output = frame_count_denoising_median(handheld_output, debug_dict['accumulated robustness'],
-                                                           median_config)
-        if gauss:
-            handheld_output = frame_count_denoising_gauss(handheld_output, debug_dict['accumulated robustness'],
-                                                          gauss_config)
 
 
     #### post processing
+    post_processing_enabled = config.postprocessing.enabled
     
     if post_processing_enabled:
         if verbose_2:
