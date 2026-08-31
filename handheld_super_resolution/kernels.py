@@ -190,7 +190,7 @@ def cuda_estimate_kernel(full_grads,
     get_eigen_elmts_2x2(structure_tensor, l, e1, e2)
 
     compute_k(l[0], l[1], k, k_detail, k_denoise, D_th, D_tr, k_stretch,
-    k_shrink, selection_law)
+        k_shrink, selection_law)
 
     k_1_sq = k[0]*k[0]
     k_2_sq = k[1]*k[1]
@@ -248,7 +248,7 @@ def hard_threshold(A, k_shrink, k_stretch):
 
 @cuda.jit(device=True)
 def linear(A, k_shrink, k_stretch):
-    k1 = 1 + A/2 * (1/k_shrink - 1)
-    k2 = 1 + A/2 * (k_stretch - 1)
+    k1 = (2-A) + (A-1)/k_shrink 
+    k2 = (2-A) + (A-1)*k_stretch
     return k1, k2
 
