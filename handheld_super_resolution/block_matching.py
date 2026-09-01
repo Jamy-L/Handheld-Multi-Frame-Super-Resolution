@@ -169,18 +169,20 @@ def cuda_L1_local_search16(ref, moving, search_radius, alignments):
     
     # Now find the minimum error and corresponding shift
     if tid == 0:
-        err = s_err[0, 0]
+        min = s_err[0, 0]
+        min_shift_x = -search_radius
+        min_shift_y = -search_radius
         for i in range(2*search_radius + 1):
             for j in range(2*search_radius + 1):
-                min = s_err[i, j]
+                err = s_err[i, j]
                 if err < min:
                     min = err
                     min_shift_y = i - search_radius
                     min_shift_x = j - search_radius
 
 
-    alignments[tile_y, tile_x, 0] = s_flow[0] + min_shift_x
-    alignments[tile_y, tile_x, 1] = s_flow[1] + min_shift_y
+        alignments[tile_y, tile_x, 0] = s_flow[0] + min_shift_x
+        alignments[tile_y, tile_x, 1] = s_flow[1] + min_shift_y
 
 @cuda.jit
 def cuda_L1_local_search32(ref, moving, search_radius, alignments):
@@ -241,18 +243,20 @@ def cuda_L1_local_search32(ref, moving, search_radius, alignments):
     
     # Now find the minimum error and corresponding shift
     if tid == 0:
-        err = FLOAT(float("inf"))
+        min = FLOAT(float("inf"))
+        min_shift_x = -search_radius
+        min_shift_y = -search_radius
         for i in range(2*search_radius + 1):
             for j in range(2*search_radius + 1):
-                min = s_err[i, j]
+                err = s_err[i, j]
                 if err < min:
                     min = err
                     min_shift_y = i - search_radius
                     min_shift_x = j - search_radius
 
 
-    alignments[tile_y, tile_x, 0] = s_flow[0] + min_shift_x
-    alignments[tile_y, tile_x, 1] = s_flow[1] + min_shift_y
+        alignments[tile_y, tile_x, 0] = s_flow[0] + min_shift_x
+        alignments[tile_y, tile_x, 1] = s_flow[1] + min_shift_y
 
 @cuda.jit
 def cuda_L1_local_search64(ref, moving, search_radius, alignments):
@@ -334,18 +338,20 @@ def cuda_L1_local_search64(ref, moving, search_radius, alignments):
 
     # Now find the minimum error and corresponding shift
     if tid == 0:
-        err = FLOAT(float("inf"))
+        min = FLOAT(float("inf"))
+        min_shift_x = -search_radius
+        min_shift_y = -search_radius
         for i in range(2*search_radius + 1):
             for j in range(2*search_radius + 1):
-                min = s_err[i, j]
+                err = s_err[i, j]
                 if err < min:
                     min = err
                     min_shift_y = i - search_radius
                     min_shift_x = j - search_radius
 
 
-    alignments[py, px, 0] = s_flow[0] + min_shift_x
-    alignments[py, px, 1] = s_flow[1] + min_shift_y
+        alignments[py, px, 0] = s_flow[0] + min_shift_x
+        alignments[py, px, 1] = s_flow[1] + min_shift_y
 
 
 def extract_flow_patches(frame_tgt: DeviceNDArray, flow: torch.Tensor, patch_size: int, radius: int):

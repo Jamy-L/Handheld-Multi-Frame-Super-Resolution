@@ -156,11 +156,10 @@ def ica_kernel_8(ref_img, gradx, grady, hessian, moving, alignment, niter, clip_
         # Warp I with W(x; p) to compute I(W(x; p))
 
         ## bilinear interpolation at new_x, new_y
-        floor_x = x + int(s_alignment[0])
-        floor_y = y + int(s_alignment[1])
-        frac_x, _ = math.modf(s_alignment[0])
-        frac_y, _ = math.modf(s_alignment[1])
-        # Note: in theory frac_x, floor_x = math.modf(x + alignment[0]) in 1 shot. But it is surprisingly faster to compute it from s_alignment this way 
+        floor_x = int(math.floor(x + s_alignment[0]))
+        floor_y = int(math.floor(y + s_alignment[1]))
+        frac_x = x + s_alignment[0] - floor_x
+        frac_y = y + s_alignment[1] - floor_y
 
         floor_x = clamp(floor_x, 0, w - 1)
         floor_y = clamp(floor_y, 0, h - 1)
@@ -244,11 +243,10 @@ def ica_kernel_16(ref_img, gradx, grady, hessian, moving, alignment, niter, clip
         # Warp I with W(x; p) to compute I(W(x; p))
 
         ## bilinear interpolation at new_x, new_y
-        floor_x = x + int(s_alignment[0])
-        floor_y = y + int(s_alignment[1])
-        frac_x, _ = math.modf(s_alignment[0])
-        frac_y, _ = math.modf(s_alignment[1])
-        # Note: in theory frac_x, floor_x = math.modf(x + alignment[0]) in 1 shot. But it is surprisingly faster to compute it from s_alignment this way 
+        floor_x = int(math.floor(x + s_alignment[0]))
+        floor_y = int(math.floor(y + s_alignment[1]))
+        frac_x = x + s_alignment[0] - floor_x
+        frac_y = y + s_alignment[1] - floor_y
 
         m00 = moving[floor_y + 0, floor_x + 0] if 0 <= floor_y + 0 < h and 0 <= floor_x + 0 < w else FLOAT(0.0)
         m01 = moving[floor_y + 0, floor_x + 1] if 0 <= floor_y + 0 < h and 0 <= floor_x + 1 < w else FLOAT(0.0)
@@ -328,11 +326,10 @@ def ica_kernel_32(ref_img, gradx, grady, hessian, moving, alignment, niter, clip
         # Warp I with W(x; p) to compute I(W(x; p))
 
         ## bilinear interpolation at new_x, new_y
-        frac_x, _ = math.modf(s_alignment[0])
-        frac_y, _ = math.modf(s_alignment[1])
-
-        floor_x = x + int(s_alignment[0])
-        floor_y = y + int(s_alignment[1])
+        floor_x = int(math.floor(x + s_alignment[0]))
+        floor_y = int(math.floor(y + s_alignment[1]))
+        frac_x = x + s_alignment[0] - floor_x
+        frac_y = y + s_alignment[1] - floor_y
 
         m00 = moving[floor_y + 0, floor_x + 0] if 0 <= floor_y + 0 < h and 0 <= floor_x + 0 < w else FLOAT(0.0)
         m01 = moving[floor_y + 0, floor_x + 1] if 0 <= floor_y + 0 < h and 0 <= floor_x + 1 < w else FLOAT(0.0)
@@ -442,12 +439,12 @@ def ica_kernel_64(ref_img, gradx, grady, hessian, moving, alignment, niter, clip
         B1 = FLOAT(0.0)
 
         ## bilinear interpolation at new_x, new_y
-        frac_x, _ = math.modf(s_alignment[0])
-        frac_y, _ = math.modf(s_alignment[1])
-        floor_x = x + int(s_alignment[0])
+        floor_x = int(math.floor(x + s_alignment[0]))
+        floor_y = int(math.floor(y + s_alignment[1]))
+        frac_x = x + s_alignment[0] - floor_x
+        frac_y = y + s_alignment[1] - floor_y
 
         # We need to interpolate 4 vertically aligned pixels, so we do it with a sliding strategy ; reuse lerpx as we slide down
-        floor_y = y + int(s_alignment[1])
         m10 = moving[floor_y, floor_x + 0] if 0 <= floor_y < h and 0 <= floor_x + 0 < w else FLOAT(0.0)
         m11 = moving[floor_y, floor_x + 1] if 0 <= floor_y < h and 0 <= floor_x + 1 < w else FLOAT(0.0)
         lerpx_bot = m10 + (m11 - m10) * frac_x
