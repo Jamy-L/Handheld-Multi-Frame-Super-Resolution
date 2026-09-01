@@ -1,6 +1,7 @@
 import math
 
 import numpy as np
+from numpy.typing import NDArray
 from scipy.ndimage._filters import _gaussian_kernel1d
 from numba import cuda
 import torch as th
@@ -301,3 +302,27 @@ def cfa_to_rggb(x: np.ndarray, source_cfa: np.ndarray):
 def rggb_to_cfa(x: np.ndarray, target_cfa: np.ndarray):
     # the function is its own inverse...
     return cfa_to_rggb(x, target_cfa)
+
+def estimate_image_snr(ref_img: NDArray[np.float32], alpha: float, beta: float, white_balance: NDArray[np.float32]) -> float:
+    # undo wb
+    r = ref_img[::2, ::2] * white_balance[1] / white_balance[0] 
+    g1 = ref_img[::2, 1::2]
+    g2 = ref_img[1::2, ::2]
+    b = ref_img[1::2, 1::2] * white_balance[1] / white_balance[2]
+
+    varr =  alpha*r + beta
+    varg1 =  alpha*g1 + beta
+    varg2 =  alpha*g2 + beta
+    varb =  alpha*b + beta
+
+    validr = (r > 0) & (r < 1)
+    validg1 = (g1 > 0) & (g1 < 1)
+    validg2 = (g2 > 0) & (g2 < 1)
+    validb = (b > 0) & (b < 1)
+
+    top = np.concatenate((r[validr], g1[validg1], g2[validg2], b[validb]))
+    bot = np.concatenate((varr[validr], varg1[validg1], varg2[validg2], varb[validb]))
+
+    SNR = np.sqrt(np.sum(top*top)/np.sum(bot))
+    SNR = 20 * np.log10(SNR)
+    return SNR

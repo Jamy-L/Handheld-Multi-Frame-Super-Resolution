@@ -26,7 +26,7 @@ from numba import cuda
 from numba.cuda.cudadrv.devicearray import DeviceNDArray
 import rawpy
 
-from .utils_image import compute_grey_images, apply_orientation, rggb_to_cfa
+from .utils_image import compute_grey_images, apply_orientation, rggb_to_cfa, estimate_image_snr
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso, timer
 from .alignment import align, init_alignment
 from .config import Config, ExifConfig
@@ -228,20 +228,22 @@ def process(burst_path: Union[Path, str], config: Config):
                                          config.verbose >= 2)
     
     # reading image stack
-    ref_raw, raw_comp, ISO, tags, CFA, xyz2cam, white_balance, ref_path = load_dng_burst(burst_path)
-    
+    ref_raw, raw_comp, iso, tags, CFA, xyz2cam, white_balance, ref_path = load_dng_burst(burst_path)
+
     if config.noise_model.alpha is not None:
         # User provided custom values.
-        print("Using user provided alpha and beta values")
+        print("Using user-provided alpha and beta values")
         alpha = config.noise_model.alpha
         beta = config.noise_model.beta
     ## The noise model exif are already scaled for the image ISO.
     elif config.mode == 'grey':
         alpha = tags['Image Tag 0xC761'].values[0][0]
         beta = tags['Image Tag 0xC761'].values[1][0]
-    else:
+    elif config.mode == 'bayer':
         alpha = sum([x[0] for x in tags['Image Tag 0xC761'].values[::2]])/3
         beta = sum([x[0] for x in tags['Image Tag 0xC761'].values[1::2]])/3
+    else:
+        raise ValueError("Noise model parameters not found in EXIF and not provided by user.")
     config.noise_model.alpha = alpha
     config.noise_model.beta = beta
     #### Packing noise model related to picture ISO
@@ -262,20 +264,12 @@ def process(burst_path: Union[Path, str], config: Config):
         currentTime = getTime(currentTime, ' -- Read raw files')
 
     #### Estimating ref image SNR
-    brightness = np.mean(ref_raw)
-    
-    id_noise = round(1000*brightness)
-    std = std_curve[id_noise]
-    
-    SNR = brightness/std
+    snr = estimate_image_snr(ref_raw, alpha, beta, white_balance)
+
     if verbose_1:
-        print(" ",10*"-")
-        print('|ISO : {}'.format(ISO))
-        print('|Image brightness : {:.2f}'.format(brightness))
-        print('|expected noise std : {:.2e}'.format(std))
-        print('|Estimated SNR : {:.2f}'.format(SNR))
+        print(f"Estimated snr: {snr:.2f} dB")
     
-    update_snr_config(config, SNR)
+    update_snr_config(config, snr)
     
     # checking (just in case !)
     sanitize_config(config, ref_raw.shape)
@@ -283,7 +277,7 @@ def process(burst_path: Union[Path, str], config: Config):
 
     config.exif = ExifConfig(
         cfa_pattern=CFA.tolist(),
-        iso=ISO,
+        iso=iso,
         white_balance=list(white_balance),
     )
 
@@ -334,6 +328,3 @@ def process(burst_path: Union[Path, str], config: Config):
     
     
     return output_image, debug_dict
-
-    
-    
