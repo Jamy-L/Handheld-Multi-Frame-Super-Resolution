@@ -1,7 +1,7 @@
 """Typed configuration schema for handheld super-resolution."""
 
 from dataclasses import dataclass, field
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional, Tuple, Union
 
 import tyro
 
@@ -15,8 +15,8 @@ TileSize = Union[int, Literal["SNR_based"]]
 class NoiseModelConfig:
     """Sensor noise model. Values are read from DNG metadata when omitted."""
 
-    alpha: Optional[float] = None
-    beta: Optional[float] = None
+    alpha: Optional[Tuple[float, float, float, float]] = None
+    beta: Optional[Tuple[float, float, float, float]] = None
     std_curve: tyro.conf.Suppress[List[float]] = field(default_factory=list, init=False, repr=False)
     diff_curve: tyro.conf.Suppress[List[float]] = field(default_factory=list, init=False, repr=False)
 
@@ -35,6 +35,7 @@ class ICAConfig:
 
 @dataclass
 class AlignmentConfig:
+    grey_method: Literal["FFT"] = "FFT"
     search_radii: List[int] = field(default_factory=lambda: [1, 4, 4, 4])
     flow_upscale_mode: Literal["nearest", "bilinear", "bicubic"] = "bilinear"
     factors: List[int] = field(default_factory=lambda: [1, 2, 4, 4])
@@ -48,6 +49,7 @@ class AlignmentConfig:
 @dataclass
 class RobustnessConfig:
     enabled: bool = True
+    noise_correction: bool = True
     save_mask: bool = True
     t: float = 0.12
     s1: float = 2
@@ -82,18 +84,12 @@ class SharpeningConfig:
 @dataclass
 class PostprocessingConfig:
     enabled: bool = True
+    do_white_balance: bool = True
     do_color_correction: bool = True
     do_gamma_correction: bool = True
     do_tonemapping: bool = False
     sharpening: SharpeningConfig = field(default_factory=SharpeningConfig)
     do_devignetting: bool = False
-
-
-@dataclass
-class ExifConfig:
-    cfa_pattern: List[List[int]]
-    iso: float
-    white_balance: List[float]
 
 
 @dataclass
@@ -104,10 +100,9 @@ class Config:
     mode: Literal["bayer", "grey"] = "bayer"
     debug: bool = False
     verbose: int = 1
-    grey_method: Literal["FFT"] = "FFT"
+    use_gat: bool = True
     noise_model: NoiseModelConfig = field(default_factory=NoiseModelConfig)
     alignment: AlignmentConfig = field(default_factory=AlignmentConfig)
     robustness: RobustnessConfig = field(default_factory=RobustnessConfig)
     merging: MergingConfig = field(default_factory=MergingConfig)
     postprocessing: PostprocessingConfig = field(default_factory=PostprocessingConfig)
-    exif: tyro.conf.Suppress[Optional[ExifConfig]] = field(default=None, init=False, repr=False)

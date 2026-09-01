@@ -16,6 +16,9 @@ import rawpy
 import imageio
 import warnings
 
+from dataclasses import dataclass
+from typing import Any, Dict, Tuple, Union, List
+
 from . import raw2rgb
 from .utils import DEFAULT_NUMPY_FLOAT_TYPE
 from .utils_image import cfa_to_rggb
@@ -48,7 +51,56 @@ PHOTO_INTER = {
 # Supported Photometric Interpretations
 SUPPORTED = [1, 32803]
 
-def load_dng_burst(burst_path):
+
+@dataclass
+class DNGStack:
+    """Images, metadata, calibration values, and paths for a DNG burst."""
+
+    burst_path: Path
+    raw_paths: Tuple[Path, ...]
+    reference_index: int
+    ref_raw: np.ndarray
+    raw_comp: np.ndarray
+    iso: int
+    tags: Dict[str, Any]
+    cfa: np.ndarray
+    xyz2cam: np.ndarray
+    camera_to_srgb: np.ndarray
+    white_balance: np.ndarray
+    white_level: int
+    black_levels: np.ndarray
+    alpha: Tuple[float, float, float, float]
+    beta: Tuple[float, float, float, float]
+    photometric_interpretation: Union[int, None] = None
+
+    @property
+    def reference_path(self) -> Path:
+        """Path of the frame used as the reference image."""
+        return self.raw_paths[self.reference_index]
+
+    @property
+    def comparison_paths(self) -> Tuple[Path, ...]:
+        """Paths of all non-reference frames, in stack order."""
+        return self.raw_paths[:self.reference_index] + self.raw_paths[self.reference_index + 1:]
+
+    def get_raw_arrays(self) -> Tuple[np.ndarray, np.ndarray]:
+        # Array RGGB by design
+        # wb is given as r g1 b g2
+        ref = self.ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE)
+        ref[::2, ::2] = (ref[::2, ::2] - self.black_levels[0]) / (self.white_level - self.black_levels[0])
+        ref[::2, 1::2] = (ref[::2, 1::2] - self.black_levels[1]) / (self.white_level - self.black_levels[1])
+        ref[1::2, ::2] = (ref[1::2, ::2] - self.black_levels[2]) / (self.white_level - self.black_levels[2])
+        ref[1::2, 1::2] = (ref[1::2, 1::2] - self.black_levels[3]) / (self.white_level - self.black_levels[3])
+
+        comp = self.raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE)
+        comp[:, ::2, ::2] = (comp[:, ::2, ::2] - self.black_levels[0]) / (self.white_level - self.black_levels[0])
+        comp[:, ::2, 1::2] = (comp[:, ::2, 1::2] - self.black_levels[1]) / (self.white_level - self.black_levels[1])
+        comp[:, 1::2, ::2] = (comp[:, 1::2, ::2] - self.black_levels[2]) / (self.white_level - self.black_levels[2])
+        comp[:, 1::2, 1::2] = (comp[:, 1::2, 1::2] - self.black_levels[3]) / (self.white_level - self.black_levels[3])
+        return ref, comp
+
+
+def load_dng_burst(burst_path: Union[str, Path]) -> DNGStack:
     """
     Loads a dng burst into numpy arrays, and their exif tags.
 
@@ -59,62 +111,45 @@ def load_dng_burst(burst_path):
 
     Returns
     -------
-    ref_raw : numpy Array[H, W]
-        Reference frame
-    raw_comp : numpy Array[n, H, W]
-        Stack of non-reference frame
-    ISO : int
-        Clipped ISO (between 100 and 3600)
-    tags : dict
-        Tags of the reference frame
-    CFA : numpy array [2, 2]
-        Bayer pattern of the stack
-    xyz2cam : Array
-        The xyz to camera color matrix
-    reference_path
-        Path of the reference image.
+    DNGStack
+        Loaded frames, metadata, calibration values, and source paths.
 
     """
     ref_id = 0
     raw_comp = []
 
-    # This ensures that burst_path is a Path object
     burst_path = Path(burst_path)
 
 
     #### Read dng as numpy arrays
-    # Get the list of raw images in the burst path
     raw_path_list = sorted(glob.glob(os.path.join(burst_path.as_posix(), '*.dng')))
     assert len(raw_path_list) != 0, 'At least one raw .dng file must be present in the burst folder.'
-    # Read the raw bayer data from the DNG files
+
     for index, raw_path in enumerate(raw_path_list):
         with rawpy.imread(raw_path) as rawObject:
             if index != ref_id:
-
                 raw_comp.append(rawObject.raw_image.copy())  # copy otherwise image data is lost when the rawpy object is closed
     raw_comp = np.array(raw_comp)
 
-    # Reference image selection and metadata
     raw = rawpy.imread(raw_path_list[ref_id])
     ref_raw = raw.raw_image.copy()
 
 
-
-
     #### Reading tags of the reference image
     xyz2cam = raw2rgb.get_xyz2cam_from_exif(raw_path_list[ref_id])
+    camera_to_srgb = raw2rgb.get_camera_to_srgb_matrix(raw, xyz2cam)
 
-    # reading exifs for white level, black leve and CFA
+    # reading exifs for white level, black level and CFA
     with open(raw_path_list[ref_id], 'rb') as raw_file:
         tags = exifread.process_file(raw_file)
 
-
-    if 'Image PhotometricInterpretation' in tags.keys():
-        photo_inter = tags['Image PhotometricInterpretation'].values[0]
-        if photo_inter not in SUPPORTED:
+    photometric_interpretation = tags.get('Image PhotometricInterpretation', None)
+    if photometric_interpretation:
+        photometric_interpretation = photometric_interpretation.values[0]
+        if photometric_interpretation not in SUPPORTED:
             warnings.warn('The input images have a photometric interpretation '\
                              'of type "{}", but only {} are supprted.'.format(
-                                 PHOTO_INTER[photo_inter], str([PHOTO_INTER[i] for i in SUPPORTED])))
+                                 PHOTO_INTER[photometric_interpretation], str([PHOTO_INTER[i] for i in SUPPORTED])))
             
     else:
         warnings.warn('PhotometricInterpretation could not be found in image tags. '\
@@ -125,48 +160,85 @@ def load_dng_burst(burst_path):
     # exifread method is inconsistent because camera manufacters can put
     # this under many different tags.
 
-    black_levels = raw.black_level_per_channel
-
-    white_balance = raw.camera_whitebalance
+    if raw.color_desc != b"RGBG": # This has nothing to do with the CFA, just the order of the color wb channels
+        raise NotImplementedError(f"Unexpected color_desc: {raw.color_desc!r}")
+    black_levels = np.asarray(raw.black_level_per_channel) # R, G1, B, G2
+    white_balance = np.asarray(raw.camera_whitebalance) # R G1, B, G2
+    assert len(white_balance) == 4, f"Unexpected camera_whitebalance: {white_balance!r}"
+    if white_balance[-1] == 0:
+        warnings.warn(f"Camera white balance ends with 0: {white_balance!r}. Using the second green channel's value instead.")
+        white_balance[-1] = white_balance[1]
 
     CFA = raw.raw_pattern.copy() # copying to ensure contiguity of the array
     CFA[CFA == 3] = 1 # Rawpy gives channel 3 to the second green channel. Setting both greens to 1
+    raw.close()
 
     if 'EXIF ISOSpeedRatings' in tags.keys():
-        ISO = int(str(tags['EXIF ISOSpeedRatings']))
+        iso = int(str(tags['EXIF ISOSpeedRatings']))
     elif 'Image ISOSpeedRatings' in tags.keys():
-        ISO = int(str(tags['Image ISOSpeedRatings']))
+        iso = int(str(tags['Image ISOSpeedRatings']))
     else:
         raise AttributeError('ISO value could not be found in both EXIF and Image type.')
 
     # Clipping ISO to 100 from below
-    ISO = max(100, ISO)
-    ISO = min(3200, ISO)
+    iso = max(100, iso)
+    iso = min(3200, iso)
+
+    alpha = [x[0] for x in tags['Image Tag 0xC761'].values[::2]]
+    beta = [x[0] for x in tags['Image Tag 0xC761'].values[1::2]]
+    assert len(alpha) == len(beta), f'Alpha and beta values should have the same length, got {len(alpha)} and {len(beta)}.'
+
+    # R G1 B G1
+    if len(alpha) == 1:
+        alpha = (alpha[0], alpha[0], alpha[0], alpha[0])
+        beta = (beta[0], beta[0], beta[0], beta[0])
+    elif len(alpha) == 3:
+        alpha = (alpha[0], alpha[1], alpha[2], alpha[1])
+        beta = (beta[0], beta[1], beta[2], beta[1])
+    else: # For the case 4, we would need to rearange to format RGGB regardless of cfa
+        raise NotImplementedError(f'Alpha and beta values should have length 1 or 3, got {len(alpha)} and {len(beta)}.')
 
 
     #### Performing whitebalance
     assert (type_ := type(ref_raw[0, 0])) == (y := type(raw_comp[0, 0, 0])), f'Reference and comp images should have the same data type, got {type_} and {y}.'
+    assert np.issubdtype(type_, np.integer), f'Input DNG images are not in integer format: is the input valid RAW data? Got {type_}.'
 
-
-    if np.issubdtype(type_, np.integer):
-        ref_raw = ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE)
-        raw_comp = raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE)
-        for i in range(2):
-            for j in range(2):
-                channel = CFA[i, j]
-                k = white_balance[channel] / white_balance[1]
-                ref_raw[i::2, j::2] = (ref_raw[i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
-                raw_comp[:, i::2, j::2] = (raw_comp[:, i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
-                ref_raw[i::2, j::2] *= k
-                raw_comp[:, i::2, j::2] *= k
-    else:
-        warnings.warn('Input DNG images are not in integer format: is the input valid RAW data?')
+    # if np.issubdtype(type_, np.integer):
+    #     ref_raw = ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE)
+    #     raw_comp = raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE)
+    #     for i in range(2):
+    #         for j in range(2):
+    #             channel = CFA[i, j]
+    #             k = white_balance[channel] / white_balance[1]
+    #             ref_raw[i::2, j::2] = (ref_raw[i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
+    #             raw_comp[:, i::2, j::2] = (raw_comp[:, i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
+    #             ref_raw[i::2, j::2] *= k
+    #             raw_comp[:, i::2, j::2] *= k
+    # else:
+    #     warnings.warn('Input DNG images are not in integer format: is the input valid RAW data?')
 
     # Flip to rggb
     ref_raw = cfa_to_rggb(ref_raw, CFA)
     raw_comp = cfa_to_rggb(raw_comp, CFA)
 
-    return ref_raw, raw_comp, ISO, tags, CFA, xyz2cam, white_balance, raw_path_list[ref_id]
+    return DNGStack(
+        burst_path=burst_path,
+        raw_paths=tuple(Path(raw_path) for raw_path in raw_path_list),
+        reference_index=ref_id,
+        ref_raw=ref_raw,
+        raw_comp=raw_comp,
+        iso=iso,
+        tags=tags,
+        cfa=CFA,
+        xyz2cam=xyz2cam,
+        camera_to_srgb=camera_to_srgb,
+        white_balance=white_balance,
+        white_level=white_level,
+        black_levels=black_levels,
+        alpha=alpha,
+        beta=beta,
+        photometric_interpretation=photometric_interpretation,
+    )
 
 
 def save_as_dng(np_img, ref_dng_path, outpath):

@@ -29,7 +29,7 @@ import rawpy
 from .utils_image import compute_grey_images, apply_orientation, rggb_to_cfa, estimate_image_snr
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso, timer
 from .alignment import align, init_alignment
-from .config import Config, ExifConfig
+from .config import Config
 from .params import runtime_config, sanitize_config, update_snr_config
 from .robustness import init_robustness, compute_robustness
 from .utils_dng import load_dng_burst
@@ -65,7 +65,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
 
     """
     
-    grey_method = config.grey_method
+    grey_method = config.alignment.grey_method
     
     ### verbose and timing related stuff
     verbose = config.verbose >= 1
@@ -86,10 +86,8 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
     debug_dict = {"robustness":[],
                   "flow":[]}
 
-    assert config.exif is not None, "Exif data missing from conf"
     #### Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
-    white_balance = cuda.to_device(np.array(config.exif.white_balance))
 
     # This running buffer is for the image being processed
     stream = cuda.stream()
@@ -112,7 +110,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
 
     #### Local stats estimation
     if config.robustness.enabled:
-        ref_local_means, ref_local_stds = init_robustness_(cuda_ref_img, white_balance, config)
+        ref_local_means, ref_local_stds = init_robustness_(cuda_ref_img, config)
     else:
         ref_local_means, ref_local_stds = None, None
 
@@ -122,10 +120,11 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
         assert ref_local_means
         accumulated_r = cuda.to_device(np.zeros(ref_local_means.shape[1:]))
 
-    scale = config.scale
     native_imshape_y, native_imshape_x = cuda_ref_img.shape
-    output_size = (round(scale*native_imshape_y), round(scale*native_imshape_x))
-    # zeros init of num and den
+    output_size = (
+        round(config.scale*native_imshape_y),
+        round(config.scale*native_imshape_x))
+    
     num = cuda.to_device(np.zeros((*output_size, 3), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
     den = cuda.to_device(np.zeros((*output_size, 3), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
 
@@ -157,17 +156,17 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
         else:
             cuda_im_grey = cuda_img
 
-        final_alignment = align_(ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian,
+        alignment = align_(ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian,
                         cuda_im_grey, config)
         
         if debug_mode:
-            debug_dict["flow"].append(final_alignment.copy_to_host())
+            debug_dict["flow"].append(alignment.copy_to_host())
             
         #### Robustness
         if config.robustness.enabled:
             assert ref_local_means is not None
             assert ref_local_stds is not None
-            robustness = compute_robustness_(cuda_img, ref_local_means, ref_local_stds, final_alignment, white_balance, (cuda_std_curve, cuda_diff_curve), config)
+            robustness = compute_robustness_(cuda_img, ref_local_means, ref_local_stds, alignment, (cuda_std_curve, cuda_diff_curve), config)
         else:
             temp = np.ones_like(cuda_img, DEFAULT_NUMPY_FLOAT_TYPE)
             robustness = cuda.to_device(temp)
@@ -179,7 +178,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
         cuda_kernels = estimate_kernels_(cuda_img, config)
         
         #### Merging
-        merge_(cuda_img, final_alignment, cuda_kernels, robustness, num, den, config)
+        merge_(cuda_img, alignment, cuda_kernels, robustness, num, den, config)
         
         if verbose :
             cuda.synchronize()
@@ -228,58 +227,45 @@ def process(burst_path: Union[Path, str], config: Config):
                                          config.verbose >= 2)
     
     # reading image stack
-    ref_raw, raw_comp, iso, tags, CFA, xyz2cam, white_balance, ref_path = load_dng_burst(burst_path)
+    dng_stack = load_dng_burst(burst_path)
+    ref_raw, raw_comp = dng_stack.get_raw_arrays() # Scale [black level, whiteleve] -> [0, 1] WITHOUT WB, clipping or anything
 
     if config.noise_model.alpha is not None:
+        assert config.noise_model.beta is not None, "If alpha is provided, beta must also be provided."
         # User provided custom values.
         print("Using user-provided alpha and beta values")
-        alpha = config.noise_model.alpha
-        beta = config.noise_model.beta
-    ## The noise model exif are already scaled for the image ISO.
-    elif config.mode == 'grey':
-        alpha = tags['Image Tag 0xC761'].values[0][0]
-        beta = tags['Image Tag 0xC761'].values[1][0]
-    elif config.mode == 'bayer':
-        alpha = sum([x[0] for x in tags['Image Tag 0xC761'].values[::2]])/3
-        beta = sum([x[0] for x in tags['Image Tag 0xC761'].values[1::2]])/3
     else:
-        raise ValueError("Noise model parameters not found in EXIF and not provided by user.")
-    config.noise_model.alpha = alpha
-    config.noise_model.beta = beta
+        # Extract alpha and beta from the DNG tags.
+        config.noise_model.alpha = dng_stack.alpha
+        config.noise_model.beta = dng_stack.beta
+
     #### Packing noise model related to picture ISO
-    # curve_iso = round_iso(ISO) # Rounds non standart ISO to regular ISO (100, 200, 400, ...)
-    # std_noise_model_label = 'noise_model_std_ISO_{}'.format(curve_iso)
-    # diff_noise_model_label = 'noise_model_diff_ISO_{}'.format(curve_iso)
-    # std_noise_model_path = (NOISE_MODEL_PATH / std_noise_model_label).with_suffix('.npy')
-    # diff_noise_model_path = (NOISE_MODEL_PATH / diff_noise_model_label).with_suffix('.npy')
+    curve_iso = round_iso(dng_stack.iso) # Rounds non standart ISO to regular ISO (100, 200, 400, ...)
+    std_noise_model_label = 'noise_model_std_ISO_{}'.format(curve_iso)
+    diff_noise_model_label = 'noise_model_diff_ISO_{}'.format(curve_iso)
+    std_noise_model_path = (NOISE_MODEL_PATH / std_noise_model_label).with_suffix('.npy')
+    diff_noise_model_path = (NOISE_MODEL_PATH / diff_noise_model_label).with_suffix('.npy')
     
-    # std_curve = np.load(std_noise_model_path)
-    # diff_curve = np.load(diff_noise_model_path)
+    std_curve = np.load(std_noise_model_path)
+    diff_curve = np.load(diff_noise_model_path)
     
     # Use this to compute noise curves on the fly
-    std_curve, diff_curve = run_fast_MC(alpha, beta)
+    # std_curve, diff_curve = run_fast_MC(config.noise_model.alpha, config.noise_model.beta)
     
     
     if verbose_2:   
         currentTime = getTime(currentTime, ' -- Read raw files')
 
     #### Estimating ref image SNR
-    snr = estimate_image_snr(ref_raw, alpha, beta, white_balance)
+    snr = estimate_image_snr(ref_raw, config.noise_model.alpha, config.noise_model.beta)
 
     if verbose_1:
         print(f"Estimated snr: {snr:.2f} dB")
     
     update_snr_config(config, snr)
     
-    # checking (just in case !)
     sanitize_config(config, ref_raw.shape)
-    
 
-    config.exif = ExifConfig(
-        cfa_pattern=CFA.tolist(),
-        iso=iso,
-        white_balance=list(white_balance),
-    )
 
     config.noise_model.std_curve = std_curve.tolist()
     config.noise_model.diff_curve = diff_curve.tolist()
@@ -290,10 +276,10 @@ def process(burst_path: Union[Path, str], config: Config):
 
     #### Deflip the image
     hr_output = np.moveaxis(hr_output, -1, 0)
-    hr_output = rggb_to_cfa(hr_output, CFA)
+    hr_output = rggb_to_cfa(hr_output, dng_stack.cfa)
     hr_output = np.moveaxis(hr_output, 0, -1)
     if 'accumulated robustness' in debug_dict:
-        debug_dict['accumulated robustness'] = rggb_to_cfa(debug_dict['accumulated robustness'], CFA)
+        debug_dict['accumulated robustness'] = rggb_to_cfa(debug_dict['accumulated robustness'], dng_stack.cfa)
     
 
     #### post processing
@@ -303,19 +289,20 @@ def process(burst_path: Union[Path, str], config: Config):
         if verbose_2:
             print('-- Post processing image')
         
-        raw = rawpy.imread(ref_path)
-        hr_output = raw2rgb.postprocess(raw, hr_output,
-                                           config.postprocessing.do_color_correction,
-                                           config.postprocessing.do_tonemapping,
-                                           config.postprocessing.do_gamma_correction,
-                                           config.postprocessing.sharpening,
-                                           config.postprocessing.do_devignetting,
-                                           xyz2cam,
-                                           ) 
+        # hr_output = raw2rgb.postprocess(raw, hr_output,
+        #                                    config.postprocessing.do_white_balance,
+        #                                    config.postprocessing.do_color_correction,
+        #                                    config.postprocessing.do_tonemapping,
+        #                                    config.postprocessing.do_gamma_correction,
+        #                                    config.postprocessing.sharpening,
+        #                                    config.postprocessing.do_devignetting,
+        #                                    dng_stack.xyz2cam,
+        #                                    )
+        hr_output = raw2rgb.postprocess(hr_output, dng_stack, config) 
         
     # Applying image orientation
-    if 'Image Orientation' in tags.keys():
-        ori = tags['Image Orientation'].values[0]
+    if 'Image Orientation' in dng_stack.tags.keys():
+        ori = dng_stack.tags['Image Orientation'].values[0]
     else:
         ori = 1
         warnings.warn('The Image Orientation EXIF tag could not be found. \

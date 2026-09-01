@@ -1,9 +1,11 @@
 import math
+from typing import Tuple
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.ndimage._filters import _gaussian_kernel1d
 from numba import cuda
+from numba.cuda.cudadrv.devicearray import DeviceNDArray
 import torch as th
 import torch.fft
 import torch.nn.functional as F
@@ -115,31 +117,24 @@ def compute_grey_images(img, method):
     else:
         raise NotImplementedError('Computation of gray level on GPU is only supported for FFT')
 
-def GAT(image, alpha, beta):
+def gat(image: DeviceNDArray, alpha: Tuple[float, float, float, float], beta: Tuple[float, float, float, float]) -> DeviceNDArray:
     """
     Generalized Ascombe Transform
     noise model : std² = alpha * I + beta
-    Where alpha and beta are iso dependant. 
 
-    Parameters
-    ----------
-    image : TYPE
-        DESCRIPTION.
-    alpha : float
-        value of alpha for the given iso 
-    iso : float
-        ISO value
-    beta : float
-        Value of beta for the given iso
+    The input is supposed to be a mosaiced raw image
+    r g1
+    g2 b
 
-    Returns
-    -------
-    VST_image : TYPE
-        input image with stabilized variance
+    and alpha, beta given as [r g1 b g2]    
+
+
 
     """
-    assert len(image.shape) == 2
-    assert alpha > 0, f"alpha should be positive, got {alpha} (VST is ill defined and kernels would be wrong)"
+    assert len(image.shape) == 2, f"image should be 2D, got {image.shape}"
+    assert len(alpha) == 4, f"alpha should be of length 4, got {len(alpha)}"
+    assert len(beta) == 4, f"beta should be of length 4, got {len(beta)}"
+    assert all(a > 0 for a in alpha), f"alpha should be positive, got {alpha} (VST is ill defined and kernels would be wrong)"
     imshape_y, imshape_x = image.shape
     
     VST_image = cuda.device_array(image.shape, DEFAULT_NUMPY_FLOAT_TYPE)
@@ -162,13 +157,20 @@ def cuda_GAT(image, VST_image, alpha, beta):
     if not (0 <= y < imshape_y and
             0 <= x < imshape_x):
         return
-    
-    # ISO should not appear here,  since alpha and beta are
-    # already iso dependant.
-    VST = alpha*image[y, x] + 3/8 * alpha*alpha + beta
+
+    # Assume r g1 g2 b pattern
+    # alpha and beta are 4-tuples, with the same pattern
+    # x even y even -> r -> alpha[0], beta[0]
+    # x odd y even -> g1 -> alpha[1], beta[1]
+    # x even y odd -> b -> alpha[2], beta[2]
+    # x odd y odd -> g2 -> alpha[3], beta[3]
+    i = 2*(y%2) + x % 2
+    alpha_ = alpha[i]
+    beta_ = beta[i]
+    VST = alpha_*image[y, x] + 3/8 * alpha_*alpha_ + beta_
     VST = max(0, VST)
     
-    VST_image[y, x] = 2/alpha * math.sqrt(VST)     
+    VST_image[y, x] = 2/alpha_ * math.sqrt(VST)     
                 
     
 def fft_lowpass(img_grey):
@@ -303,17 +305,16 @@ def rggb_to_cfa(x: np.ndarray, target_cfa: np.ndarray):
     # the function is its own inverse...
     return cfa_to_rggb(x, target_cfa)
 
-def estimate_image_snr(ref_img: NDArray[np.float32], alpha: float, beta: float, white_balance: NDArray[np.float32]) -> float:
-    # undo wb
-    r = ref_img[::2, ::2] * white_balance[1] / white_balance[0] 
+def estimate_image_snr(ref_img: NDArray[np.float32], alpha: Tuple[float, float, float, float], beta: Tuple[float, float, float, float]) -> float:
+    r = ref_img[::2, ::2]
     g1 = ref_img[::2, 1::2]
     g2 = ref_img[1::2, ::2]
-    b = ref_img[1::2, 1::2] * white_balance[1] / white_balance[2]
+    b = ref_img[1::2, 1::2]
 
-    varr =  alpha*r + beta
-    varg1 =  alpha*g1 + beta
-    varg2 =  alpha*g2 + beta
-    varb =  alpha*b + beta
+    varr =  alpha[0]*r + beta[0]
+    varg1 =  alpha[1]*g1 + beta[1]
+    varg2 =  alpha[2]*g2 + beta[2]
+    varb =  alpha[3]*b + beta[3]
 
     validr = (r > 0) & (r < 1)
     validg1 = (g1 > 0) & (g1 < 1)

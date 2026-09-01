@@ -37,7 +37,7 @@ def merge(comp_img: DeviceNDArray, alignments: DeviceNDArray, covs: DeviceNDArra
         The final estimation of the tiles' alignment V_n(p)
     covs : device array[imsize_y//2, imsize_x//2, 2, 2]
         covariance matrices Omega_n
-    r : Device_Array[imsize_y, imsize_x]
+    r : Device_Array[imsize_y//2, imsize_x//2]
         Robustness mask r_n
     num : device Array[s*imshape_y, s*imshape_x, c]
         Numerator of the accumulator
@@ -111,11 +111,16 @@ def accumulate(comp_img, alignments, covs, r,
     
 
     # fetching robustness
-    # The robustness coefficient is known for every raw pixel, and implicitely
+    # The robustness coefficient is known for every guide image pixel, and implicitely
     # interpolated to HR using nearest neighboor interpolations.
-    i_r = min(int(lr_y), lr_h-1)
-    j_r = min(int(lr_x), lr_w-1)
-    local_r = r[i_r, j_r]
+    if bayer_mode:
+        i_r = min(int(lr_y/2 - 0.5), lr_h//2-1)
+        j_r = min(int(lr_x//2 - 0.5), lr_w//2-1)
+        local_r = r[i_r, j_r]
+    else:
+        i_r = min(int(lr_y), lr_h-1)
+        j_r = min(int(lr_x), lr_w-1)
+        local_r = r[i_r, j_r]
 
     lr_mov_x = lr_x + flowx
     lr_mov_y = lr_y + flowy

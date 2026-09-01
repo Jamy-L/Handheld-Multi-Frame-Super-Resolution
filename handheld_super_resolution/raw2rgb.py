@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 import random
 import math
 import warnings
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import exifread
 import numpy as np
@@ -8,22 +12,84 @@ from skimage import img_as_float32, filters
 
 import cv2
 
-def get_xyz2cam_from_exif(impath):
-    # Open image file for reading (must be in binary mode)
-    f = open(impath, 'rb')
+from .config import Config
 
-    # Return the exif tags
-    tags = exifread.process_file(f)
-
-    # Get the 9 values of the first CCM in the EXIF
-    color_matrix1 = tags['Image Tag 0xC621']
-    color_matrix1 = np.array([x.decimal() for x in color_matrix1.values])
+if TYPE_CHECKING:
+    from .utils_dng import DNGStack
 
 
-    # Fill the matrix and return
-    xyz2cam = np.reshape(color_matrix1, (3, 3))
+SRGB_TO_XYZ = np.array(
+    [
+        [0.4124564, 0.3575761, 0.1804375],
+        [0.2126729, 0.7151522, 0.0721750],
+        [0.0193339, 0.1191920, 0.9503041],
+    ],
+    dtype=np.float64,
+)
 
-    return xyz2cam.astype(np.float32)
+# EXIF/DNG CalibrationIlluminant values that have a well-defined CCT.  LibRaw
+# uses the daylight-side DNG matrix for its simple camera-to-sRGB transform.
+# Picking the illuminant nearest D65 reproduces that choice while avoiding the
+# very common ColorMatrix1-is-always-daylight assumption.
+_ILLUMINANT_CCT = {
+    1: 5500,   # Daylight
+    3: 2850,   # Tungsten
+    4: 5500,   # Flash (nominal)
+    9: 5500,   # Fine weather
+    10: 6500,  # Cloudy
+    11: 7500,  # Shade
+    17: 2856,  # Standard light A
+    18: 4874,  # Standard light B
+    19: 6774,  # Standard light C
+    20: 5503,  # D55
+    21: 6504,  # D65
+    22: 7504,  # D75
+    23: 5003,  # D50
+    24: 3200,  # ISO studio tungsten
+}
+
+
+def _tag_scalar(tag: Any) -> int:
+    value = tag.values[0] if hasattr(tag, "values") else tag
+    return int(value)
+
+
+def _tag_matrix(tag: Any) -> np.ndarray:
+    values = [float(value.decimal()) for value in tag.values]
+    matrix = np.asarray(values, dtype=np.float64)
+    if matrix.size != 9:
+        raise ValueError(f"Expected a 3x3 DNG color matrix, got {matrix.size} values")
+    return matrix.reshape(3, 3)
+
+
+def get_xyz2cam_from_exif(impath: str | Path) -> np.ndarray:
+    """Read the daylight-side DNG XYZ-to-camera matrix.
+
+    DNG does not guarantee that ``ColorMatrix1`` is the daylight matrix.  This
+    function considers both matrix/illuminant pairs and chooses the reference
+    illuminant nearest D65, matching LibRaw's matrix choice for the supported
+    DNG path.
+    """
+
+    with open(impath, "rb") as raw_file:
+        tags = exifread.process_file(raw_file, details=False)
+
+    candidates = []
+    for matrix_tag, illuminant_tag in (
+        ("Image Tag 0xC621", "Image Tag 0xC65A"),
+        ("Image Tag 0xC622", "Image Tag 0xC65B"),
+    ):
+        if matrix_tag not in tags:
+            continue
+        illuminant = _tag_scalar(tags[illuminant_tag]) if illuminant_tag in tags else None
+        cct = _ILLUMINANT_CCT.get(illuminant)
+        distance_from_d65 = abs(cct - 6504) if cct is not None else float("inf")
+        candidates.append((distance_from_d65, _tag_matrix(tags[matrix_tag])))
+
+    if not candidates:
+        raise ValueError(f"No DNG ColorMatrix1/2 found in {impath}")
+
+    return min(candidates, key=lambda candidate: candidate[0])[1].astype(np.float32)
 
 
 
@@ -50,10 +116,7 @@ def get_random_ccm():
     xyz2cam = (xyz2cams * weights).sum(axis=0) / weights_sum
 
     # Multiplies with RGB -> XYZ to get RGB -> Camera CCM.
-    rgb2xyz = np.array([[0.4124564, 0.3575761, 0.1804375],
-                          [0.2126729, 0.7151522, 0.0721750],
-                          [0.0193339, 0.1191920, 0.9503041]])
-    rgb2cam = xyz2cam @ rgb2xyz
+    rgb2cam = xyz2cam @ SRGB_TO_XYZ
 
     # Normalizes each row.
     rgb2cam = rgb2cam / rgb2cam.sum(axis=-1, keepdim=True)
@@ -101,48 +164,93 @@ def safe_invert_gains(image, rgb_gain, red_gain, blue_gain):
     return image * safe_gains
 
 
-def apply_gains(image, red_gain, blue_gain, rgb_gain):
-    """Inverts gains while safely handling saturated pixels."""
-    assert image.ndim == 3 and image.shape[-1] in [3, 4]
-
-    if image.shape[-1] == 3:
-        gains = np.tensor([red_gain, 1.0, blue_gain]) * rgb_gain
-    else:
-        gains = np.tensor([red_gain, 1.0, 1.0, blue_gain]) * rgb_gain
-    return (image * gains).clip(a_min=0.0, a_max=1.0)
-
-
 def get_color_matrix(raw, xyz2cam=None):
-    rgb2xyz = np.array([[0.4124564, 0.3575761, 0.1804375],
-                        [0.2126729, 0.7151522, 0.0721750],
-                        [0.0193339, 0.1191920, 0.9503041]])
-    # If xyz2cam is not given, take it from rawpy.
+    """Return the normalized linear-sRGB-to-camera matrix.
+
+    This function keeps its historical direction for callers in the
+    unprocessing pipeline. New rendering code should use
+    :func:`get_camera_to_srgb_matrix`, whose direction is explicit.
+    """
+
     if xyz2cam is None:
         xyz2cam = raw.rgb_xyz_matrix[:3]
     if np.linalg.norm(xyz2cam) == 0:
-        print('Warning -- CCM not found or given. Use eye matrix instead.')
-        rgb2cam = rgb2xyz
-    else:        
-        rgb2cam = xyz2cam @ rgb2xyz
+        warnings.warn("No camera color matrix found; using identity color correction")
+        return np.eye(3, dtype=np.float32)
 
-    # Normalizes each row.
-    rgb2cam = rgb2cam / rgb2cam.sum(axis=-1, keepdims=True)
-    return rgb2cam.astype(np.float32)
+    rgb2cam = np.asarray(xyz2cam, dtype=np.float64) @ SRGB_TO_XYZ
+    row_sums = rgb2cam.sum(axis=-1, keepdims=True)
+    if np.any(np.isclose(row_sums, 0.0)):
+        raise ValueError("Cannot normalize a camera color matrix with a zero row sum")
+    return (rgb2cam / row_sums).astype(np.float32)
+
+
+def get_camera_to_srgb_matrix(raw=None, xyz2cam=None) -> np.ndarray:
+    """Return a validated camera-RGB-to-linear-sRGB matrix.
+
+    The independently derived DNG transform is the source of truth. When a
+    RawPy object is supplied, LibRaw's processed ``color_matrix`` is used only
+    after checking that it agrees with that transform. RawPy exposes LibRaw's
+    vaguely named ``cmatrix`` rather than a documented camera-to-sRGB API.
+    """
+
+    if xyz2cam is None:
+        if raw is None:
+            raise ValueError("Either raw or xyz2cam must be provided")
+        xyz2cam = np.asarray(raw.rgb_xyz_matrix[:3], dtype=np.float64)
+
+    srgb_to_camera = get_color_matrix(raw, xyz2cam)
+    metadata_matrix = np.linalg.inv(srgb_to_camera).astype(np.float32)
+
+    if raw is None:
+        return metadata_matrix
+
+    libraw_matrix = np.asarray(raw.color_matrix, dtype=np.float32)[:3, :3]
+    libraw_is_valid = (
+        libraw_matrix.shape == (3, 3)
+        and np.isfinite(libraw_matrix).all()
+        and not np.allclose(libraw_matrix, 0.0)
+        and abs(float(np.linalg.det(libraw_matrix))) > 1e-8
+    )
+    if libraw_is_valid and np.allclose(
+        libraw_matrix, metadata_matrix, rtol=5e-4, atol=5e-4
+    ):
+        return libraw_matrix.copy()
+
+    if libraw_is_valid:
+        warnings.warn(
+            "LibRaw's color_matrix disagrees with the DNG-derived camera-to-sRGB "
+            "matrix; using the DNG-derived transform"
+        )
+    return metadata_matrix
 
 
 def apply_ccm(image, ccm):
-    assert(image.ndim == 3 and image.shape[-1] == 3)
-    image = np.transpose(image, (2, 0, 1))
-    shape = image.shape
-    image = image.reshape(3, -1)
-    image = np.matmul(ccm, image)
-    image = image.reshape(shape)
-    return np.transpose(image, (1, 2, 0))
+    """Apply a column-vector 3x3 color matrix to an HxWx3 image."""
+
+    image = np.asarray(image)
+    ccm = np.asarray(ccm)
+    if image.ndim != 3 or image.shape[-1] != 3:
+        raise ValueError(f"Expected an HxWx3 image, got shape {image.shape}")
+    if ccm.shape != (3, 3):
+        raise ValueError(f"Expected a 3x3 color matrix, got shape {ccm.shape}")
+    return np.einsum("ij,hwj->hwi", ccm, image)
 
 
 def gamma_compression(img, gamma=2.2):
     img = np.clip(img, a_min=0.0, a_max=1.0)
     return img**(1./gamma)
+
+
+def linear_to_srgb(image: np.ndarray) -> np.ndarray:
+    """Encode clipped linear sRGB values with the IEC sRGB transfer curve."""
+
+    image = np.clip(image, 0.0, 1.0)
+    return np.where(
+        image <= 0.0031308,
+        12.92 * image,
+        1.055 * np.power(image, 1.0 / 2.4) - 0.055,
+    )
 
 
 def gamma_expansion(img, gamma=2.2):
@@ -201,44 +309,67 @@ def unprocess_isp(jpg, log_max_shot=0.012):
 
     return raw, metadata
 
-def devignette(image):
-    h, w, _ = image.shape
-    vignette_filter = np.abs(np.linspace(-h/w * np.pi/2, h/w * np.pi/2, h))
-    vignette_filter = np.outer(vignette_filter, np.abs(np.linspace(-np.pi/2, np.pi/2, w)))
-    
-    image_out = (2 - np.cos(vignette_filter)**4)[:,:,None] * image 
-    return image_out
 
-def postprocess(raw, img=None, do_color_correction=True, do_tonemapping=True, 
-                do_gamma=True, sharpening_config=None, do_devignette=False, xyz2cam=None):
+def raw_to_rgb(raw, xyz2cam=None):
+    return img_as_float32(raw.postprocess(use_camera_wb=True))
+
+
+def postprocess(cam_rgb: np.ndarray, dng_stack: DNGStack, config: Config):
+    """Render normalized, demosaiced camera RGB to display-ready sRGB.
+
+    ``cam_rgb`` must already be black-subtracted and white-level-normalized;
+    those sensor-domain operations intentionally remain in
+    :meth:`DNGStack.get_raw_arrays`. The processing order here is:
+
+    camera RGB -> white balance -> linear sRGB matrix -> optional tone/detail
+    operations -> optional sRGB transfer function.
     """
-    Convert a raw image to jpg image.
-    """
-    if img is None:
-        ## Rawpy processing - whole stack
-        return img_as_float32(raw.postprocess(use_camera_wb=True))
-    else:
-        ## Color matrix
-        if do_color_correction:
-            ## First, read the color matrix from rawpy
-            rgb2cam = get_color_matrix(raw, xyz2cam)
-            cam2rgb = np.linalg.inv(rgb2cam)
-            img = apply_ccm(img, cam2rgb)
-            img = np.clip(img, 0.0, 1.0)
-        ## Sharpening
-        if sharpening_config is not None and sharpening_config.enabled:
-            img = filters.unsharp_mask(img, radius=sharpening_config.radius,
-                                       amount=sharpening_config.amount,
-                                       channel_axis=2, preserve_range=True)
-        ## Devignette
-        if do_devignette:
-            img = devignette(img)
-        ## Tone mapping
-        if do_tonemapping:
-            img = apply_smoothstep(img)
-        img = np.clip(img, 0.0, 1.0)
-        ## Gamma compression
-        if do_gamma:
-            img = gamma_compression(img)
-        img = np.clip(img, 0.0, 1.0)
-        return img
+
+    rgb = np.asarray(cam_rgb, dtype=np.float32)
+    if rgb.ndim != 3 or rgb.shape[-1] != 3:
+        raise ValueError(f"Expected normalized camera RGB with shape HxWx3, got {rgb.shape}")
+    if not np.isfinite(rgb).all():
+        raise ValueError("Camera RGB contains NaN or infinite values")
+
+    postprocessing = config.postprocessing
+
+    if postprocessing.do_white_balance:
+        # RawPy exposes R/G1/B/G2. The SR output has one green channel, so use
+        # G1 as the neutral reference and ignore the duplicate green gain.
+        white_balance = np.asarray(dng_stack.white_balance[:3], dtype=np.float32)
+        if white_balance.shape != (3,) or not np.isfinite(white_balance).all():
+            raise ValueError(f"Invalid camera white balance: {white_balance!r}")
+        if white_balance[1] <= 0:
+            raise ValueError(f"Green white-balance gain must be positive: {white_balance!r}")
+        white_balance = white_balance / white_balance[1]
+        rgb = rgb * white_balance.reshape(1, 1, 3)
+
+    if postprocessing.do_color_correction:
+        rgb = apply_ccm(rgb, dng_stack.camera_to_srgb)
+
+    # Matrix conversion can produce valid negative/out-of-gamut values. This
+    # simple display renderer clips them, just like the controlled RawPy
+    # reference used in the tests.
+    rgb = np.clip(rgb, 0.0, 1.0)
+
+    sharpening = postprocessing.sharpening
+    if sharpening is not None and sharpening.enabled:
+        rgb = filters.unsharp_mask(
+            rgb,
+            radius=sharpening.radius,
+            amount=sharpening.amount,
+            channel_axis=2,
+            preserve_range=True,
+        )
+
+    if postprocessing.do_tonemapping:
+        rgb = apply_smoothstep(rgb)
+
+    if postprocessing.do_devignetting:
+        raise NotImplementedError
+
+    rgb = np.clip(rgb, 0.0, 1.0)
+    if postprocessing.do_gamma_correction:
+        rgb = linear_to_srgb(rgb)
+
+    return np.clip(rgb, 0.0, 1.0).astype(np.float32, copy=False)

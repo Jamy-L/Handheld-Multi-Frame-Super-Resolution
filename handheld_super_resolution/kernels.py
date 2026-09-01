@@ -20,7 +20,7 @@ import torch.nn.functional as F
 
 from .linalg import get_eigen_elmts_2x2
 from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS, getTime, timer
-from .utils_image import compute_grey_images, GAT
+from .utils_image import compute_grey_images, gat
 from .config import Config
 
 
@@ -53,7 +53,7 @@ def estimate_kernels(img: DeviceNDArray, config: Config):
     bayer_mode = config.mode=='bayer'
     verbose_3 = config.verbose >= 3
 
-    GAT_ = timer(GAT, verbose_3, end_s="- Variance Stabilized")
+    gat_ = timer(gat, verbose_3, end_s="- Variance Stabilized")
     compute_grey_images_ = timer(compute_grey_images, verbose_3, end_s="- Decimated Image")
 
     k_detail = config.merging.kernel.k_detail
@@ -79,8 +79,12 @@ def estimate_kernels(img: DeviceNDArray, config: Config):
     
     #__ Performing Variance Stabilization Transform
     
-    img = GAT_(img, alpha, beta)
-        
+    if config.use_gat:
+        assert alpha is not None and beta is not None, "alpha and beta must be provided for GAT"
+        img = gat_(img, alpha, beta)
+    else: # Will use sqrt here
+        raise NotImplementedError("Variance Stabilization Transform is not implemented for non-GAT methods.")
+
     #__ Decimate to grey
     if bayer_mode : 
         img_grey = compute_grey_images_(img, method="decimating")
