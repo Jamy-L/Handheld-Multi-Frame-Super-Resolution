@@ -18,11 +18,13 @@ import numpy as np
 from numba import cuda, uint8
 from numba.cuda.cudadrv.devicearray import DeviceNDArray
 import torch
-from typing import Union, Tuple
+from typing import Optional, Tuple
 
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE,DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS, clamp, timer
 from .utils_image import dogson_biquadratic_kernel, dogson_quadratic_kernel
 from .config import Config
+from .debug_writer import DebugWriter
+
 
 def init_robustness(ref_img: DeviceNDArray, config: Config):
     """
@@ -69,7 +71,8 @@ def init_robustness(ref_img: DeviceNDArray, config: Config):
     
 def compute_robustness(comp_img: DeviceNDArray, ref_local_means: DeviceNDArray, ref_local_var: DeviceNDArray,
                        flows: DeviceNDArray,
-                       noise_model: Tuple[DeviceNDArray, DeviceNDArray], config: Config) -> DeviceNDArray:
+                       noise_model: Tuple[DeviceNDArray, DeviceNDArray], config: Config,
+                       debug_writer: Optional[DebugWriter] = None) -> DeviceNDArray:
     """
     this is the implementation of Algorithm 6: ComputeRobustness
     Returns the robustnesses of the compared image J_n (n>1), based on the
@@ -87,6 +90,8 @@ def compute_robustness(comp_img: DeviceNDArray, ref_local_means: DeviceNDArray, 
         patch-wise optical flows of the compared image V_n(p)
     config : Config
         parameters.
+    debug_writer : DebugWriter, optional
+        Streams intermediate guide images to disk when provided.
 
     Returns
     -------
@@ -126,9 +131,17 @@ def compute_robustness(comp_img: DeviceNDArray, ref_local_means: DeviceNDArray, 
 
     # Computing local stats (before applying optical flow)
     comp_local_means, _ = compute_local_stats_(guide_img)
+
+    if debug_writer is not None:
+        frame = np.moveaxis(comp_local_means.copy_to_host(), 0, -1)
+        debug_writer.write_rgb("rgb_guides", frame)
     
     # Upscale and warp local means
     comp_local_means = warp_stats_(comp_local_means, tile_size, flows)
+
+    if debug_writer is not None:
+        frame = np.moveaxis(comp_local_means.copy_to_host(), 0, -1)
+        debug_writer.write_rgb("rgb_guides_aligned", frame)
     
     # computing d_sq and sigma_sq (noise correction on the fly)
     d_sq, sigma_sq = compute_d_sigma_(ref_local_means, comp_local_means,
@@ -249,7 +262,7 @@ def cuda_compute_local_stats(guide_img, mean, var):
     mean[channel, idy, idx] = mean_
     var[channel, idy, idx] = var_ / 9 - mean_ * mean_
 
-def warp_stats(local_stats: DeviceNDArray, tile_size: int, flow:Union[DeviceNDArray, None]=None):
+def warp_stats(local_stats: DeviceNDArray, tile_size: int, flow: DeviceNDArray):
     """
     Upscales and warps a map of local statistics using Dogson's biquadratic approximation 
 
@@ -271,20 +284,11 @@ def warp_stats(local_stats: DeviceNDArray, tile_size: int, flow:Union[DeviceNDAr
     n_channels, *guide_imshape = local_stats.shape
     bayer_mode = (n_channels == 3)
     
-    if flow is None:
-        flow = cuda.device_array((1, 1, 1), DEFAULT_NUMPY_FLOAT_TYPE) # just because is numba is picky on types and shapes
-    
-    if tile_size is None:
-        tile_size = 0 # For numba's compiler
-        
-    
     warped_stats = cuda.device_array((n_channels, 
                                         guide_imshape[0],
                                         guide_imshape[1]),
                                         DEFAULT_NUMPY_FLOAT_TYPE)
 
-    upscale = 1
-    
     _, ny, nx = warped_stats.shape
     
     threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
@@ -295,16 +299,12 @@ def warp_stats(local_stats: DeviceNDArray, tile_size: int, flow:Union[DeviceNDAr
     cuda_warp_dogson[blockspergrid, threadsperblock](local_stats,
                                                         flow, tile_size,
                                                         warped_stats)
-    ###
-    # import matplotlib.pyplot as plt
-    # plt.imshow(np.moveaxis(warped_stats.copy_to_host(), 0, -1))
-    # plt.show()
     return warped_stats
     
     
 @cuda.jit
 def cuda_warp_dogson(source, flow, tile_size, warped):
-    s = 2
+    tile_size = tile_size // 2
     n_channels, ny, nx = source.shape
     
     x, y = cuda.grid(2)
@@ -322,8 +322,8 @@ def cuda_warp_dogson(source, flow, tile_size, warped):
         
         
     # Jumping from ref guide to mov guide  
-    y_mov = y + flow_y
-    x_mov = x + flow_x
+    y_mov = y + flow_y * 0.5
+    x_mov = x + flow_x * 0.5
     
     # Out of bounds
     if not (0 <= y_mov < ny and
@@ -382,10 +382,10 @@ def compute_d_sigma(means_r: DeviceNDArray, means_m: DeviceNDArray, var_m: Devic
     d_sq = cuda.device_array((ny, nx), DEFAULT_NUMPY_FLOAT_TYPE)
     sigma_sq = cuda.device_array((ny, nx), DEFAULT_NUMPY_FLOAT_TYPE)
     
-    threadsperblock = (1, DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
-    blockspergrid_x = math.ceil(nx/threadsperblock[2])
-    blockspergrid_y = math.ceil(ny/threadsperblock[1])
-    blockspergrid = (nc, blockspergrid_x, blockspergrid_y)
+    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
+    blockspergrid_x = math.ceil(nx/threadsperblock[1])
+    blockspergrid_y = math.ceil(ny/threadsperblock[0])
+    blockspergrid = (blockspergrid_x, blockspergrid_y)
     
     cuda_compute_d_sigma[blockspergrid, threadsperblock](means_r, means_m, var_m, std_curve, diff_curve, d_sq, sigma_sq, do_noise_correction)
     
@@ -421,7 +421,7 @@ def cuda_compute_d_sigma(means_r, means_m, var_m, std_curve, diff_curve, d_sq, s
         sigma_sq_ = max(sigma_sq_, sigma_t*sigma_t)
 
         shrink = d_sq_/(d_sq_ + d_t*d_t)
-        d_sq_ *= shrink
+        d_sq_ *= shrink * shrink
 
     d_sq[y, x] = d_sq_
     sigma_sq[y, x] = sigma_sq_
@@ -520,6 +520,7 @@ def robustness_threshold(d_sq: DeviceNDArray, sigma_sq: DeviceNDArray, S: Device
 @cuda.jit    
 def cuda_robustness_threshold(d_sq, sigma_sq, S, t, tile_size, bayer_mode, R):
     idx, idy = cuda.grid(2)
+    tile_size = tile_size//2
 
     if not (0 <= idy < R.shape[0] and
             0 <= idx < R.shape[1]):

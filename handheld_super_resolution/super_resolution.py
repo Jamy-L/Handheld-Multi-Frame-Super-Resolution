@@ -30,6 +30,7 @@ from .utils_image import compute_grey_images, apply_orientation, rggb_to_cfa, es
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso, timer
 from .alignment import align, init_alignment
 from .config import Config
+from .debug_writer import DebugWriter
 from .params import runtime_config, sanitize_config, update_snr_config
 from .robustness import init_robustness, compute_robustness
 from .utils_dng import load_dng_burst
@@ -41,7 +42,7 @@ from . import raw2rgb
 NOISE_MODEL_PATH = Path(os.path.dirname(__file__)).parent / 'data' 
         
 
-def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: Config) -> Tuple[NDArray, Dict[str, list]]:
+def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: Config) -> Tuple[NDArray, Dict[str, NDArray]]:
     """
     This is the implementation of Alg. 1: HandheldBurstSuperResolution.
     Some part of Alg. 2: Registration are also integrated for optimisation.
@@ -61,7 +62,8 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
     num : device Array[imshape_y*s, imshape_y*s, 3]
         generated RGB image WITHOUT any post-processing.
     debug_dict : dict
-        Contains (if debugging is enabled) some debugging infos.
+        Contains the accumulated robustness map when requested. Per-frame
+        diagnostics are streamed to disk when debugging is enabled.
 
     """
     
@@ -82,9 +84,8 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
     align_ = timer(align, verbose_2, '\nBeginning alignment', 'Image aligned (Total)')
 
     bayer_mode = config.mode=='bayer'
-    debug_mode = config.debug
-    debug_dict = {"robustness":[],
-                  "flow":[]}
+    debug_dict = {}
+    debug_writer = DebugWriter() if config.debug else None
 
     #### Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
@@ -159,14 +160,17 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
         alignment = align_(ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian,
                         cuda_im_grey, config)
         
-        if debug_mode:
-            debug_dict["flow"].append(alignment.copy_to_host())
+        if debug_writer is not None:
+            debug_writer.write_flow("optical_flow", alignment.copy_to_host())
             
         #### Robustness
         if config.robustness.enabled:
             assert ref_local_means is not None
             assert ref_local_stds is not None
-            robustness = compute_robustness_(cuda_img, ref_local_means, ref_local_stds, alignment, (cuda_std_curve, cuda_diff_curve), config)
+            robustness = compute_robustness_(
+                cuda_img, ref_local_means, ref_local_stds, alignment,
+                (cuda_std_curve, cuda_diff_curve), config, debug_writer,
+            )
         else:
             temp = np.ones_like(cuda_img, DEFAULT_NUMPY_FLOAT_TYPE)
             robustness = cuda.to_device(temp)
@@ -184,8 +188,8 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
             cuda.synchronize()
             getTime(im_time, '\nImage processed (Total)')
             
-        if debug_mode and config.robustness.enabled: 
-            debug_dict['robustness'].append(robustness.copy_to_host())
+        if debug_writer is not None and config.robustness.enabled:
+            debug_writer.write_scalar("robustness", robustness.copy_to_host())
         stream.synchronize()
 
 
