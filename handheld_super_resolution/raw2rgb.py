@@ -90,78 +90,6 @@ def get_xyz2cam_from_exif(impath: str | Path) -> np.ndarray:
     return min(candidates, key=lambda candidate: candidate[0])[1].astype(np.float32)
 
 
-
-def get_random_ccm():
-    """Generate random RGB-to-camera color conversion matrices."""
-    # Takes a random convex combination of XYZ -> Camera CCMs.
-    xyz2cams = [[[1.0234, -0.2969, -0.2266],
-               [-0.5625, 1.6328, -0.0469],
-               [-0.0703, 0.2188, 0.6406]],
-              [[0.4913, -0.0541, -0.0202],
-               [-0.613, 1.3513, 0.2906],
-               [-0.1564, 0.2151, 0.7183]],
-              [[0.838, -0.263, -0.0639],
-               [-0.2887, 1.0725, 0.2496],
-               [-0.0627, 0.1427, 0.5438]],
-              [[0.6596, -0.2079, -0.0562],
-               [-0.4782, 1.3016, 0.1933],
-               [-0.097, 0.1581, 0.5181]]]
-
-    num_ccms = len(xyz2cams)  # (4,3,3)
-
-    weights = np.random.rand(num_ccms).reshape((num_ccms, 1, 1))
-    weights_sum = weights.sum()
-    xyz2cam = (xyz2cams * weights).sum(axis=0) / weights_sum
-
-    # Multiplies with RGB -> XYZ to get RGB -> Camera CCM.
-    rgb2cam = xyz2cam @ SRGB_TO_XYZ
-
-    # Normalizes each row.
-    rgb2cam = rgb2cam / rgb2cam.sum(axis=-1, keepdim=True)
-    return rgb2cam
-
-
-def get_random_noise_parameters(log_min_shot=0.0001, log_max_shot=0.012, sigma_read_noise=0.26):
-    """Generates random noise levels from a log-log linear distribution."""
-    log_min_shot_noise = math.log(log_min_shot)
-    log_max_shot_noise = math.log(log_max_shot)
-    log_shot_noise = random.uniform(log_min_shot_noise, log_max_shot_noise)
-    shot_noise = math.exp(log_shot_noise)
-
-    line = lambda x: 2.18 * x + 1.20
-    log_read_noise = line(log_shot_noise) + random.gauss(mu=0.0, sigma=sigma_read_noise)
-    read_noise = math.exp(log_read_noise)
-    return shot_noise, read_noise
-
-
-def get_random_gains():
-    """Generates random gains for brightening and white balance."""
-    # RGB gain represents brightening.
-    rgb_gain = 1.0 / random.gauss(mu=0.8, sigma=0.1)
-
-    # Red and blue gains represent white balance.
-    red_gain = random.uniform(1.9, 2.4)
-    blue_gain = random.uniform(1.5, 1.9)
-    return rgb_gain, red_gain, blue_gain
-
-
-def safe_invert_gains(image, rgb_gain, red_gain, blue_gain):
-    """Inverts gains while safely handling saturated pixels."""
-    assert image.ndim == 3 and image.shape[2] == 3
-
-    gains = np.array([1.0 / red_gain, 1.0, 1.0 / blue_gain]) / rgb_gain
-    gains = gains.reshape((1, 1, 3))
-
-    # Prevents dimming of saturated pixels by smoothly masking gains near white.
-    gray = np.mean(image, axis=-1, keepdims=True)
-    inflection = 0.9
-    mask = ((gray - inflection).cllp(min=0.0) / (1.0 - inflection))
-    mask = mask * mask
-
-    safe_gains = np.max(mask + (1.0 - mask) * gains, gains)
-    return image * safe_gains
-
-
 def get_color_matrix(raw, xyz2cam=None):
     """Return the normalized linear-sRGB-to-camera matrix.
 
@@ -244,35 +172,6 @@ def linear_to_srgb(image: np.ndarray) -> np.ndarray:
         12.92 * image,
         1.055 * np.power(image, 1.0 / 2.4) - 0.055,
     )
-
-
-def gamma_expansion(img, gamma=2.2):
-    img = np.clip(img, a_min=1e-8, a_max=1.0)
-    return img ** gamma
-
-
-def unprocess_isp(jpg, log_max_shot=0.012):
-    """
-    Convert a jpg image to raw image.
-    """
-    rgb2cam = get_random_ccm()
-    cam2rgb = np.linalg.inv(rgb2cam)
-    rgb_gain, red_gain, blue_gain = get_random_gains()
-    lambda_read, lambda_shot = get_random_noise_parameters(log_max_shot=log_max_shot)
-    metadata = {'rgb2cam': rgb2cam, 'cam2rgb': cam2rgb, 'rgb_gain': rgb_gain, 'red_gain': red_gain,
-                'blue_gain': blue_gain, 'lambda_shot': lambda_shot, 'lambda_read': lambda_read}
-
-    ## Gamma expansion
-    jpg = gamma_expansion(jpg)
-
-    ## Inverse color matrix
-    raw = apply_ccm(jpg, rgb2cam)
-
-    ## Inverse gains
-    raw = safe_invert_gains(raw, red_gain, blue_gain, rgb_gain)
-
-    return raw, metadata
-
 
 def raw_to_rgb(raw, xyz2cam=None):
     return img_as_float32(raw.postprocess(use_camera_wb=True))
