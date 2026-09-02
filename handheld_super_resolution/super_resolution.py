@@ -30,7 +30,7 @@ from .utils_image import compute_grey_images, apply_orientation, rggb_to_cfa, es
 from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso, timer
 from .alignment import align, init_alignment
 from .config import Config
-from .debug_writer import DebugWriter
+from .debug_writer import DebugWriter, NAN_COLOR
 from .params import runtime_config, sanitize_config, update_snr_config
 from .robustness import init_robustness, compute_robustness
 from .utils_dng import load_dng_burst
@@ -285,6 +285,14 @@ def process(burst_path: Union[Path, str], config: Config):
     
     #### Running the handheld pipeline
     hr_output, debug_dict = main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), config)
+
+    if np.any(np.isnan(hr_output)):
+        mask = np.any(np.isnan(hr_output), axis=-1)
+        warnings.warn(f"Found {mask.sum()} pixels with NaNs in output")
+        hr_output[mask] = np.array(NAN_COLOR, DEFAULT_NUMPY_FLOAT_TYPE)/255. if config.debug else [0., 0., 0.]
+
+    if np.any(np.isinf(hr_output)):
+        warnings.warn(f"Found {(np.isinf(hr_output)).sum()} Inf in output")
 
     #### Deflip the image
     hr_output = np.moveaxis(hr_output, -1, 0)
