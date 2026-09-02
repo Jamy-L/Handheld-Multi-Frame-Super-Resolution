@@ -23,10 +23,9 @@ from . import raw2rgb
 from .utils import DEFAULT_NUMPY_FLOAT_TYPE
 from .utils_image import cfa_to_rggb
 
-# Paths of exiftool and dng validate. Only necessary to output dng.
-EXIFTOOL_PATH = 'exiftool' # Assumes exiftool is in PATH, but you can also paste the path here
-DNG_VALIDATE_PATH = 'dng_validate' # Same applies here
-
+# External tools used only by save_as_dng.
+EXIFTOOL_PATH = "exiftool"
+DNG_VALIDATE_PATH = "dng_validate"
 
 # See "PhotometricInterpretation in" https://exiftool.org/TagNames/EXIF.html
 PHOTO_INTER = {
@@ -231,24 +230,8 @@ def load_dng_burst(burst_path: Union[str, Path]) -> DNGStack:
 
     alpha, beta = noise_profile_from_tags(tags)
 
-
-    #### Performing whitebalance
     assert (type_ := type(ref_raw[0, 0])) == (y := type(raw_comp[0, 0, 0])), f'Reference and comp images should have the same data type, got {type_} and {y}.'
     assert np.issubdtype(type_, np.integer), f'Input DNG images are not in integer format: is the input valid RAW data? Got {type_}.'
-
-    # if np.issubdtype(type_, np.integer):
-    #     ref_raw = ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE)
-    #     raw_comp = raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE)
-    #     for i in range(2):
-    #         for j in range(2):
-    #             channel = CFA[i, j]
-    #             k = white_balance[channel] / white_balance[1]
-    #             ref_raw[i::2, j::2] = (ref_raw[i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
-    #             raw_comp[:, i::2, j::2] = (raw_comp[:, i::2, j::2] - black_levels[channel]) / (white_level - black_levels[channel])
-    #             ref_raw[i::2, j::2] *= k
-    #             raw_comp[:, i::2, j::2] *= k
-    # else:
-    #     warnings.warn('Input DNG images are not in integer format: is the input valid RAW data?')
 
     # Flip to rggb
     ref_raw = cfa_to_rggb(ref_raw, CFA)
@@ -352,7 +335,8 @@ def save_as_dng(np_img, ref_dng_path, outpath):
         "-ColorMatrix2",
         "-IFD0:CalibrationIlluminant1<SubIFD:CalibrationIlluminant1",
         "-IFD0:CalibrationIlluminant2<SubIFD:CalibrationIlluminant2",
-        f"-AsShotNeutral=1 1 1",
+        "-IFD0:AsShotNeutral<AsShotNeutral",
+        "-IFD0:AnalogBalance<AnalogBalance",
         # "-IFD0:BlackLevelRepeatDim<SubIFD:BlackLevelRepeatDim",
         # "-IFD0:CFARepeatPatternDim<SubIFD:CFARepeatPatternDim",
         # "-IFD0:CFAPattern2<SubIFD:CFAPattern2",
@@ -394,8 +378,8 @@ def save_as_dng(np_img, ref_dng_path, outpath):
         "-IFD0:ProfileHueSatMap1",
         "-IFD0:ProfileHueSatMap2",
         "-IFD0:ProfileLookTable"
-        f"-IFD0:AsShotNeutral=1 1 1",
-        f"-AsShotNeutral=1 1 1",
+        "-IFD0:AsShotNeutral<AsShotNeutral",
+        "-IFD0:AnalogBalance<AnalogBalance",
         f"-IFD0:WhiteLevel={new_white_level} {new_white_level} {new_white_level}",
         f"-IFD0:BlackLevel={new_black_level} {new_black_level} {new_black_level}",
         f"-BlackLevel={new_black_level} {new_black_level} {new_black_level}",
@@ -439,13 +423,10 @@ def save_as_tiff(int_im, outpath):
     # Imageio is the only module I could find to save 16 bits RGB tiffs without compression (cv2 does LZW).
     # It is vital to have uncompressed image, because validate_dng cannot work if the tiff is compressed.
     try:
-        # Try to write as classic TIFF
-        with imageio.imopen(outpath.with_suffix('.tif').as_posix(), 'w', bigtiff=False) as img_file: # Cant put bigtiff=True, else exiftool wont work to write tags...
-            img_file.write(int_im)
-    except ValueError as e:
-        # ImageIO raises ValueError if data too large for classic TIFF (> 4GB)
+        with imageio.imopen(str(Path(outpath).with_suffix(".tif")), "w", bigtiff=False) as image_file:
+            image_file.write(int_im)
+    except ValueError as error:
         raise RuntimeError(
-            f"Failed to write '{outpath.name}' as a classic TIFF. "
-            f"The image is too large for bigtiff=False. "
-            f"Raise an issue on github if you need support for bigtiff."
-        ) from e
+            "The merged image is too large for the classic TIFF intermediate "
+            "required by the current ExifTool/dng_validate route."
+        ) from error
