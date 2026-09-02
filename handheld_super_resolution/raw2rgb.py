@@ -10,8 +10,6 @@ import exifread
 import numpy as np
 from skimage import img_as_float32, filters
 
-import cv2
-
 from .config import Config
 
 if TYPE_CHECKING:
@@ -94,7 +92,7 @@ def get_xyz2cam_from_exif(impath: str | Path) -> np.ndarray:
 
 
 def get_random_ccm():
-    """Generates random RGB -> Camera color correction matrices."""
+    """Generate random RGB-to-camera color conversion matrices."""
     # Takes a random convex combination of XYZ -> Camera CCMs.
     xyz2cams = [[[1.0234, -0.2969, -0.2266],
                [-0.5625, 1.6328, -0.0469],
@@ -175,7 +173,7 @@ def get_color_matrix(raw, xyz2cam=None):
     if xyz2cam is None:
         xyz2cam = raw.rgb_xyz_matrix[:3]
     if np.linalg.norm(xyz2cam) == 0:
-        warnings.warn("No camera color matrix found; using identity color correction")
+        warnings.warn("No camera color matrix found; using identity color conversion")
         return np.eye(3, dtype=np.float32)
 
     rgb2cam = np.asarray(xyz2cam, dtype=np.float64) @ SRGB_TO_XYZ
@@ -237,11 +235,6 @@ def apply_ccm(image, ccm):
     return np.einsum("ij,hwj->hwi", ccm, image)
 
 
-def gamma_compression(img, gamma=2.2):
-    img = np.clip(img, a_min=0.0, a_max=1.0)
-    return img**(1./gamma)
-
-
 def linear_to_srgb(image: np.ndarray) -> np.ndarray:
     """Encode clipped linear sRGB values with the IEC sRGB transfer curve."""
 
@@ -258,32 +251,6 @@ def gamma_expansion(img, gamma=2.2):
     return img ** gamma
 
 
-def apply_smoothstep(image):
-    """Apply global tone mapping curve."""
-    # image_out = 3 * image**2 - 2 * image**3
-    
-    # tonemap = cv2.createTonemap(1.0)
-    # image_out = tonemap.process(image)
-    
-    from skimage import img_as_ubyte, img_as_float32
-    times = [1, 0.5, 2]
-    images = [img_as_ubyte(np.clip(image*i, 0, 1)) for i in times] 
-    
-    
-    merge_mertens = cv2.createMergeMertens()
-    image_out = merge_mertens.process(images)
-    image_out = img_as_float32(image_out)
-
-    image_out = 3 * image_out**2 - 2 * image_out**3
-    return image_out
-
-
-def invert_smoothstep(image):
-    """Approximately inverts a global tone mapping curve."""
-    image = np.clip(image, a_min=0.0, a_max=1.0)
-    return 0.5 - np.sin(np.arcsin(1.0 - 2.0 * image) / 3.0)
-
-
 def unprocess_isp(jpg, log_max_shot=0.012):
     """
     Convert a jpg image to raw image.
@@ -294,9 +261,6 @@ def unprocess_isp(jpg, log_max_shot=0.012):
     lambda_read, lambda_shot = get_random_noise_parameters(log_max_shot=log_max_shot)
     metadata = {'rgb2cam': rgb2cam, 'cam2rgb': cam2rgb, 'rgb_gain': rgb_gain, 'red_gain': red_gain,
                 'blue_gain': blue_gain, 'lambda_shot': lambda_shot, 'lambda_read': lambda_read}
-
-    ## Inverse tone mapping
-    jpg = invert_smoothstep(jpg)
 
     ## Gamma expansion
     jpg = gamma_expansion(jpg)
@@ -321,8 +285,8 @@ def postprocess(cam_rgb: np.ndarray, dng_stack: DNGStack, config: Config):
     those sensor-domain operations intentionally remain in
     :meth:`DNGStack.get_raw_arrays`. The processing order here is:
 
-    camera RGB -> white balance -> linear sRGB matrix -> optional tone/detail
-    operations -> optional sRGB transfer function.
+    camera RGB -> white balance -> linear sRGB matrix -> optional sharpening
+    -> optional sRGB transfer function.
     """
 
     rgb = np.asarray(cam_rgb, dtype=np.float32)
@@ -344,7 +308,7 @@ def postprocess(cam_rgb: np.ndarray, dng_stack: DNGStack, config: Config):
         white_balance = white_balance / white_balance[1]
         rgb = rgb * white_balance.reshape(1, 1, 3)
 
-    if postprocessing.do_color_correction:
+    if postprocessing.do_camera_to_linear_srgb:
         rgb = apply_ccm(rgb, dng_stack.camera_to_srgb)
 
     # Matrix conversion can produce valid negative/out-of-gamut values. This
@@ -362,14 +326,8 @@ def postprocess(cam_rgb: np.ndarray, dng_stack: DNGStack, config: Config):
             preserve_range=True,
         )
 
-    if postprocessing.do_tonemapping:
-        rgb = apply_smoothstep(rgb)
-
-    if postprocessing.do_devignetting:
-        raise NotImplementedError
-
     rgb = np.clip(rgb, 0.0, 1.0)
-    if postprocessing.do_gamma_correction:
+    if postprocessing.do_srgb_encoding:
         rgb = linear_to_srgb(rgb)
 
     return np.clip(rgb, 0.0, 1.0).astype(np.float32, copy=False)

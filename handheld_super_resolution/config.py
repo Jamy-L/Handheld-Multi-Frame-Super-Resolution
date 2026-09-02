@@ -113,11 +113,9 @@ class SharpeningConfig:
 class PostprocessingConfig:
     enabled: bool = True
     do_white_balance: bool = True
-    do_color_correction: bool = True
-    do_gamma_correction: bool = True
-    do_tonemapping: bool = False
+    do_camera_to_linear_srgb: bool = True
+    do_srgb_encoding: bool = True
     sharpening: SharpeningConfig = field(default_factory=SharpeningConfig)
-    do_devignetting: bool = False
 
 
 @dataclass
