@@ -5,6 +5,7 @@ from numba import cuda
 from numba.cuda.cudadrv.devicearray import DeviceNDArray
 import torch
 import torch.nn.functional as F
+import warnings
 
 from .utils import clamp, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
 from .config import Config
@@ -90,7 +91,7 @@ def align_lvl_ica(ref_img: DeviceNDArray,
     if config.alignment.ica.clip:
         search_radius = config.alignment.search_radii[l]
     else:
-        search_radius = 32,767 # Max int16 possible
+        search_radius = 32_767 # Max int16 possible
 
 
     np_y, np_x, _ = alignment.shape
@@ -109,6 +110,8 @@ def align_lvl_ica(ref_img: DeviceNDArray,
     elif tile_size == 64:
         cuda_kernel = ica_kernel_64
         threadsperblock = (64, 16)  # because each thread handles 4 pixels
+        config.alignment.ica.clip
+        warnings.warn("Required radius clipping for ica with patchsize 64: Not supported, clipping will be ignored")
     else:
         raise NotImplementedError("ICA kernel for tile size {} not implemented".format(tile_size))
     cuda_kernel[blockspergrid, threadsperblock](
@@ -384,6 +387,7 @@ def ica_kernel_64(ref_img, gradx, grady, hessian, moving, alignment, niter, clip
     # - Finally, the 32 values are sumed using a single thread B0,B1 (multithreaded reduction would take slightly longer)
     # - Thread 0 does the inversion and updates the alignments, ready for next iteration
 
+    clip_radius = 32_767 # Limitation of the cuda kernel: disable clip there are too many register too allow one more variable :(
     TILE_SIZE = 64
     N_THREADS = 16 * 64
     h, w = moving.shape

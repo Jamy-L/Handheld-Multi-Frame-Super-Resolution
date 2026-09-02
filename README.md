@@ -165,3 +165,4 @@ If you encounter any bug, please open an issue and/or sent an email at jamy.lafe
 
 ### Known Issues
 - The threshold functions and all the hyper-parameters mentionned in the IPOL article have only been partially tweaked : better results are expected with an in depth optimization.
+- For tiles of size 64, the ica search radius cannot be clipped. (The cuda kernel didn't have enough registers)
