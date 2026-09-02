@@ -231,7 +231,7 @@ def postprocess(cam_rgb: np.ndarray, dng_stack: DNGStack, config: Config):
         rgb = linear_to_srgb(rgb)
 
     # Applying image orientation
-    if postprocess.orientate_image:
+    if config.postprocessing.orientate_image:
         if 'Image Orientation' in dng_stack.tags.keys():
             ori = dng_stack.tags['Image Orientation'].values[0]
         else:
