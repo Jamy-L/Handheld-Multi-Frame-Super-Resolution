@@ -114,7 +114,7 @@ def accumulate(comp_img, alignments, covs, r,
     # The robustness coefficient is known for every guide image pixel, and implicitely
     # interpolated to HR using nearest neighboor interpolations.
     if bayer_mode:
-        i_r = min(int(lr_y/2 - 0.5), lr_h//2-1)
+        i_r = min(int(lr_y//2 - 0.5), lr_h//2-1)
         j_r = min(int(lr_x//2 - 0.5), lr_w//2-1)
         local_r = r[i_r, j_r]
     else:
