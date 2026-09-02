@@ -322,18 +322,11 @@ def process(burst_path: Union[Path, str], config: Config):
         
         hr_output = raw2rgb.postprocess(hr_output, dng_stack, config) 
         
-    # Applying image orientation
-    if 'Image Orientation' in dng_stack.tags.keys():
-        ori = dng_stack.tags['Image Orientation'].values[0]
-    else:
-        ori = 1
-        warnings.warn('The Image Orientation EXIF tag could not be found. \
-                      The image may be mirrored or misoriented.')
-        
-    output_image = apply_orientation(hr_output, ori)
-    if 'accumulated robustness' in debug_dict:
-        debug_dict['accumulated robustness'] = apply_orientation(debug_dict['accumulated robustness'], ori)
+    if 'accumulated robustness' in debug_dict and config.postprocessing.orientate_image:
+        if 'Image Orientation' in dng_stack.tags.keys() :
+            ori = dng_stack.tags['Image Orientation'].values[0]
+            debug_dict['accumulated robustness'] = apply_orientation(debug_dict['accumulated robustness'], ori)
     
     
     
-    return output_image, debug_dict
+    return hr_output, debug_dict
