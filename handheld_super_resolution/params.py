@@ -15,8 +15,8 @@ def runtime_config(config: Config):
 
 
 def sanitize_config(config: Config, imshape: Tuple[int, int]):
-    if config.mode == "grey" and config.grey_method != "FFT":
-        raise NotImplementedError("Grey level images should be obtained with FFT")
+    if config.mode == "grey" and config.alignment.grey_method != "FFT":
+        raise ValueError("Demosaicing alignment requires Bayer input")
         
     assert config.scale >= 1
 

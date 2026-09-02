@@ -61,7 +61,7 @@ def apply_orientation(img, ori):
     
     return img
 
-def compute_grey_images(img, method):
+def compute_grey_images(img: DeviceNDArray, method: str):
     """
     This function converts a raw image to a grey image, using the decimation or
     the method of Alg. 3: ComputeGrayscaleImage
@@ -71,7 +71,7 @@ def compute_grey_images(img, method):
     img : device Array[:, :]
         Raw image J to convert to gray level.
     method : str
-        FFT or decimatin.
+        ``FFT``, ``demosaicing``, or ``decimating``.
 
     Raises
     ------
@@ -104,6 +104,10 @@ def compute_grey_images(img, method):
         # Here, .real() type inherits once again from the complex type.
         # numba type is read directly from the torch tensor, so everything goes fine.
         return cuda.as_cuda_array(torch_img_grey.real)
+    elif method == "demosaicing":
+        raw_img = img.copy_to_host()
+        img_grey = demosaic_to_grey(raw_img)
+        return cuda.to_device(img_grey)
     elif method == "decimating":
         grey_imshape_y, grey_imshape_x = grey_imshape = imsize_y//2, imsize_x//2
         
@@ -118,7 +122,23 @@ def compute_grey_images(img, method):
         return img_grey
         
     else:
-        raise NotImplementedError('Computation of gray level on GPU is only supported for FFT')
+        raise ValueError(f"Unknown grayscale method: {method}")
+
+
+def demosaic_to_grey(img: NDArray) -> NDArray[np.float32]:
+    """Demosaic a normalized RGGB CFA and collapse its RGB channels to gray."""
+    if img.ndim != 2:
+        raise ValueError(f"Bayer input must be 2D, got shape {img.shape}")
+    try:
+        from colour_demosaicing import demosaicing_CFA_Bayer_Menon2007
+    except ImportError as error:
+        raise ImportError(
+            "The demosaicing alignment method requires colour-demosaicing"
+        ) from error
+
+    rgb = demosaicing_CFA_Bayer_Menon2007(img, pattern="RGGB")
+    return np.ascontiguousarray(np.mean(rgb, axis=-1), dtype=DEFAULT_NUMPY_FLOAT_TYPE)
+
 
 def gat(image: DeviceNDArray, alpha: Tuple[float, float, float, float], beta: Tuple[float, float, float, float]) -> DeviceNDArray:
     """

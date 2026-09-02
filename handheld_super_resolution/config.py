@@ -63,7 +63,7 @@ class ICAConfig:
 
 @dataclass
 class AlignmentConfig:
-    grey_method: Literal["FFT"] = "FFT"
+    grey_method: Literal["FFT", "demosaicing"] = "FFT"
     search_radii: List[int] = field(default_factory=lambda: [1, 4, 4, 4])
     flow_upscale_mode: Literal["nearest", "bilinear", "bicubic"] = "bilinear"
     factors: List[int] = field(default_factory=lambda: [1, 2, 4, 4])
