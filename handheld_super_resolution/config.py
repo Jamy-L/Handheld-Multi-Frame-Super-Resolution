@@ -58,7 +58,7 @@ class BlockMatchingConfig:
 class ICAConfig:
     n_iter: int = 3
     sigma_blur: float = 0
-    clip: bool = True
+    clip: bool = True # Clip the ica step to the search radius
 
 
 @dataclass
@@ -123,11 +123,12 @@ class PostprocessingConfig:
 class Config:
     """Configuration for the handheld multi-frame super-resolution pipeline."""
 
-    scale: float = 1
+    scale: float = 1 # 1 for demosaicking
     mode: Literal["bayer", "grey"] = "bayer"
-    debug: bool = False
+    debug: bool = False # Dumps intermediate buffers as .png, and colours eventual NaN pixel in magenta
     verbose: int = 1
-    use_gat: bool = True
+    use_gat: bool = True # Use the generalized Anscombe Transform, or a basic sqrt before computing gradients
+    force_snr: Union[float, None] = None # Skip the SNR estimation, and set the SNR
     noise_model: NoiseModelConfig = field(default_factory=NoiseModelConfig)
     alignment: AlignmentConfig = field(default_factory=AlignmentConfig)
     robustness: RobustnessConfig = field(default_factory=RobustnessConfig)
