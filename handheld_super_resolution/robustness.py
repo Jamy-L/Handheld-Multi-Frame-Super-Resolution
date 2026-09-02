@@ -16,9 +16,13 @@ import math
 
 import numpy as np
 from numba import cuda, uint8
-from numba.cuda.cudadrv.devicearray import DeviceNDArray
 import torch
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from numba.cuda.cudadrv.devicearray import DeviceNDArray
+else:
+    DeviceNDArray = Any
 
 from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE,DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS, clamp, timer
 from .utils_image import dogson_biquadratic_kernel, dogson_quadratic_kernel
@@ -115,7 +119,7 @@ def compute_robustness(comp_img: DeviceNDArray, ref_local_means: DeviceNDArray, 
     tile_size = config.alignment.tile_size
     assert isinstance(tile_size, int), f"Got invalide tile size {tile_size}"
           
-    cuda_std_curve, cuda_diff_curve = noise_model
+    cuda_sigma_sq_curve, cuda_d_sq_curve = noise_model
         
     # Computing guide image
     if bayer_mode:
@@ -138,7 +142,7 @@ def compute_robustness(comp_img: DeviceNDArray, ref_local_means: DeviceNDArray, 
     
     # computing d_sq and sigma_sq (noise correction on the fly)
     d_sq, sigma_sq = compute_d_sigma_(ref_local_means, comp_local_means,
-                                      ref_local_var, cuda_std_curve, cuda_diff_curve,
+                                      ref_local_var, cuda_sigma_sq_curve, cuda_d_sq_curve,
                                       config.robustness.noise_correction)
 
     # applying flow discontinuity penalty
@@ -331,7 +335,7 @@ def cuda_warp_dogson(source, flow, tile_size, warped):
     if not (0 <= y_mov < ny and
             0 <= x_mov < nx):
         for c in range(n_channels):
-            warped[c, y, x] = 1/0 # infinity will imply R = 0
+            warped[c, y, x] = math.inf # infinity will imply R = 0
         return
     
     center_y = round(y_mov)
@@ -362,7 +366,7 @@ def cuda_warp_dogson(source, flow, tile_size, warped):
         warped[c, y, x] = buffer[c] / w_acc
             
 
-def compute_d_sigma(means_r: DeviceNDArray, means_m: DeviceNDArray, var_m: DeviceNDArray, std_curve: DeviceNDArray, diff_curve: DeviceNDArray, do_noise_correction: bool):
+def compute_d_sigma(means_r: DeviceNDArray, means_m: DeviceNDArray, var_r: DeviceNDArray, sigma_sq_curve: DeviceNDArray, d_sq_curve: DeviceNDArray, do_noise_correction: bool):
     """
     Computes the color distance between the two frames. They must be warped.
 
@@ -389,12 +393,12 @@ def compute_d_sigma(means_r: DeviceNDArray, means_m: DeviceNDArray, var_m: Devic
     blockspergrid_y = math.ceil(ny/threadsperblock[0])
     blockspergrid = (blockspergrid_x, blockspergrid_y)
     
-    cuda_compute_d_sigma[blockspergrid, threadsperblock](means_r, means_m, var_m, std_curve, diff_curve, d_sq, sigma_sq, do_noise_correction)
+    cuda_compute_d_sigma[blockspergrid, threadsperblock](means_r, means_m, var_r, sigma_sq_curve, d_sq_curve, d_sq, sigma_sq, do_noise_correction)
     
     return d_sq, sigma_sq
 
 @cuda.jit
-def cuda_compute_d_sigma(means_r, means_m, var_m, std_curve, diff_curve, d_sq, sigma_sq, do_noise_correction):
+def cuda_compute_d_sigma(means_r, means_m, var_r, sigma_sq_curve, d_sq_curve, d_sq, sigma_sq, do_noise_correction):
     x, y = cuda.grid(2)
     nc, ny, nx = means_r.shape
     
@@ -407,7 +411,7 @@ def cuda_compute_d_sigma(means_r, means_m, var_m, std_curve, diff_curve, d_sq, s
     for c in range(nc):
         error = means_r[c, y, x] - means_m[c, y, x]
         d_sq_ += error * error
-        sigma_sq_ += var_m[c, y, x]
+        sigma_sq_ += var_r[c, y, x]
 
 
     if do_noise_correction:
@@ -416,14 +420,15 @@ def cuda_compute_d_sigma(means_r, means_m, var_m, std_curve, diff_curve, d_sq, s
             brightness += means_r[c, y, x]
         brightness /= nc
         brightness = clamp(brightness, 0, 1)
-        id_noise = round(1000 * brightness) # id on the noise curve
+        id_noise = round((sigma_sq_curve.shape[0] - 1) * brightness)
 
-        d_t =  diff_curve[id_noise]
-        sigma_t = std_curve[id_noise]
-        sigma_sq_ = max(sigma_sq_, sigma_t*sigma_t)
+        d_noise_sq = d_sq_curve[id_noise]
+        sigma_noise_sq = sigma_sq_curve[id_noise]
+        sigma_sq_ = max(sigma_sq_, sigma_noise_sq)
 
-        shrink = d_sq_/(d_sq_ + d_t*d_t)
-        d_sq_ *= shrink * shrink
+        if d_sq_ > 0:
+            shrink = d_sq_ / (d_sq_ + d_noise_sq)
+            d_sq_ *= shrink * shrink
 
     d_sq[y, x] = d_sq_
     sigma_sq[y, x] = sigma_sq_
@@ -475,10 +480,10 @@ def cuda_compute_s(flows, M_th, s1, s2, S):
     mini = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
     maxi = cuda.local.array(2, DEFAULT_CUDA_FLOAT_TYPE)
     flow = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-    mini[0] = +1/0
-    mini[1] = +1/0
-    maxi[0] = -1/0
-    maxi[1] = -1/0
+    mini[0] = math.inf
+    mini[1] = math.inf
+    maxi[0] = -math.inf
+    maxi[1] = -math.inf
     
     for i in range(-1, 2):
         for j in range(-1, 2):
@@ -572,7 +577,7 @@ def cuda_compute_local_min(R, r):
            0 <= idx < guide_imshape_x):
         return
 
-    mini = +1/0
+    mini = math.inf
     
     #local min search
     for i in range(-2, 3):

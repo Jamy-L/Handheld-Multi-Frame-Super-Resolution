@@ -14,7 +14,6 @@ This script contains :
 @author: jamyl
 """
 
-import os
 import time
 import warnings
 
@@ -23,24 +22,19 @@ from typing import Union, Tuple, Dict
 import numpy as np
 from numpy.typing import NDArray
 from numba import cuda
-from numba.cuda.cudadrv.devicearray import DeviceNDArray
-import rawpy
 
 from .utils_image import compute_grey_images, apply_orientation, rggb_to_cfa, estimate_image_snr
-from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, round_iso, timer
+from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, timer
 from .alignment import align, init_alignment
 from .config import Config
 from .debug_writer import DebugWriter, NAN_COLOR
 from .params import runtime_config, sanitize_config, update_snr_config
 from .robustness import init_robustness, compute_robustness
-from .utils_dng import load_dng_burst
-from .fast_monte_carlo import run_fast_MC
+from .utils_dng import load_dng_burst, expand_noise_profile_to_rgbg
+from .noise_lut import load_noise_lut
 from .kernels import estimate_kernels
 from .merge import merge
 from . import raw2rgb
-
-NOISE_MODEL_PATH = Path(os.path.dirname(__file__)).parent / 'data' 
-        
 
 def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: Config) -> Tuple[NDArray, Dict[str, NDArray]]:
     """
@@ -87,6 +81,14 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
     debug_dict = {}
     debug_writer = DebugWriter() if config.debug else None
 
+    if config.robustness.enabled and config.robustness.noise_correction:
+        curve_size = len(config.noise_model.sigma_sq_curve)
+        if curve_size < 2 or len(config.noise_model.d_sq_curve) != curve_size:
+            raise ValueError(
+                "noise-correction curves were not initialized; call process() with a "
+                "validated noise_model.lut_path"
+            )
+
     #### Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
 
@@ -94,8 +96,8 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
     stream = cuda.stream()
     cuda_img = cuda.device_array_like(comp_imgs[0], stream=stream)
     cuda.synchronize()
-    cuda_std_curve = cuda.to_device(np.array(config.noise_model.std_curve))
-    cuda_diff_curve = cuda.to_device(np.array(config.noise_model.diff_curve))
+    cuda_sigma_sq_curve = cuda.to_device(np.asarray(config.noise_model.sigma_sq_curve, dtype=np.float32))
+    cuda_d_sq_curve = cuda.to_device(np.asarray(config.noise_model.d_sq_curve, dtype=np.float32))
     
     if verbose :
         print("\nProcessing reference image ---------\n")
@@ -172,7 +174,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
             assert ref_local_stds is not None
             robustness = compute_robustness_(
                 cuda_img, ref_local_means, ref_local_stds, alignment,
-                (cuda_std_curve, cuda_diff_curve), config, debug_writer,
+                (cuda_sigma_sq_curve, cuda_d_sq_curve), config, debug_writer,
             )
         else:
             temp = np.ones_like(cuda_img, DEFAULT_NUMPY_FLOAT_TYPE)
@@ -241,26 +243,35 @@ def process(burst_path: Union[Path, str], config: Config):
     ref_raw, raw_comp = dng_stack.get_raw_arrays() # Scale [black level, whiteleve] -> [0, 1] WITHOUT WB, clipping or anything
 
     if config.noise_model.alpha is not None:
-        assert config.noise_model.beta is not None, "If alpha is provided, beta must also be provided."
+        if config.noise_model.beta is None:
+            raise ValueError("If alpha is provided, beta must also be provided.")
         # User provided custom values.
         print("Using user-provided alpha and beta values")
+        config.noise_model.alpha, config.noise_model.beta = expand_noise_profile_to_rgbg(
+            config.noise_model.alpha, config.noise_model.beta
+        )
     else:
         # Extract alpha and beta from the DNG tags.
         config.noise_model.alpha = dng_stack.alpha
         config.noise_model.beta = dng_stack.beta
 
-    #### Packing noise model related to picture ISO
-    curve_iso = round_iso(dng_stack.iso) # Rounds non standart ISO to regular ISO (100, 200, 400, ...)
-    std_noise_model_label = 'noise_model_std_ISO_{}'.format(curve_iso)
-    diff_noise_model_label = 'noise_model_diff_ISO_{}'.format(curve_iso)
-    std_noise_model_path = (NOISE_MODEL_PATH / std_noise_model_label).with_suffix('.npy')
-    diff_noise_model_path = (NOISE_MODEL_PATH / diff_noise_model_label).with_suffix('.npy')
-    
-    std_curve = np.load(std_noise_model_path)
-    diff_curve = np.load(diff_noise_model_path)
-    
-    # Use this to compute noise curves on the fly
-    # std_curve, diff_curve = run_fast_MC(config.noise_model.alpha, config.noise_model.beta)
+    if config.robustness.enabled and config.robustness.noise_correction:
+        if config.noise_model.lut_path is None:
+            raise ValueError(
+                "robustness noise correction requires --noise-model.lut-path PATH; "
+                "generate it with python -m handheld_super_resolution.monte_carlo"
+            )
+        noise_lut = load_noise_lut(
+            config.noise_model.lut_path,
+            expected_alpha=config.noise_model.alpha,
+            expected_beta=config.noise_model.beta,
+        )
+        sigma_sq_curve = noise_lut.sigma_noise_sq
+        d_sq_curve = noise_lut.d_noise_sq
+    else:
+        # The CUDA call signature remains fixed when correction is disabled.
+        sigma_sq_curve = np.zeros(2, dtype=np.float32)
+        d_sq_curve = np.zeros(2, dtype=np.float32)
     
     
     if verbose_2:   
@@ -279,8 +290,8 @@ def process(burst_path: Union[Path, str], config: Config):
     if verbose_1:
         print(f"\nRuntime configuration:\n{config.dump()}\n")
 
-    config.noise_model.std_curve = std_curve.tolist()
-    config.noise_model.diff_curve = diff_curve.tolist()
+    config.noise_model.sigma_sq_curve = sigma_sq_curve.tolist()
+    config.noise_model.d_sq_curve = d_sq_curve.tolist()
     
     
     #### Running the handheld pipeline
@@ -309,15 +320,6 @@ def process(burst_path: Union[Path, str], config: Config):
         if verbose_2:
             print('-- Post processing image')
         
-        # hr_output = raw2rgb.postprocess(raw, hr_output,
-        #                                    config.postprocessing.do_white_balance,
-        #                                    config.postprocessing.do_color_correction,
-        #                                    config.postprocessing.do_tonemapping,
-        #                                    config.postprocessing.do_gamma_correction,
-        #                                    config.postprocessing.sharpening,
-        #                                    config.postprocessing.do_devignetting,
-        #                                    dng_stack.xyz2cam,
-        #                                    )
         hr_output = raw2rgb.postprocess(hr_output, dng_stack, config) 
         
     # Applying image orientation

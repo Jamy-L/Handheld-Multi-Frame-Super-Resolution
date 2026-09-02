@@ -1,6 +1,7 @@
 """Typed configuration schema for handheld super-resolution."""
 
 from dataclasses import dataclass, field, fields, is_dataclass
+from pathlib import Path
 from pprint import pformat
 from typing import List, Literal, Optional, Tuple, Union
 
@@ -39,12 +40,13 @@ def _format_config_fields(config, indent: int) -> List[str]:
 
 @dataclass
 class NoiseModelConfig:
-    """Sensor noise model. Values are read from DNG metadata when omitted."""
+    """Sensor noise model in EXIF R, G1, B, G2 plane order."""
 
+    lut_path: Optional[Path] = None
     alpha: Optional[Tuple[float, float, float, float]] = None
     beta: Optional[Tuple[float, float, float, float]] = None
-    std_curve: tyro.conf.Suppress[List[float]] = field(default_factory=list, init=False, repr=False)
-    diff_curve: tyro.conf.Suppress[List[float]] = field(default_factory=list, init=False, repr=False)
+    sigma_sq_curve: tyro.conf.Suppress[List[float]] = field(default_factory=list, init=False, repr=False)
+    d_sq_curve: tyro.conf.Suppress[List[float]] = field(default_factory=list, init=False, repr=False)
 
 
 @dataclass
