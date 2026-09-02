@@ -11,6 +11,7 @@ import numpy as np
 from skimage import img_as_float32, filters
 
 from .config import Config
+from .utils_image import apply_orientation
 
 if TYPE_CHECKING:
     from .utils_dng import DNGStack
@@ -228,5 +229,16 @@ def postprocess(cam_rgb: np.ndarray, dng_stack: DNGStack, config: Config):
     rgb = np.clip(rgb, 0.0, 1.0)
     if postprocessing.do_srgb_encoding:
         rgb = linear_to_srgb(rgb)
+
+    # Applying image orientation
+    if postprocess.orientate_image:
+        if 'Image Orientation' in dng_stack.tags.keys():
+            ori = dng_stack.tags['Image Orientation'].values[0]
+        else:
+            ori = 1
+            warnings.warn('The Image Orientation EXIF tag could not be found. \
+                        The image may be mirrored or misoriented.')
+
+        rgb = apply_orientation(rgb, ori)
 
     return np.clip(rgb, 0.0, 1.0).astype(np.float32, copy=False)

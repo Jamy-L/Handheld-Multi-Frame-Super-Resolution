@@ -115,6 +115,7 @@ class PostprocessingConfig:
     do_white_balance: bool = True
     do_camera_to_linear_srgb: bool = True
     do_srgb_encoding: bool = True
+    orientate_image: bool = True
     sharpening: SharpeningConfig = field(default_factory=SharpeningConfig)
 
 
