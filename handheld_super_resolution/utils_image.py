@@ -1,11 +1,14 @@
 import math
-from typing import Tuple
+from typing import Any, Tuple, TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.ndimage._filters import _gaussian_kernel1d
 from numba import cuda
-from numba.cuda.cudadrv.devicearray import DeviceNDArray
+if TYPE_CHECKING:
+    from numba.cuda.cudadrv.devicearray import DeviceNDArray
+else:
+    DeviceNDArray = Any
 import torch as th
 import torch.fft
 import torch.nn.functional as F
@@ -158,13 +161,16 @@ def cuda_GAT(image, VST_image, alpha, beta):
             0 <= x < imshape_x):
         return
 
-    # Assume r g1 g2 b pattern
-    # alpha and beta are 4-tuples, with the same pattern
+    # The mosaic is spatial R G1 / G2 B, whereas EXIF alpha and beta use
+    # color-plane order R, G1, B, G2.
     # x even y even -> r -> alpha[0], beta[0]
     # x odd y even -> g1 -> alpha[1], beta[1]
-    # x even y odd -> b -> alpha[2], beta[2]
-    # x odd y odd -> g2 -> alpha[3], beta[3]
-    i = 2*(y%2) + x % 2
+    # x even y odd -> g2 -> alpha[3], beta[3]
+    # x odd y odd -> b -> alpha[2], beta[2]
+    px = x & 1
+    py = y & 1
+    # Spatial R,G1/G2,B -> EXIF plane indices 0,1/3,2, without divergence.
+    i = px + py * (3 - 2 * px)
     alpha_ = alpha[i]
     beta_ = beta[i]
     VST = alpha_*image[y, x] + 3/8 * alpha_*alpha_ + beta_
@@ -313,8 +319,8 @@ def estimate_image_snr(ref_img: NDArray[np.float32], alpha: Tuple[float, float, 
 
     varr =  alpha[0]*r + beta[0]
     varg1 =  alpha[1]*g1 + beta[1]
-    varg2 =  alpha[2]*g2 + beta[2]
-    varb =  alpha[3]*b + beta[3]
+    varg2 =  alpha[3]*g2 + beta[3]
+    varb =  alpha[2]*b + beta[2]
 
     validr = (r > 0) & (r < 1)
     validg1 = (g1 > 0) & (g1 < 1)

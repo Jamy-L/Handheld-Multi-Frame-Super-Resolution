@@ -52,6 +52,51 @@ PHOTO_INTER = {
 SUPPORTED = [1, 32803]
 
 
+def expand_noise_profile_to_rgbg(alpha, beta) -> Tuple[Tuple[float, float, float, float],
+                                                        Tuple[float, float, float, float]]:
+    """Expand one- or three-plane profiles to R, G1, B, G2 order."""
+    alpha = tuple(float(value) for value in alpha)
+    beta = tuple(float(value) for value in beta)
+    if len(alpha) != len(beta):
+        raise ValueError(
+            f"alpha and beta must contain the same number of values, got "
+            f"{len(alpha)} and {len(beta)}"
+        )
+    if len(alpha) == 1:
+        return alpha * 4, beta * 4
+    if len(alpha) == 3:
+        return (alpha[0], alpha[1], alpha[2], alpha[1]), (
+            beta[0], beta[1], beta[2], beta[1]
+        )
+    if len(alpha) == 4:
+        return alpha, beta
+    raise ValueError(
+        f"noise profiles must contain 1, 3, or 4 values, got {len(alpha)}"
+    )
+
+
+def noise_profile_from_tags(tags) -> Tuple[Tuple[float, float, float, float],
+                                            Tuple[float, float, float, float]]:
+    """Read the DNG NoiseProfile tag in R, G1, B, G2 color-plane order."""
+    tag = tags.get('Image Tag 0xC761')
+    if tag is None:
+        raise ValueError("DNG does not contain a NoiseProfile (0xC761) tag")
+    values = [float(value[0]) for value in tag.values]
+    if len(values) % 2:
+        raise ValueError(f"DNG NoiseProfile must contain alpha/beta pairs, got {values!r}")
+    return expand_noise_profile_to_rgbg(values[::2], values[1::2])
+
+
+def read_dng_noise_profile(path: Union[str, Path]) -> Tuple[
+    Tuple[float, float, float, float], Tuple[float, float, float, float]
+]:
+    """Read only the noise profile needed by the Monte Carlo CLI."""
+    path = Path(path)
+    with path.open('rb') as raw_file:
+        tags = exifread.process_file(raw_file, details=False)
+    return noise_profile_from_tags(tags)
+
+
 @dataclass
 class DNGStack:
     """Images, metadata, calibration values, and paths for a DNG burst."""
@@ -89,14 +134,14 @@ class DNGStack:
         ref = self.ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE)
         ref[::2, ::2] = (ref[::2, ::2] - self.black_levels[0]) / (self.white_level - self.black_levels[0])
         ref[::2, 1::2] = (ref[::2, 1::2] - self.black_levels[1]) / (self.white_level - self.black_levels[1])
-        ref[1::2, ::2] = (ref[1::2, ::2] - self.black_levels[2]) / (self.white_level - self.black_levels[2])
-        ref[1::2, 1::2] = (ref[1::2, 1::2] - self.black_levels[3]) / (self.white_level - self.black_levels[3])
+        ref[1::2, ::2] = (ref[1::2, ::2] - self.black_levels[3]) / (self.white_level - self.black_levels[3])
+        ref[1::2, 1::2] = (ref[1::2, 1::2] - self.black_levels[2]) / (self.white_level - self.black_levels[2])
 
         comp = self.raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE)
         comp[:, ::2, ::2] = (comp[:, ::2, ::2] - self.black_levels[0]) / (self.white_level - self.black_levels[0])
         comp[:, ::2, 1::2] = (comp[:, ::2, 1::2] - self.black_levels[1]) / (self.white_level - self.black_levels[1])
-        comp[:, 1::2, ::2] = (comp[:, 1::2, ::2] - self.black_levels[2]) / (self.white_level - self.black_levels[2])
-        comp[:, 1::2, 1::2] = (comp[:, 1::2, 1::2] - self.black_levels[3]) / (self.white_level - self.black_levels[3])
+        comp[:, 1::2, ::2] = (comp[:, 1::2, ::2] - self.black_levels[3]) / (self.white_level - self.black_levels[3])
+        comp[:, 1::2, 1::2] = (comp[:, 1::2, 1::2] - self.black_levels[2]) / (self.white_level - self.black_levels[2])
         return ref, comp
 
 
@@ -184,19 +229,7 @@ def load_dng_burst(burst_path: Union[str, Path]) -> DNGStack:
     iso = max(100, iso)
     iso = min(3200, iso)
 
-    alpha = [x[0] for x in tags['Image Tag 0xC761'].values[::2]]
-    beta = [x[0] for x in tags['Image Tag 0xC761'].values[1::2]]
-    assert len(alpha) == len(beta), f'Alpha and beta values should have the same length, got {len(alpha)} and {len(beta)}.'
-
-    # R G1 B G1
-    if len(alpha) == 1:
-        alpha = (alpha[0], alpha[0], alpha[0], alpha[0])
-        beta = (beta[0], beta[0], beta[0], beta[0])
-    elif len(alpha) == 3:
-        alpha = (alpha[0], alpha[1], alpha[2], alpha[1])
-        beta = (beta[0], beta[1], beta[2], beta[1])
-    else: # For the case 4, we would need to rearange to format RGGB regardless of cfa
-        raise NotImplementedError(f'Alpha and beta values should have length 1 or 3, got {len(alpha)} and {len(beta)}.')
+    alpha, beta = noise_profile_from_tags(tags)
 
 
     #### Performing whitebalance
