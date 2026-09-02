@@ -2,7 +2,7 @@
 
 [[Paper]](https://www.ipol.im/pub/pre/460) [[Demo]](https://ipolcore.ipol.im/demo/clientApp/demo.html?id=460)
 
-**⚠️ Update 02/09/26:This repo now diverges considerably from the online IPOL demo. Several correction have been made, some features have been added and some removed. Please try**
+**⚠️ Update 02/09/26:This repo now diverges considerably from the online IPOL demo. Several correction have been made, some features have been added and some removed. Please try the recent code for better result**
 
 This repository contains a non-official implementation of the “Handheld Multi-Frame Super-Resolution algorithm” paper by Wronski et al. (used in the Google Pixel 3 camera), which performs simultaneously multi-image super-resolution demosaicking and denoising from a burst of raw photgraphs. To the best of our knowledge, this is the first publicly available comprehensive implementation of this well-acclaimed paper, for which no official code has been released so far.
  
