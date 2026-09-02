@@ -51,7 +51,6 @@ def init_robustness(ref_img: DeviceNDArray, config: Config):
     
     compute_guide_image_ = timer(compute_guide_image, verbose_3, " - Decimating images to RGB", ' - Image decimated')
     compute_local_stats_ = timer(compute_local_stats, verbose_3, end_s=' - Local stats estimated')
-    warp_stats_ = timer(warp_stats, verbose_3, ' - Local stats warped upscaled')
     
     imshape_y, imshape_x = ref_img.shape
 
@@ -115,10 +114,6 @@ def compute_robustness(comp_img: DeviceNDArray, ref_local_means: DeviceNDArray, 
 
     tile_size = config.alignment.tile_size
     assert isinstance(tile_size, int), f"Got invalide tile size {tile_size}"
-    t = config.robustness.t
-    s1 = config.robustness.s1
-    s2 = config.robustness.s2
-    Mt = config.robustness.Mt
           
     cuda_std_curve, cuda_diff_curve = noise_model
         
@@ -131,14 +126,12 @@ def compute_robustness(comp_img: DeviceNDArray, ref_local_means: DeviceNDArray, 
 
     # Computing local stats (before applying optical flow)
     comp_local_means, _ = compute_local_stats_(guide_img)
-
     if debug_writer is not None:
         frame = np.moveaxis(comp_local_means.copy_to_host(), 0, -1)
         debug_writer.write_rgb("rgb_guides", frame)
     
     # Upscale and warp local means
     comp_local_means = warp_stats_(comp_local_means, tile_size, flows)
-
     if debug_writer is not None:
         frame = np.moveaxis(comp_local_means.copy_to_host(), 0, -1)
         debug_writer.write_rgb("rgb_guides_aligned", frame)
@@ -149,9 +142,18 @@ def compute_robustness(comp_img: DeviceNDArray, ref_local_means: DeviceNDArray, 
                                       config.robustness.noise_correction)
 
     # applying flow discontinuity penalty
-    S = compute_s_(flows, Mt, s1, s2)
-    R = robustness_threshold_(d_sq, sigma_sq, S, t, tile_size, bayer_mode)
+    S = compute_s_(flows, config.robustness.Mt, config.robustness.s1, config.robustness.s2)
+    if debug_writer is not None:
+        debug_writer.write_scalar("S", S.copy_to_host(), value_range=None)
+
+    R = robustness_threshold_(d_sq, sigma_sq, S, config.robustness.t, tile_size, bayer_mode)
+    if debug_writer is not None:
+        debug_writer.write_scalar("R", R.copy_to_host())
+
     r = local_min_(R)
+    if debug_writer is not None:
+        debug_writer.write_scalar("R_local_min", r.copy_to_host())
+
     return r
 
 
@@ -357,7 +359,7 @@ def cuda_warp_dogson(source, flow, tile_size, warped):
     
     # Normalise and write output
     for c in range(n_channels):
-        warped[c, y, x] = buffer[c]/w_acc
+        warped[c, y, x] = buffer[c] / w_acc
             
 
 def compute_d_sigma(means_r: DeviceNDArray, means_m: DeviceNDArray, var_m: DeviceNDArray, std_curve: DeviceNDArray, diff_curve: DeviceNDArray, do_noise_correction: bool):

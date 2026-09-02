@@ -1,8 +1,9 @@
 """Stream pipeline diagnostics to disk without retaining full frame stacks."""
 
 import re
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -19,12 +20,17 @@ NEG_INF_COLOR: RGBColor = (0, 0, 255)
 class DebugWriter:
     """Render and save numbered debug images, one frame at a time."""
 
-    _FRAME_PATTERN = re.compile(r"frame_(\d+)\.png")
     _CATEGORY_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
     def __init__(self, root: Union[str, Path] = "debug") -> None:
         self.root = Path(root)
-        self._next_ids: Dict[str, int] = {}
+        self.run_dir = self._create_run_directory()
+        self.frame_id = -1
+
+    def next_frame(self) -> int:
+        """Advance the shared frame ID used by every debug category."""
+        self.frame_id += 1
+        return self.frame_id
 
     def write_rgb(self, category: str, frame: NDArray) -> Path:
         """Save a one- or three-channel image whose finite range is [0, 1]."""
@@ -48,13 +54,15 @@ class DebugWriter:
         self,
         category: str,
         values: NDArray,
-        value_range: Tuple[float, float] = (0, 1),
+        value_range: Optional[Tuple[float, float]] = (0, 1),
         colormap: int = cv2.COLORMAP_VIRIDIS,
     ) -> Path:
         """Render a scalar field with a colormap and save it as RGB."""
         values = np.asarray(values)
         if values.ndim != 2:
             raise ValueError("Scalar debug frames must have shape (height, width)")
+        if value_range is None:
+            value_range = self._finite_range(values)
 
         nan_mask, pos_inf_mask, neg_inf_mask = self._invalid_masks(values)
         grayscale = self._to_uint8(values, *value_range)
@@ -62,6 +70,34 @@ class DebugWriter:
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         self._paint_invalid(rgb, nan_mask, pos_inf_mask, neg_inf_mask)
         return self._write(category, rgb)
+
+    def write_scalar_channels(
+        self,
+        category: str,
+        values: NDArray,
+        channel_names: Tuple[str, ...],
+        value_range: Optional[Tuple[float, float]] = None,
+        colormap: int = cv2.COLORMAP_VIRIDIS,
+    ) -> Tuple[Path, ...]:
+        """Save each channel separately using one shared color scale."""
+        values = np.asarray(values)
+        if values.ndim != 3:
+            raise ValueError("Channel debug data must have shape (height, width, channels)")
+        if values.shape[-1] != len(channel_names):
+            raise ValueError("A name must be provided for every debug channel")
+
+        if value_range is None:
+            value_range = self._finite_range(values)
+
+        return tuple(
+            self.write_scalar(
+                f"{category}_{channel_name}",
+                values[..., channel_id],
+                value_range,
+                colormap,
+            )
+            for channel_id, channel_name in enumerate(channel_names)
+        )
 
     def write_flow(self, category: str, flow: NDArray) -> Path:
         """Render a ``(dx, dy)`` flow field with the conventional HSV map.
@@ -116,6 +152,22 @@ class DebugWriter:
         return np.round(normalized * 255).astype(np.uint8)
 
     @staticmethod
+    def _finite_range(values: NDArray) -> Tuple[float, float]:
+        finite_values = values[np.isfinite(values)]
+        if finite_values.size == 0:
+            return 0, 1
+
+        lower = float(np.min(finite_values))
+        upper = float(np.max(finite_values))
+        if lower == upper:
+            if lower > 0:
+                return 0, upper
+            if upper < 0:
+                return lower, 0
+            return 0, 1
+        return lower, upper
+
+    @staticmethod
     def _paint_invalid(
         rgb: NDArray,
         nan_mask: NDArray,
@@ -127,27 +179,32 @@ class DebugWriter:
         rgb[neg_inf_mask] = NEG_INF_COLOR
 
     def _write(self, category: str, rgb: NDArray) -> Path:
-        path = self._next_path(category)
+        path = self._frame_path(category)
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         if not cv2.imwrite(str(path), bgr):
             raise OSError(f"Could not write debug frame to {path}")
         return path
 
-    def _next_path(self, category: str) -> Path:
+    def _frame_path(self, category: str) -> Path:
+        if self.frame_id < 0:
+            raise RuntimeError("Call next_frame() before writing debug output")
         if not self._CATEGORY_PATTERN.fullmatch(category):
             raise ValueError(f"Invalid debug category: {category!r}")
 
-        directory = self.root / category
+        directory = self.run_dir / category
         directory.mkdir(parents=True, exist_ok=True)
+        return directory / f"frame_{self.frame_id:04d}.png"
 
-        if category not in self._next_ids:
-            frame_ids = []
-            for path in directory.iterdir():
-                match = self._FRAME_PATTERN.fullmatch(path.name)
-                if match:
-                    frame_ids.append(int(match.group(1)))
-            self._next_ids[category] = max(frame_ids, default=-1) + 1
+    def _create_run_directory(self) -> Path:
+        self.root.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S_%f")
+        run_dir = self.root / timestamp
 
-        frame_id = self._next_ids[category]
-        self._next_ids[category] += 1
-        return directory / f"frame_{frame_id:04d}.png"
+        collision_id = 0
+        while True:
+            try:
+                run_dir.mkdir()
+                return run_dir
+            except FileExistsError:
+                collision_id += 1
+                run_dir = self.root / f"{timestamp}_{collision_id:02d}"
