@@ -143,6 +143,9 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
 
 
     for im_id in range(comp_imgs.shape[0]):
+        if debug_writer is not None:
+            debug_writer.next_frame()
+
         if verbose :
             cuda.synchronize()
             print("\nProcessing image {} ---------\n".format(im_id+1))
@@ -188,14 +191,17 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
             cuda.synchronize()
             getTime(im_time, '\nImage processed (Total)')
             
-        if debug_writer is not None and config.robustness.enabled:
-            debug_writer.write_scalar("robustness", robustness.copy_to_host())
         stream.synchronize()
 
 
         
     # num is outwritten into num/den
     divide_(num, den)
+
+    if debug_writer is not None:
+        debug_writer.write_scalar_channels(
+            "den", den.copy_to_host(), ("r", "g", "b")
+        )
     
     if verbose :
         s = '\nTotal ellapsed time : '
@@ -270,6 +276,8 @@ def process(burst_path: Union[Path, str], config: Config):
     
     sanitize_config(config, ref_raw.shape)
 
+    if verbose_1:
+        print(f"\nRuntime configuration:\n{config.dump()}\n")
 
     config.noise_model.std_curve = std_curve.tolist()
     config.noise_model.diff_curve = diff_curve.tolist()
