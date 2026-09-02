@@ -31,47 +31,6 @@ def parse_args(args=None):
     return tyro.cli(CliConfig, args=args)
 
 
-def print_parameters(config: Config):
-    print("\nParameters:\n")
-    print("  Upscaling factor:       {}\n".format(config.scale))
-
-    if config.scale == 1:
-        print("    Demosaicking mode")
-    else:
-        print("    Super-resolution mode.")
-        if config.scale > 2:
-            print("    WARNING: Since the optics and the integration on the sensor limit the aliasing,")
-            print("             do not expect more details than that obtained at x2 (refer to our paper).")
-
-    if config.robustness.enabled:
-        print("\n  Robustness:             enabled")
-        print("  ------------------------------")
-        print("  t:                      {:.2f}".format(config.robustness.t))
-        print("  s1:                     {:.2f}".format(config.robustness.s1))
-        print("  s2:                     {:.2f}".format(config.robustness.s2))
-        print("  Mt:                     {:.2f}".format(config.robustness.Mt))
-    else:
-        print("\n  Robustness:             disabled")
-
-    print("\n  Alignment:")
-    print("  ------------------------------")
-    print("  ICA Iterations:         {}".format(config.alignment.ica.n_iter))
-    print("\n  Fusion:")
-    print("  ------------------------------")
-    print("  Kernel shape:           {}".format(config.merging.kernel))
-    print("  k_stretch:              {:.2f}".format(config.merging.kernel.k_stretch))
-    print("  k_shrink:               {:.2f}".format(config.merging.kernel.k_shrink))
-    for label in ("k_detail", "k_denoise"):
-        value = getattr(config.merging.kernel, label)
-        rendered = "SNR based" if isinstance(value, str) else "{:.2f}".format(value)
-        print("  {:<23} {}".format(label + ":", rendered))
-
-    if config.noise_model.alpha is not None:
-        print("  alpha:                  {:.2f}".format(config.noise_model.alpha))
-        print("  beta:                   {:.2f}".format(config.noise_model.beta))
-    print()
-
-
 def _save_image(path, rgb_8bit_data):
     return cv2.imwrite(str(path), cv2.cvtColor(rgb_8bit_data, cv2.COLOR_RGB2BGR))
 
@@ -82,8 +41,6 @@ def main(args=None):
 
     if (config.noise_model.alpha is None) != (config.noise_model.beta is None):
         raise ValueError("Both noise_model.alpha and noise_model.beta must be provided together")
-
-    print_parameters(config)
 
     if options.outpath.suffix == ".dng":
         config.postprocessing.enabled = False

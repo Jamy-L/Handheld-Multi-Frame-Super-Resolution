@@ -1,6 +1,7 @@
 """Typed configuration schema for handheld super-resolution."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
+from pprint import pformat
 from typing import List, Literal, Optional, Tuple, Union
 
 import tyro
@@ -9,6 +10,31 @@ import tyro
 SNR_BASED = "SNR_based"
 SNRBasedFloat = Union[float, Literal["SNR_based"]]
 TileSize = Union[int, Literal["SNR_based"]]
+
+
+def _format_config_fields(config, indent: int) -> List[str]:
+    visible_fields = [config_field for config_field in fields(config) if config_field.repr]
+    lines: List[str] = []
+
+    for config_field in visible_fields:
+        value = getattr(config, config_field.name)
+        prefix = " " * indent + f"{config_field.name}:"
+
+        if is_dataclass(value):
+            lines.append(prefix)
+            lines.extend(_format_config_fields(value, indent + 2))
+        else:
+            width = max(20, 100 - len(prefix) - 1)
+            rendered_lines = pformat(
+                value, width=width, compact=True, sort_dicts=False
+            ).splitlines()
+            lines.append(f"{prefix} {rendered_lines[0]}")
+            continuation_indent = " " * (len(prefix) + 1)
+            lines.extend(
+                f"{continuation_indent}{line}" for line in rendered_lines[1:]
+            )
+
+    return lines
 
 
 @dataclass
@@ -106,3 +132,7 @@ class Config:
     robustness: RobustnessConfig = field(default_factory=RobustnessConfig)
     merging: MergingConfig = field(default_factory=MergingConfig)
     postprocessing: PostprocessingConfig = field(default_factory=PostprocessingConfig)
+
+    def dump(self) -> str:
+        """Return a readable snapshot of the complete runtime configuration."""
+        return "\n".join([f"{type(self).__name__}:", *_format_config_fields(self, 2)])
