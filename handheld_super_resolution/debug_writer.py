@@ -3,7 +3,7 @@
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Iterable, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -97,6 +97,17 @@ class DebugWriter:
                 colormap,
             )
             for channel_id, channel_name in enumerate(channel_names)
+        )
+
+    def write_grayscale_pyramid(
+        self,
+        category: str,
+        levels: Iterable[NDArray],
+    ) -> Tuple[Path, ...]:
+        """Save fine-to-coarse grayscale pyramid levels in separate categories."""
+        return tuple(
+            self.write_rgb(f"{category}_level_{level_id}", level)
+            for level_id, level in enumerate(levels)
         )
 
     def write_flow(self, category: str, flow: NDArray) -> Path:

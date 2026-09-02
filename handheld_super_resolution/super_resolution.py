@@ -80,6 +80,9 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
     bayer_mode = config.mode=='bayer'
     debug_dict = {}
     debug_writer = DebugWriter() if config.debug else None
+    if debug_writer is not None:
+        # The fixed reference pyramid shares frame 0 with the first comparison.
+        debug_writer.next_frame()
 
     if config.robustness.enabled and config.robustness.noise_correction:
         curve_size = len(config.noise_model.sigma_sq_curve)
@@ -109,7 +112,9 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
     else:
         cuda_ref_grey = cuda_ref_img
 
-    ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian = init_alignment_(cuda_ref_grey, config)
+    ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian = init_alignment_(
+        cuda_ref_grey, config, debug_writer
+    )
 
     #### Local stats estimation
     if config.robustness.enabled:
@@ -145,7 +150,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
 
 
     for im_id in range(comp_imgs.shape[0]):
-        if debug_writer is not None:
+        if debug_writer is not None and im_id > 0:
             debug_writer.next_frame()
 
         if verbose :
@@ -163,7 +168,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
             cuda_im_grey = cuda_img
 
         alignment = align_(ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian,
-                        cuda_im_grey, config)
+                        cuda_im_grey, config, debug_writer)
         
         if debug_writer is not None:
             debug_writer.write_flow("optical_flow", alignment.copy_to_host())
@@ -278,10 +283,12 @@ def process(burst_path: Union[Path, str], config: Config):
         currentTime = getTime(currentTime, ' -- Read raw files')
 
     #### Estimating ref image SNR
-    snr = estimate_image_snr(ref_raw, config.noise_model.alpha, config.noise_model.beta)
-
-    if verbose_1:
-        print(f"Estimated snr: {snr:.2f} dB")
+    if config.force_snr is None:
+        snr = estimate_image_snr(ref_raw, config.noise_model.alpha, config.noise_model.beta)
+        if verbose_1:
+            print(f"Estimated snr: {snr:.2f} dB")
+    else:
+        snr = config.force_snr
     
     update_snr_config(config, snr)
     

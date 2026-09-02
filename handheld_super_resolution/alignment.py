@@ -6,8 +6,11 @@ from handheld_super_resolution.linalg import bilinear_interpolation
 from numba import cuda
 import torch
 import torch.nn.functional as F
-from typing import List
+from typing import List, Optional, TYPE_CHECKING
 from numba.cuda.cudadrv.devicearray import DeviceNDArray
+
+if TYPE_CHECKING:
+    from .debug_writer import DebugWriter
 
 from .ICA import init_ica, align_lvl_ica
 from .block_matching import align_lvl_block_matching_L2, align_lvl_block_matching_L1
@@ -20,7 +23,10 @@ SOBEL_X = torch.as_tensor(np.array([[-1,0,1]]), dtype=DEFAULT_TORCH_FLOAT_TYPE, 
 SOBEL_Y.requires_grad = False
 SOBEL_X.requires_grad = False
 
-def init_alignment(ref_img: DeviceNDArray, config: Config):
+def init_alignment(
+        ref_img: DeviceNDArray,
+        config: Config,
+        debug_writer: Optional["DebugWriter"] = None):
     h, w = ref_img.shape
 
     tile_size = config.alignment.tile_size
@@ -48,6 +54,11 @@ def init_alignment(ref_img: DeviceNDArray, config: Config):
     factors = config.alignment.factors
 
     pyramid = build_gaussian_pyramid(th_ref_img_padded, factors)
+
+    if debug_writer is not None:
+        _write_grayscale_pyramid(
+            debug_writer, "alignment_reference_grey_pyramid", pyramid
+        )
 
     tiled_fft: List[torch.Tensor] = []
     tiled_pyr: List[torch.Tensor] = []
@@ -86,13 +97,26 @@ def build_gaussian_pyramid(image: torch.Tensor, factors: List[int]=[1, 2, 4, 4],
 
     return pyramid[::-1]
 
+
+def _write_grayscale_pyramid(
+        debug_writer: "DebugWriter",
+        category: str,
+        pyramid: List[torch.Tensor]) -> None:
+    # build_gaussian_pyramid returns coarse-to-fine, while alignment config and
+    # the debug category names use level 0 for the finest resolution.
+    debug_writer.write_grayscale_pyramid(
+        category,
+        (level.detach().cpu().numpy() for level in reversed(pyramid)),
+    )
+
 def align(ref_pyramid: List[torch.Tensor],
           tyled_pyr: List[torch.Tensor],
           ref_tiled_fft: List[torch.Tensor],
           ref_gradx: List[DeviceNDArray],
           ref_grady: List[DeviceNDArray],
           ref_hessian: List[DeviceNDArray],
-          img: DeviceNDArray, config: Config):
+          img: DeviceNDArray, config: Config,
+          debug_writer: Optional["DebugWriter"] = None):
 
     th_img = torch.as_tensor(img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
     
@@ -102,6 +126,11 @@ def align(ref_pyramid: List[torch.Tensor],
     factors = config.alignment.factors
 
     moving_pyramid = build_gaussian_pyramid(th_img, factors)
+
+    if debug_writer is not None:
+        _write_grayscale_pyramid(
+            debug_writer, "alignment_moving_grey_pyramid", moving_pyramid
+        )
 
     if verbose:
         cuda.synchronize()
