@@ -163,7 +163,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
         
         #### Compute Grey Images
         if bayer_mode:
-            cuda_im_grey = compute_grey_images(comp_imgs[im_id], grey_method)
+            cuda_im_grey = compute_grey_images(cuda_img, grey_method)
         else:
             cuda_im_grey = cuda_img
 

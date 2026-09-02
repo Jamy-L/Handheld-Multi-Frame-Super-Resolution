@@ -6,8 +6,9 @@ from handheld_super_resolution.linalg import bilinear_interpolation
 from numba import cuda
 import torch
 import torch.nn.functional as F
-from typing import List, Optional, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING, Union, Literal
 from numba.cuda.cudadrv.devicearray import DeviceNDArray
+from .utils_image import preprocess
 
 if TYPE_CHECKING:
     from .debug_writer import DebugWriter
@@ -53,7 +54,7 @@ def init_alignment(
     # factors, tileSizes, distances, searchRadia and subpixels are described fine-to-coarse
     factors = config.alignment.factors
 
-    pyramid = build_gaussian_pyramid(th_ref_img_padded, factors)
+    pyramid = build_gaussian_pyramid(th_ref_img_padded, factors, preprocessing=config.alignment.preprocessing)
 
     if debug_writer is not None:
         _write_grayscale_pyramid(
@@ -87,7 +88,11 @@ def init_alignment(
     
     return pyramid, tiled_pyr, tiled_fft, gradx_pyramid, grady_pyramid, hessian_pyramid
 
-def build_gaussian_pyramid(image: torch.Tensor, factors: List[int]=[1, 2, 4, 4], kernel='gaussian'):
+
+def build_gaussian_pyramid(image: torch.Tensor, factors: List[int]=[1, 2, 4, 4], kernel='gaussian', preprocessing: Union[str, None]=None):
+    if preprocessing is not None:
+        image = preprocess(image, preprocessing)
+
     pyramid = [cuda_downsample(image, kernel, factors[0])]
 
     for factor in factors[1:]:

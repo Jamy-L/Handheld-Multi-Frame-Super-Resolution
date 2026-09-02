@@ -5,10 +5,9 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.ndimage._filters import _gaussian_kernel1d
 from numba import cuda
-if TYPE_CHECKING:
-    from numba.cuda.cudadrv.devicearray import DeviceNDArray
-else:
-    DeviceNDArray = Any
+from numba.cuda.cudadrv.devicearray import DeviceNDArray
+
+
 import torch as th
 import torch.fft
 import torch.nn.functional as F
@@ -84,6 +83,7 @@ def compute_grey_images(img: DeviceNDArray, method: str):
         Corresponding grey scale image G
 
     """
+    assert isinstance(img, DeviceNDArray), f"Got {type(img)}"
     imsize_y, imsize_x = img.shape
     if method == "FFT":
         torch_img_grey = th.as_tensor(img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
@@ -139,6 +139,13 @@ def demosaic_to_grey(img: NDArray) -> NDArray[np.float32]:
     rgb = demosaicing_CFA_Bayer_Menon2007(img, pattern="RGGB")
     return np.ascontiguousarray(np.mean(rgb, axis=-1), dtype=DEFAULT_NUMPY_FLOAT_TYPE)
 
+def preprocess(img: torch.Tensor, preprocessing: str):
+    if preprocessing == "sqrt":
+        return img.clamp(min=0).sqrt()
+    elif preprocessing == "gamma":
+        return img.clamp(min=0).pow(1/2.2)
+    else:
+        raise ValueError(f"Unknown preprocessing: {preprocessing}")
 
 def gat(image: DeviceNDArray, alpha: Tuple[float, float, float, float], beta: Tuple[float, float, float, float]) -> DeviceNDArray:
     """

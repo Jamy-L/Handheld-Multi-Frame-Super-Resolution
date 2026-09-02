@@ -63,7 +63,8 @@ class ICAConfig:
 
 @dataclass
 class AlignmentConfig:
-    grey_method: Literal["FFT", "demosaicing"] = "FFT"
+    grey_method: Literal["FFT", "demosaicing"] = "FFT" # How to compute raw -> grayscale
+    preprocessing: Union[Literal["sqrt", "gamma"], None] = None # Apply a non-linearity to the grayscale image
     search_radii: List[int] = field(default_factory=lambda: [1, 4, 4, 4])
     flow_upscale_mode: Literal["nearest", "bilinear", "bicubic"] = "bilinear"
     factors: List[int] = field(default_factory=lambda: [1, 2, 4, 4])
@@ -97,6 +98,7 @@ class KernelConfig:
 
 @dataclass
 class MergingConfig:
+    preprocessing: Union[Literal["gat", "gamma", "sqrt"], None] = "gat" # Apply a non-linearity to the grayscale image before gradient computation
     kernel_type: Literal["steerable", "iso"] = "steerable"
     selection_law: Literal["hard_threshold", "linear"] = "linear"
     kernel: KernelConfig = field(default_factory=KernelConfig)
@@ -127,7 +129,6 @@ class Config:
     mode: Literal["bayer", "grey"] = "bayer"
     debug: bool = False # Dumps intermediate buffers as .png, and colours eventual NaN pixel in magenta
     verbose: int = 1
-    use_gat: bool = True # Use the generalized Anscombe Transform, or a basic sqrt before computing gradients
     force_snr: Union[float, None] = None # Skip the SNR estimation, and set the SNR
     noise_model: NoiseModelConfig = field(default_factory=NoiseModelConfig)
     alignment: AlignmentConfig = field(default_factory=AlignmentConfig)

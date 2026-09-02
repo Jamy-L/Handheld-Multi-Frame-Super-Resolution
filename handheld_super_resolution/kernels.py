@@ -20,13 +20,12 @@ import torch.nn.functional as F
 
 from .linalg import get_eigen_elmts_2x2
 from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS, getTime, timer
-from .utils_image import compute_grey_images, gat
+from .utils_image import compute_grey_images, gat, preprocess
 from .config import Config
 
 
 SEL_HARD_THRESHOLD = 0
 SEL_LINEAR = 1
-
 
 def estimate_kernels(img: DeviceNDArray, config: Config):
     """
@@ -77,13 +76,16 @@ def estimate_kernels(img: DeviceNDArray, config: Config):
         cuda.synchronize()
         t1 = time.perf_counter()
     
-    #__ Performing Variance Stabilization Transform
-    
-    if config.use_gat:
+    #__ Preprocessing
+    if config.merging.preprocessing is None:
+        pass
+    elif config.merging.preprocessing == "gat":
         assert alpha is not None and beta is not None, "alpha and beta must be provided for GAT"
         img = gat_(img, alpha, beta)
-    else: # Will use sqrt here
-        raise NotImplementedError("Variance Stabilization Transform is not implemented for non-GAT methods.")
+    else:
+        img_ = th.as_tensor(img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+        img_ = preprocess(img_, config.merging.preprocessing)
+        img = cuda.as_cuda_array(img_)
 
     #__ Decimate to grey
     if bayer_mode : 
