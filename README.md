@@ -23,7 +23,7 @@ Check also our publicly available implementation of **Polyblur** in this [repo](
 ## Installation
 >⚠️ For windows users, we recommend to perform the install using WSL to avoid potential issues that can be encountered with numba (see issue [#48](https://github.com/Jamy-L/Handheld-Multi-Frame-Super-Resolution/issues/48)).
 
-Dependencies are managed with [uv](https://docs.astral.sh/uv/). CUDA runtime/compiler libraries come from the `numba-cuda[cu12]` and `torch` wheels, so no system CUDA toolkit is needed, only an NVIDIA driver.
+Dependencies are managed with [uv](https://docs.astral.sh/uv/). CUDA runtime/compiler libraries come from the `numba-cuda[cu13]` and `torch` wheels, so no system CUDA toolkit is needed, only an NVIDIA driver.
 ```bash
 uv sync
 ```
