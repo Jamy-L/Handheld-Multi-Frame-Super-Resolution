@@ -30,7 +30,7 @@ uv sync
 ### Running the code
 Place your .dng image burst in the `./test_burst/` folder. You can download some dng bursts [here](https://github.com/goutamgmb/deep-rep), or download the latest release of the code already containing test bursts. Now, simply run the code for x2 super-resolution with:
 ```
-uv run handheld --impath test_burst --outpath output.png
+uv run handheld --impath test_burst --outpath output.png --scale 2
 ```
 
 Run `uv run handheld --help` to see all the options. The `--debug` flag will dump interesting intermediate results.
