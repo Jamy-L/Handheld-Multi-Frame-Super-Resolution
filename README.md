@@ -21,19 +21,36 @@ In the examples above and in our IPOL paper, we used the post-processing approac
 Check also our publicly available implementation of **Polyblur** in this [repo](https://github.com/teboli/polyblur) to sharpen the result you get with this super-resolution code.
 
 ## Installation
->⚠️ For windows users, we recommend to perform the install using WSL to avoid potential issues that can be encountered with numba (see issue [#48](https://github.com/Jamy-L/Handheld-Multi-Frame-Super-Resolution/issues/48)).
+> ⚠️ **Windows users:** We recommend using WSL to avoid potential issues with Numba (see issue #48).
 
-Dependencies are managed with [uv](https://docs.astral.sh/uv/). CUDA runtime/compiler libraries come from the `numba-cuda[cu13]` and `torch` wheels, so no system CUDA toolkit is needed, only an NVIDIA driver.
+Install the project dependencies using either `uv` or `pip`:
+
 ```bash
+# uv
 uv sync
+
+# pip
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install .
 ```
+
+> CUDA runtime libraries are provided by the `numba-cuda[cu13]` and `torch` packages, so a system-wide CUDA Toolkit installation is generally not required; a compatible NVIDIA driver should be sufficient. If you encounter CUDA-related issues, installing the CUDA Toolkit separately may be necessary: This can be done system-wide or through an environment manager such as Conda.
+> 
+> The installation uses CUDA 13. CUDA 12 should work as well; users who require it can change the dependency in `pyproject.toml` to `numba-cuda[cu12]` before installing. 
+
+
 ### Running the code
 Place your .dng image burst in the `./test_burst/` folder. You can download some dng bursts [here](https://github.com/goutamgmb/deep-rep), or download the latest release of the code already containing test bursts. Now, simply run the code for x2 super-resolution with:
-```
+```bash
+# uv
 uv run handheld --impath test_burst --outpath output.png --scale 2
+
+# pip
+handheld --impath test_burst --outpath output.png --scale 2
 ```
 
-Run `uv run handheld --help` to see all the options. The `--debug` flag will dump interesting intermediate results.
+Run `uv run handheld --help` or `handheld --help` to see all the options. The `--debug` flag will dump interesting intermediate results.
 
 If noise correction is enabled (the default), you wille also need to provide the matching LUT with
 `--noise-model.lut-path data/your_camera_noise.npz` (see below).
@@ -88,7 +105,11 @@ sudo ln -s "$(pwd)/bin/dng_validate" /usr/local/bin/dng_validate
 
 You should now be able to execute `dng_validate` from anywhere. And you can now use
 ```bash
+# uv
 uv run handheld --impath test_burst --outpath output.dng
+
+# pip
+handheld --impath test_burst --outpath output.dng
 ```
 
 ### Calibrating robustness noise correction
@@ -102,7 +123,13 @@ and therefore be derived from a relevant color-space. This is indeed what all th
 Robustness noise correction uses a camera/profile-specific Monte Carlo LUT. Generate it from one representative DNG (the DNG `NoiseProfile` tag is read automatically):
 
 ```bash
+# uv
 uv run python -m handheld_super_resolution.monte_carlo \
+  --dng test_burst/vk/APC_1071.dng \
+  --output data/vk_sqrt_noise.npz
+
+# pip
+python -m handheld_super_resolution.monte_carlo \
   --dng test_burst/vk/APC_1071.dng \
   --output data/vk_sqrt_noise.npz
 ```
@@ -114,7 +141,14 @@ Run `uv run python -m handheld_super_resolution.monte_carlo --help` for all opti
 Pass the resulting file to the reconstruction. A LUT is required whenever robustness noise correction is enabled:
 
 ```bash
+# uv
 uv run handheld \
+  --impath test_burst/vk \
+  --outpath output.png \
+  --noise-model.lut-path data/vk_sqrt_noise.npz
+
+# pip
+handheld \
   --impath test_burst/vk \
   --outpath output.png \
   --noise-model.lut-path data/vk_sqrt_noise.npz
