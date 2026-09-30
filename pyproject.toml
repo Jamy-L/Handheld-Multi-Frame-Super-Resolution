@@ -1,0 +1,29 @@
+[project]
+name = "handheld-super-resolution"
+version = "0.1.0"
+description = "Handheld multi-frame super-resolution (Wronski et al.) with Numba CUDA"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = [
+    "numpy<2.5",
+    "numba",
+    "numba-cuda[cu13]",
+    "torch",
+    "rawpy",
+    "exifread",
+    "scipy",
+    "scikit-image",
+    "opencv-python-headless",
+    "colour-demosaicing",
+    "matplotlib",
+    "tyro",
+    "imageio",
+]
+
+[project.scripts]
+handheld = "handheld_super_resolution.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
