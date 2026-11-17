@@ -1,7 +1,7 @@
 # Alignment scaffold
 
 Three Python functions delegate to a C++ core, which calls dedicated Halide
-kernel hooks. The current Python alignment pipeline remains independent.
+kernels. The main pipeline calls this alignment module directly.
 
 ```bash
 uv sync --extra native
@@ -18,7 +18,7 @@ after source changes or switching Python versions.
 
 ```python
 import numpy as np
-from handheld_super_resolution import _alignment_native as alignment
+from handheld_super_resolution import alignment
 
 image = np.zeros((480, 640), dtype=np.float32)
 reference = alignment.build_reference_pyramid(
@@ -253,12 +253,13 @@ per-tile Hessian sums. For residual `reference - warped_moving`, it computes
 `bx=sum(gx*residual)`, `by=sum(gy*residual)` and solves:
 
 ```
-det = Hxx*Hyy - Hxy*Hxy + 1
+det = Hxx*Hyy - Hxy*Hxy + std::numeric_limits<float>::epsilon()
 update_x = (Hyy*bx - Hxy*by) / det
 update_y = (Hxx*by - Hxy*bx) / det
 ```
 
 Each update component is clamped to `[-1, 1]`, then added to the original flow.
+The epsilon is the portable float32 machine epsilon (about 1.19e-7).
 This regularizes the determinant directly; it does not add to the Hessian diagonal
 or clamp the accumulated displacement. C++ repeats the step `ica_iterations`
 times, swapping two flow buffers between calls and reusing reference precomputation.

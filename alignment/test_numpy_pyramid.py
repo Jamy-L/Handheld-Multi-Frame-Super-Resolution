@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from handheld_super_resolution import _alignment_native as alignment
+from handheld_super_resolution import alignment
 
 
 def downsample(image, scale):

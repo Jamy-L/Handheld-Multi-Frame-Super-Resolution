@@ -20,8 +20,6 @@ def sanitize_config(config: Config, imshape: Tuple[int, int]):
     assert config.merging.kernel_type in ['steerable', 'iso'], f"Unknown kernel type {config.merging.kernel_type}"
     assert config.mode in ["bayer", 'grey'], f"Unknown mode {config.mode}"
 
-    assert config.alignment.ica.sigma_blur >= 0, f"Invalid sigma blur {config.alignment.ica.sigma_blur}."
-
     assert len(imshape) == 2, f"Input image shape should be 2D, got {imshape}."
 
     ts = config.alignment.tile_size

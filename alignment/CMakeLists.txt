@@ -129,10 +129,10 @@ target_link_libraries(alignment_core PUBLIC Halide::Runtime PRIVATE ${downsample
 target_include_directories(alignment_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
     PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 
-pybind11_add_module(_alignment_native bindings.cpp)
-target_link_libraries(_alignment_native PRIVATE alignment_core)
-# Explicit opt-in build; keep the existing Python pipeline independent.
-set_target_properties(_alignment_native PROPERTIES
+pybind11_add_module(alignment bindings.cpp)
+target_link_libraries(alignment PRIVATE alignment_core)
+# Build the alignment module used by the main pipeline.
+set_target_properties(alignment PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../handheld_super_resolution"
 )
 

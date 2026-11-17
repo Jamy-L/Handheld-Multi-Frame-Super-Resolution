@@ -20,8 +20,8 @@ import torch.nn.functional as F
 
 from .linalg import get_eigen_elmts_2x2
 from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS, getTime, timer
-from .utils_image import compute_grey_images, gat, preprocess
-from .config import Config, GrayscaleMethod
+from .utils_image import average_bayer_quads, gat, preprocess
+from .config import Config
 
 
 SEL_HARD_THRESHOLD = 0
@@ -53,7 +53,7 @@ def estimate_kernels(img: DeviceNDArray, config: Config):
     verbose_3 = config.verbose >= 3
 
     gat_ = timer(gat, verbose_3, end_s="- Variance Stabilized")
-    compute_grey_images_ = timer(compute_grey_images, verbose_3, end_s="- Decimated Image")
+    average_bayer_quads_ = timer(average_bayer_quads, verbose_3, end_s="- Decimated Image")
 
     k_detail = config.merging.kernel.k_detail
     k_denoise = config.merging.kernel.k_denoise
@@ -89,7 +89,7 @@ def estimate_kernels(img: DeviceNDArray, config: Config):
 
     #__ Decimate to grey
     if bayer_mode : 
-        img_grey = compute_grey_images_(img, method=GrayscaleMethod.DECIMATING)
+        img_grey = average_bayer_quads_(img)
     
     else :
         img_grey = img # no need to copy now, they will be copied to gpu later.

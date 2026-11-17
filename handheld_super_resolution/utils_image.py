@@ -3,6 +3,7 @@ from typing import Any, Tuple, TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.ndimage import convolve1d
 from scipy.ndimage._filters import _gaussian_kernel1d
 from numba import cuda
 from numba.cuda.cudadrv.devicearray import DeviceNDArray
@@ -61,40 +62,31 @@ def apply_orientation(img, ori):
     
     return img
 
-def compute_grey_images(img: DeviceNDArray, method: GrayscaleMethod) -> DeviceNDArray:
-    """
-    This function converts a rggb raw image to a gray iage of half the resolution
-    Parameters
-    ----------
-    img : device Array[:, :]
-        Raw image J to convert to gray level.
-    method : GrayscaleMethod
-        demosaicing, or 2x2 decimation.
-
-    Raises
-    ------
-    ValueError
-        If method is not a supported GrayscaleMethod.
-
-    Returns
-    -------
-    img_grey : device Array[:, :]
-        Corresponding grey scale image G
-
-    """
-    assert isinstance(img, DeviceNDArray), f"Got {type(img)}"
-    if method is GrayscaleMethod.DEMOSAICING:
-        raw_img = img.copy_to_host()
-        img_grey = demosaic_to_grey(raw_img)
-        img_grey = 0.25 * (img_grey[::2, ::2] + img_grey[::2, 1::2] + img_grey[1::2, ::2] + img_grey[1::2, 1::2])
-        return cuda.to_device(img_grey)
-    elif method is GrayscaleMethod.DECIMATING:
-        torch_img = th.as_tensor(img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
-        decimated = 0.25 * (torch_img[::2, ::2] + torch_img[::2, 1::2] + torch_img[1::2, ::2] + torch_img[1::2, 1::2])
-        return cuda.as_cuda_array(decimated)
-        
+def compute_grey_images(image: NDArray, method: GrayscaleMethod) -> NDArray[np.float32]:
+    """Convert normalized RGGB Bayer data to NumPy gray for CPU alignment."""
+    image = np.asarray(image, dtype=np.float32)
+    if image.ndim != 2 or any(size % 2 for size in image.shape):
+        raise ValueError("Bayer input must be a 2D image with even dimensions")
+    if method is GrayscaleMethod.DECIMATING:
+        gray = (image[::2, ::2] + image[::2, 1::2]
+                + image[1::2, ::2] + image[1::2, 1::2]) * 0.25
+        kernel = np.array([0.25, 0.5, 0.25], dtype=np.float32)
+        gray = convolve1d(convolve1d(gray, kernel, axis=0, mode="nearest"),
+                          kernel, axis=1, mode="nearest")
+    elif method is GrayscaleMethod.DEMOSAICING:
+        gray = demosaic_to_grey(image)
     else:
         raise ValueError(f"Unknown grayscale method: {method}")
+    # Demosaicing can overshoot the normalized sensor range; the native API
+    # requires finite grayscale samples in [0, 1].
+    return np.ascontiguousarray(np.clip(gray, 0, 1), dtype=np.float32)
+
+def average_bayer_quads(img: DeviceNDArray) -> DeviceNDArray:
+    """Average Bayer quads on the GPU for merging kernel estimation."""
+    image = th.as_tensor(img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+    gray = (image[::2, ::2] + image[::2, 1::2]
+            + image[1::2, ::2] + image[1::2, 1::2]) * 0.25
+    return cuda.as_cuda_array(gray)
 
 
 def demosaic_to_grey(img: NDArray) -> NDArray[np.float32]:
@@ -179,22 +171,6 @@ def cuda_GAT(image, VST_image, alpha, beta):
     VST_image[y, x] = 2/alpha_ * math.sqrt(VST)     
                 
     
-@cuda.jit
-def cuda_decimate_to_grey(img, grey_img):
-    x, y = cuda.grid(2)
-    grey_imshape_y, grey_imshape_x = grey_img.shape
-    
-    if (0 <= y < grey_imshape_y and
-        0 <= x < grey_imshape_x):
-        c = 0
-        for i in range(0, 2):
-            for j in range(0, 2):
-                c += img[2*y + i, 2*x + j]
-        grey_img[y, x] = c/4
-        
-
-
-
 @cuda.jit(device=True)
 def dogson_biquadratic_kernel(x, y):
     return dogson_quadratic_kernel(x) * dogson_quadratic_kernel(y)

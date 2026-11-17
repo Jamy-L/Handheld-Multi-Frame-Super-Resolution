@@ -21,7 +21,9 @@ DEFAULT_TORCH_COMPLEX_TYPE = th.complex64
 EPSILON_DIV = 1e-10
 
 DEFAULT_THREADS = 16
-
+FINAL_TILE_SIZE = 16
+FINAL_TILE_STRIDE = 8
+FINAL_TILE_ORIGIN = FINAL_TILE_SIZE//2 - FINAL_TILE_SIZE // 2
 
 def getTime(currentTime, labelName, printTime=True, spaceSize=50):
 	'''Print the elapsed time since currentTime. Return the new current time.'''

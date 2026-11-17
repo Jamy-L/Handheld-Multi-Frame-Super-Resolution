@@ -2,7 +2,7 @@
 import unittest
 from functools import partial
 import numpy as np
-from handheld_super_resolution import _alignment_native as alignment
+from handheld_super_resolution import alignment
 
 
 OPTIONS = dict(scale_factors=[], tile_sizes=[16], search_radii=[4], norm=["L2"], ica_iterations=3)

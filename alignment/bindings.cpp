@@ -68,7 +68,7 @@ py::array_t<float> image_array(const alignment::Image &image) {
     return result;
 }
 
-PYBIND11_MODULE(_alignment_native, module) {
+PYBIND11_MODULE(alignment, module) {
     module.doc() = "C++ alignment orchestration with dedicated Halide kernel hooks";
     py::register_exception<alignment::KernelNotImplemented>(module, "KernelNotImplemented", PyExc_NotImplementedError);
     py::class_<alignment::PyramidLevel> level(module, "PyramidLevel");

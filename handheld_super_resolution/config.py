@@ -64,9 +64,7 @@ class BlockMatchingConfig:
 
 @dataclass
 class ICAConfig:
-    n_iter: int = 3
-    sigma_blur: float = 0
-    clip: bool = True # Clip the ica step to the search radius
+    n_iter: int = 50
 
 
 @dataclass
