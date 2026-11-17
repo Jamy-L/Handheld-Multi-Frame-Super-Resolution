@@ -51,7 +51,7 @@ def sanitize_config(config: Config, imshape: tuple[int, int]):
 
 
 def alignment_tile_sizes(config: Config) -> list[int]:
-    """Derive fine-to-coarse tile sizes for the GCam 8.4 standard path."""
+    """Derive fine-to-coarse tile sizes."""
     alignment = config.alignment
     levels = len(alignment.factors) + 1
     if len(alignment.search_radii) != levels or len(alignment.block_matching.metrics) != levels:
