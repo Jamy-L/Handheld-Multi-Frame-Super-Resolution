@@ -1,23 +1,21 @@
-# -*- coding: utf-8 -*-
 """
 Created on Tue Mar 21 16:44:36 2023
 
 @author: jamyl
 """
 
-import os
 import glob
+import os
 import subprocess
-
-import numpy as np
-from pathlib import Path
-import exifread
-import rawpy
-import imageio
 import warnings
-
 from dataclasses import dataclass
-from typing import Any, Dict, Tuple, Union, List
+from pathlib import Path
+from typing import Any
+
+import exifread
+import imageio
+import numpy as np
+import rawpy
 
 from . import raw2rgb
 from .utils import DEFAULT_NUMPY_FLOAT_TYPE
@@ -51,8 +49,8 @@ PHOTO_INTER = {
 SUPPORTED = [1, 32803]
 
 
-def expand_noise_profile_to_rgbg(alpha, beta) -> Tuple[Tuple[float, float, float, float],
-                                                        Tuple[float, float, float, float]]:
+def expand_noise_profile_to_rgbg(alpha, beta) -> tuple[tuple[float, float, float, float],
+                                                        tuple[float, float, float, float]]:
     """Expand one- or three-plane profiles to R, G1, B, G2 order."""
     alpha = tuple(float(value) for value in alpha)
     beta = tuple(float(value) for value in beta)
@@ -74,8 +72,8 @@ def expand_noise_profile_to_rgbg(alpha, beta) -> Tuple[Tuple[float, float, float
     )
 
 
-def noise_profile_from_tags(tags) -> Tuple[Tuple[float, float, float, float],
-                                            Tuple[float, float, float, float]]:
+def noise_profile_from_tags(tags) -> tuple[tuple[float, float, float, float],
+                                            tuple[float, float, float, float]]:
     """Read the DNG NoiseProfile tag in R, G1, B, G2 color-plane order."""
     tag = tags.get('Image Tag 0xC761')
     if tag is None:
@@ -86,8 +84,8 @@ def noise_profile_from_tags(tags) -> Tuple[Tuple[float, float, float, float],
     return expand_noise_profile_to_rgbg(values[::2], values[1::2])
 
 
-def read_dng_noise_profile(path: Union[str, Path]) -> Tuple[
-    Tuple[float, float, float, float], Tuple[float, float, float, float]
+def read_dng_noise_profile(path: str | Path) -> tuple[
+    tuple[float, float, float, float], tuple[float, float, float, float]
 ]:
     """Read only the noise profile needed by the Monte Carlo CLI."""
     path = Path(path)
@@ -101,21 +99,21 @@ class DNGStack:
     """Images, metadata, calibration values, and paths for a DNG burst."""
 
     burst_path: Path
-    raw_paths: Tuple[Path, ...]
+    raw_paths: tuple[Path, ...]
     reference_index: int
     ref_raw: np.ndarray
     raw_comp: np.ndarray
     iso: int
-    tags: Dict[str, Any]
+    tags: dict[str, Any]
     cfa: np.ndarray
     xyz2cam: np.ndarray
     camera_to_srgb: np.ndarray
     white_balance: np.ndarray
     white_level: int
     black_levels: np.ndarray
-    alpha: Tuple[float, float, float, float]
-    beta: Tuple[float, float, float, float]
-    photometric_interpretation: Union[int, None] = None
+    alpha: tuple[float, float, float, float]
+    beta: tuple[float, float, float, float]
+    photometric_interpretation: int | None = None
 
     @property
     def reference_path(self) -> Path:
@@ -123,11 +121,11 @@ class DNGStack:
         return self.raw_paths[self.reference_index]
 
     @property
-    def comparison_paths(self) -> Tuple[Path, ...]:
+    def comparison_paths(self) -> tuple[Path, ...]:
         """Paths of all non-reference frames, in stack order."""
         return self.raw_paths[:self.reference_index] + self.raw_paths[self.reference_index + 1:]
 
-    def get_raw_arrays(self) -> Tuple[np.ndarray, np.ndarray]:
+    def get_raw_arrays(self) -> tuple[np.ndarray, np.ndarray]:
         # Array RGGB by design
         # wb is given as r g1 b g2
         ref = self.ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE)
@@ -144,7 +142,7 @@ class DNGStack:
         return ref, comp
 
 
-def load_dng_burst(burst_path: Union[str, Path]) -> DNGStack:
+def load_dng_burst(burst_path: str | Path) -> DNGStack:
     """
     Loads a dng burst into numpy arrays, and their exif tags.
 
@@ -192,12 +190,11 @@ def load_dng_burst(burst_path: Union[str, Path]) -> DNGStack:
         photometric_interpretation = photometric_interpretation.values[0]
         if photometric_interpretation not in SUPPORTED:
             warnings.warn('The input images have a photometric interpretation '\
-                             'of type "{}", but only {} are supprted.'.format(
-                                 PHOTO_INTER[photometric_interpretation], str([PHOTO_INTER[i] for i in SUPPORTED])))
+                             f'of type "{PHOTO_INTER[photometric_interpretation]}", but only {[PHOTO_INTER[i] for i in SUPPORTED]!s} are supprted.')
             
     else:
         warnings.warn('PhotometricInterpretation could not be found in image tags. '\
-                     'Please ensure that it is one of {}'.format(str([PHOTO_INTER[i] for i in SUPPORTED])))
+                     f'Please ensure that it is one of {[PHOTO_INTER[i] for i in SUPPORTED]!s}')
             
 
     white_level = int(raw.white_level)  # there is only one white level
@@ -213,13 +210,14 @@ def load_dng_burst(burst_path: Union[str, Path]) -> DNGStack:
         warnings.warn(f"Camera white balance ends with 0: {white_balance!r}. Using the second green channel's value instead.")
         white_balance[-1] = white_balance[1]
 
+    assert raw.raw_pattern is not None, "Could not read CFA"
     CFA = raw.raw_pattern.copy() # copying to ensure contiguity of the array
     CFA[CFA == 3] = 1 # Rawpy gives channel 3 to the second green channel. Setting both greens to 1
     raw.close()
 
-    if 'EXIF ISOSpeedRatings' in tags.keys():
+    if 'EXIF ISOSpeedRatings' in tags:
         iso = int(str(tags['EXIF ISOSpeedRatings']))
-    elif 'Image ISOSpeedRatings' in tags.keys():
+    elif 'Image ISOSpeedRatings' in tags:
         iso = int(str(tags['Image ISOSpeedRatings']))
     else:
         raise AttributeError('ISO value could not be found in both EXIF and Image type.')
@@ -377,7 +375,7 @@ def save_as_dng(np_img, ref_dng_path, outpath):
         "-IFD0:CameraCalibration2",
         "-IFD0:ProfileHueSatMap1",
         "-IFD0:ProfileHueSatMap2",
-        "-IFD0:ProfileLookTable"
+        "-IFD0:ProfileLookTable",
         "-IFD0:AsShotNeutral<AsShotNeutral",
         "-IFD0:AnalogBalance<AnalogBalance",
         f"-IFD0:WhiteLevel={new_white_level} {new_white_level} {new_white_level}",

@@ -1,20 +1,21 @@
 import math
-from typing import Any, Tuple, TYPE_CHECKING
 
 import numpy as np
-from numpy.typing import NDArray
-from scipy.ndimage import convolve1d
-from scipy.ndimage._filters import _gaussian_kernel1d
-from numba import cuda
-from numba.cuda.cudadrv.devicearray import DeviceNDArray
-
-
 import torch as th
 import torch.fft
-import torch.nn.functional as F
+from numba import cuda
+from numba.cuda.cudadrv.devicearray import DeviceNDArray
+from numpy.typing import NDArray
+from scipy.ndimage import convolve1d
 
-from .utils import getSigned, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
 from .config import GrayscaleMethod
+from .utils import (
+    DEFAULT_NUMPY_FLOAT_TYPE,
+    DEFAULT_THREADS,
+    DEFAULT_TORCH_FLOAT_TYPE,
+    getSigned,
+)
+
 
 def apply_orientation(img, ori):
     """
@@ -112,7 +113,7 @@ def preprocess(img: torch.Tensor, preprocessing: str):
     else:
         raise ValueError(f"Unknown preprocessing: {preprocessing}")
 
-def gat(image: DeviceNDArray, alpha: Tuple[float, float, float, float], beta: Tuple[float, float, float, float]) -> DeviceNDArray:
+def gat(image: DeviceNDArray, alpha: tuple[float, float, float, float], beta: tuple[float, float, float, float]) -> DeviceNDArray:
     """
     Generalized Ascombe Transform
     noise model : std² = alpha * I + beta
@@ -213,7 +214,7 @@ def computePSNR(image, noisyImage):
         mse = np.mean(np.multiply(error, error))
         return 10 * np.log10(maxValue**2 / mse)
     else:
-        print('WARNING: images have different sizes: {}, {}. Returning None'.format(image.shape, noisyImage.shape))
+        print(f'WARNING: images have different sizes: {image.shape}, {noisyImage.shape}. Returning None')
         return None
 
 def cfa_to_rggb(x: np.ndarray, source_cfa: np.ndarray):
@@ -240,7 +241,7 @@ def rggb_to_cfa(x: np.ndarray, target_cfa: np.ndarray):
     # the function is its own inverse...
     return cfa_to_rggb(x, target_cfa)
 
-def estimate_image_snr(ref_img: NDArray[np.float32], alpha: Tuple[float, float, float, float], beta: Tuple[float, float, float, float]) -> float:
+def estimate_image_snr(ref_img: NDArray[np.float32], alpha: tuple[float, float, float, float], beta: tuple[float, float, float, float]) -> float:
     r = ref_img[::2, ::2]
     g1 = ref_img[::2, 1::2]
     g2 = ref_img[1::2, ::2]

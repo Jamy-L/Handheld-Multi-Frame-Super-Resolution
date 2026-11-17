@@ -2,9 +2,8 @@ import warnings
 from copy import deepcopy
 
 import numpy as np
-from typing import List, Literal, Optional, Union, Tuple
 
-from .config import Config, GrayscaleMethod, SNRBasedFloat, SNR_BASED
+from .config import SNR_BASED, Config
 
 
 def runtime_config(config: Config):
@@ -14,7 +13,7 @@ def runtime_config(config: Config):
     return deepcopy(config)
 
 
-def sanitize_config(config: Config, imshape: Tuple[int, int]):
+def sanitize_config(config: Config, imshape: tuple[int, int]):
     assert config.scale >= 1
 
     assert config.merging.kernel_type in ['steerable', 'iso'], f"Unknown kernel type {config.merging.kernel_type}"
@@ -37,13 +36,10 @@ def sanitize_config(config: Config, imshape: Tuple[int, int]):
         n_tiles_x = lvl_imshape_x/ts
         
         if n_tiles_y < 1 or n_tiles_x < 1:
-            raise ValueError("Image of shape {} is incompatible with the given "\
-                             "block matching tile sizes and factors : at level {}, "\
-                             "coarse image of shape {} cannot be divided into "\
-                             "tiles of size {}.".format(
-                                 imshape, lvl,
-                                 (lvl_imshape_y, lvl_imshape_x),
-                                 ts))
+            raise ValueError(f"Image of shape {imshape} is incompatible with the given "\
+                             f"block matching tile sizes and factors : at level {lvl}, "\
+                             f"coarse image of shape {(lvl_imshape_y, lvl_imshape_x)} cannot be divided into "\
+                             f"tiles of size {ts}.")
 
     # Esnure that the flow upscaling mode is valid
     valid_upsample_modes = ['nearest', 'bilinear', 'bicubic']
