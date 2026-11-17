@@ -65,7 +65,7 @@ add_halide_generator(block_matching_generator SOURCES block_matching.cpp)
 # Single source of truth; compile the Cartesian product of these choices.
 set(ALIGNMENT_BM_TILE_SIZES 8 16 32 64)
 set(ALIGNMENT_BM_NORMS L1 L2)
-set(ALIGNMENT_BM_SEARCH_RADII 1 4)
+set(ALIGNMENT_BM_SEARCH_RADII 1 3 4)
 set(block_matching_libraries "")
 set(bm_headers "")
 set(bm_entries "")

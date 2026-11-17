@@ -70,11 +70,11 @@ class ICAConfig:
 class AlignmentConfig:
     grey_method: Literal[GrayscaleMethod.DEMOSAICING, GrayscaleMethod.DECIMATING] = GrayscaleMethod.DECIMATING # How to compute raw -> grayscale
     preprocessing: Literal["sqrt", "gamma"] | None = None # Apply a non-linearity to the grayscale image
-    search_radii: list[int] = field(default_factory=lambda: [1, 4, 4, 4, 4])
-    flow_upscale_mode: Literal["nearest", "bilinear", "bicubic"] = "bilinear"
+    # Per-level settings are ordered finest to coarsest.
+    search_radii: list[int] = field(default_factory=lambda: [1, 3, 3, 3, 3])
     factors: list[int] = field(default_factory=lambda: [2, 4, 4, 4])
     tile_size: TileSize = SNR_BASED
-    tile_size_factors: list[float] = field(default_factory=lambda: [1, 1, 1, 0.5, 0.5])
+    # Derived from tile_size and search_radii using the GCam 8.4 shrinking cap.
     tile_sizes: tyro.conf.Suppress[list[int]] = field(default_factory=list, init=False)
     block_matching: BlockMatchingConfig = field(default_factory=BlockMatchingConfig)
     ica: ICAConfig = field(default_factory=ICAConfig)
