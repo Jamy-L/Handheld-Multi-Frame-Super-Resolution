@@ -6,10 +6,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated
 
-import numpy as np
 import cv2
-from skimage import img_as_ubyte
+import numpy as np
 import tyro
+from skimage import img_as_ubyte
 
 from .config import Config
 
@@ -55,7 +55,7 @@ def main(args=None):
         from .utils_dng import save_as_dng
 
         if config.verbose >= 1:
-            print("Saving output to {}".format(options.outpath))
+            print(f"Saving output to {options.outpath}")
         reference = glob.glob(os.path.join(options.impath, "*.dng"))[0]
         save_as_dng(output, reference, options.outpath)
     else:

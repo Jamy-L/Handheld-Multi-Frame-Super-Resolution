@@ -1,21 +1,28 @@
 """Typed configuration schema for handheld super-resolution."""
 
 from dataclasses import dataclass, field, fields, is_dataclass
+from enum import Enum
 from pathlib import Path
 from pprint import pformat
-from typing import List, Literal, Optional, Tuple, Union
+from typing import Literal
 
 import tyro
 
-
 SNR_BASED = "SNR_based"
-SNRBasedFloat = Union[float, Literal["SNR_based"]]
-TileSize = Union[int, Literal["SNR_based"]]
+SNRBasedFloat = float | Literal["SNR_based"]
+TileSize = int | Literal["SNR_based"]
 
 
-def _format_config_fields(config, indent: int) -> List[str]:
+class GrayscaleMethod(Enum):
+    """Methods for converting a raw image to grayscale."""
+
+    DEMOSAICING = "demosaicing"
+    DECIMATING = "decimating"
+
+
+def _format_config_fields(config, indent: int) -> list[str]:
     visible_fields = [config_field for config_field in fields(config) if config_field.repr]
-    lines: List[str] = []
+    lines: list[str] = []
 
     for config_field in visible_fields:
         value = getattr(config, config_field.name)
@@ -42,35 +49,33 @@ def _format_config_fields(config, indent: int) -> List[str]:
 class NoiseModelConfig:
     """Sensor noise model in EXIF R, G1, B, G2 plane order."""
 
-    lut_path: Optional[Path] = None
-    alpha: Optional[Tuple[float, float, float, float]] = None
-    beta: Optional[Tuple[float, float, float, float]] = None
-    sigma_sq_curve: tyro.conf.Suppress[List[float]] = field(default_factory=list, init=False, repr=False)
-    d_sq_curve: tyro.conf.Suppress[List[float]] = field(default_factory=list, init=False, repr=False)
+    lut_path: Path | None = None
+    alpha: tuple[float, float, float, float] | None = None
+    beta: tuple[float, float, float, float] | None = None
+    sigma_sq_curve: tyro.conf.Suppress[list[float]] = field(default_factory=list, init=False, repr=False)
+    d_sq_curve: tyro.conf.Suppress[list[float]] = field(default_factory=list, init=False, repr=False)
 
 
 @dataclass
 class BlockMatchingConfig:
-    metrics: List[Literal["L1", "L2"]] = field(default_factory=lambda: ["L1", "L2", "L2", "L2"])
+    metrics: list[Literal["L1", "L2"]] = field(default_factory=lambda: ["L1", "L2", "L2", "L2", "L2"])
 
 
 @dataclass
 class ICAConfig:
     n_iter: int = 3
-    sigma_blur: float = 0
-    clip: bool = True # Clip the ica step to the search radius
 
 
 @dataclass
 class AlignmentConfig:
-    grey_method: Literal["FFT", "demosaicing"] = "FFT" # How to compute raw -> grayscale
-    preprocessing: Union[Literal["sqrt", "gamma"], None] = None # Apply a non-linearity to the grayscale image
-    search_radii: List[int] = field(default_factory=lambda: [1, 4, 4, 4])
-    flow_upscale_mode: Literal["nearest", "bilinear", "bicubic"] = "bilinear"
-    factors: List[int] = field(default_factory=lambda: [1, 2, 4, 4])
+    grey_method: Literal[GrayscaleMethod.DEMOSAICING, GrayscaleMethod.DECIMATING] = GrayscaleMethod.DECIMATING # How to compute raw -> grayscale
+    preprocessing: Literal["sqrt", "gamma"] | None = None # Apply a non-linearity to the grayscale image
+    # Per-level settings are ordered finest to coarsest.
+    search_radii: list[int] = field(default_factory=lambda: [1, 3, 3, 3, 3])
+    factors: list[int] = field(default_factory=lambda: [2, 4, 4, 4])
     tile_size: TileSize = SNR_BASED
-    tile_size_factors: List[float] = field(default_factory=lambda: [1, 1, 1, 0.5])
-    tile_sizes: tyro.conf.Suppress[List[int]] = field(default_factory=list, init=False)
+    # Derived from tile_size and search_radii using the GCam 8.4 shrinking cap.
+    tile_sizes: tyro.conf.Suppress[list[int]] = field(default_factory=list, init=False)
     block_matching: BlockMatchingConfig = field(default_factory=BlockMatchingConfig)
     ica: ICAConfig = field(default_factory=ICAConfig)
 
@@ -98,7 +103,7 @@ class KernelConfig:
 
 @dataclass
 class MergingConfig:
-    preprocessing: Union[Literal["gat", "gamma", "sqrt"], None] = "gat" # Apply a non-linearity to the grayscale image before gradient computation
+    preprocessing: Literal["gat", "gamma", "sqrt"] | None = "gat" # Apply a non-linearity to the grayscale image before gradient computation
     kernel_type: Literal["steerable", "iso"] = "steerable"
     selection_law: Literal["hard_threshold", "linear"] = "linear"
     kernel: KernelConfig = field(default_factory=KernelConfig)
@@ -129,7 +134,7 @@ class Config:
     mode: Literal["bayer", "grey"] = "bayer"
     debug: bool = False # Dumps intermediate buffers as .png, and colours eventual NaN pixel in magenta
     verbose: int = 1
-    force_snr: Union[float, None] = None # Skip the SNR estimation, and set the SNR
+    force_snr: float | None = None # Skip the SNR estimation, and set the SNR
     noise_model: NoiseModelConfig = field(default_factory=NoiseModelConfig)
     alignment: AlignmentConfig = field(default_factory=AlignmentConfig)
     robustness: RobustnessConfig = field(default_factory=RobustnessConfig)

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Created on Thu Sep  1 08:41:58 2022
 
@@ -9,7 +8,6 @@ import math
 
 from numba import cuda
 
-from.utils import EPSILON_DIV
 
 @cuda.jit(device=True)
 def solve_2x2(A, B, X):
@@ -28,10 +26,11 @@ def solve_2x2(A, B, X):
     None
 
     """
-    det_A = A[0, 0]*A[1, 1] - A[0, 1]*A[1, 0]
+    det_A = A[0, 0] * A[1, 1] - A[0, 1] * A[1, 0]
 
-    X[0] = (A[1, 1]*B[0] - A[0, 1]*B[1])/det_A
-    X[1] = (A[0, 0]*B[1] - A[1, 0]*B[0])/det_A
+    X[0] = (A[1, 1] * B[0] - A[0, 1] * B[1]) / det_A
+    X[1] = (A[0, 0] * B[1] - A[1, 0] * B[0]) / det_A
+
 
 @cuda.jit(device=True)
 def get_real_polyroots_2(a, b, c, roots):
@@ -49,7 +48,7 @@ def get_real_polyroots_2(a, b, c, roots):
     b : float
 
     c : float
-    
+
     roots : Array[2]
 
     Returns
@@ -60,11 +59,11 @@ def get_real_polyroots_2(a, b, c, roots):
 
     # numerical instabilities can cause delta to be slightly negative despite
     # the equation admitting 2 real roots.
-    delta = max(b*b - 4*a*c, 0)
+    delta = max(b * b - 4 * a * c, 0)
 
-    r1 = (-b+math.sqrt(delta))/(2*a)
-    r2 = (-b-math.sqrt(delta))/(2*a)
-    if abs(r1) >= abs(r2) :
+    r1 = (-b + math.sqrt(delta)) / (2 * a)
+    r2 = (-b - math.sqrt(delta)) / (2 * a)
+    if abs(r1) >= abs(r2):
         roots[0] = r1
         roots[1] = r2
     else:
@@ -75,9 +74,10 @@ def get_real_polyroots_2(a, b, c, roots):
 @cuda.jit(device=True)
 def get_eigen_val_2x2(M, l):
     a = 1
-    b = -(M[0,0] + M[1, 1])
-    c = M[0,0]*M[1,1] - M[0,1]*M[1,0]
+    b = -(M[0, 0] + M[1, 1])
+    c = M[0, 0] * M[1, 1] - M[0, 1] * M[1, 0]
     get_real_polyroots_2(a, b, c, l)
+
 
 @cuda.jit(device=True)
 def get_eigen_vect_2x2(M, l, e1, e2):
@@ -103,41 +103,46 @@ def get_eigen_vect_2x2(M, l, e1, e2):
     # 2x2 algorithm : https://en.wikipedia.org/wiki/Eigenvalue_algorithm (9 August 2022 version)
     if M[0, 1] == 0 and M[0, 0] == M[1, 1]:
         # M is multiple of identity, picking 2 ortogonal eigen vectors.
-        e1[0] = 1; e1[1] = 0
-        e2[0] = 0; e2[1] = 1
-        
+        e1[0] = 1
+        e1[1] = 0
+        e2[0] = 0
+        e2[1] = 1
+
     else:
         # averaging 2 for increased reliability
-        e1[0] = M[0, 0] + M[0, 1] - l[1] 
-        e1[1] = M[1, 0] + M[1, 1] - l[1] 
-        
+        e1[0] = M[0, 0] + M[0, 1] - l[1]
+        e1[1] = M[1, 0] + M[1, 1] - l[1]
+
         if e1[0] == 0:
             e1[1] = 1
-            e2[0] = 1;
+            e2[0] = 1
             e2[1] = 0
         elif e1[1] == 0:
             e1[0] = 1
             e2[0] = 0
             e2[1] = 1
         else:
-            norm_ = math.sqrt(e1[0]*e1[0] + e1[1]*e1[1])
+            norm_ = math.sqrt(e1[0] * e1[0] + e1[1] * e1[1])
             e1[0] /= norm_
             e1[1] /= norm_
-            sign = math.copysign(1, e1[0]) # for whatever reason, python has no sign func
+            sign = math.copysign(
+                1, e1[0]
+            )  # for whatever reason, python has no sign func
             e2[1] = abs(e1[0])
-            e2[0] = -e1[1]*sign
-    
-    
+            e2[0] = -e1[1] * sign
+
+
 @cuda.jit(device=True)
 def get_eigen_elmts_2x2(M, l, e1, e2):
-    
+
     get_eigen_val_2x2(M, l)
     get_eigen_vect_2x2(M, l, e1, e2)
+
 
 @cuda.jit(device=True)
 def bilinear_interpolation(values, pos):
     """
-    
+
 
     Parameters
     ----------
@@ -154,16 +159,10 @@ def bilinear_interpolation(values, pos):
     """
     posy = pos[0]
     posx = pos[1]
-    val = (values[0,0]*(1 - posx)*(1 - posy) +
-           values[0,1]*(posx)*(1 - posy) + 
-           values[1,0]*(1 - posx)*(posy) + 
-           values[1,1]*posx*posy )
+    val = (
+        values[0, 0] * (1 - posx) * (1 - posy)
+        + values[0, 1] * (posx) * (1 - posy)
+        + values[1, 0] * (1 - posx) * (posy)
+        + values[1, 1] * posx * posy
+    )
     return val
-            
-            
-    
-    
-    
-    
-    
-    

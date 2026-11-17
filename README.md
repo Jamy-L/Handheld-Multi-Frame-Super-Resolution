@@ -40,6 +40,23 @@ python -m pip install .
 > The installation uses CUDA 13. CUDA 12 should work as well; users who require it can change the dependency in `pyproject.toml` to `numba-cuda[cu12]` before installing. 
 
 
+Before running the pipeline, compile the C++/Halide alignment extension; installing
+the Python package alone does not build it. From the repository root:
+
+```bash
+# Install the native build dependencies with uv or pip
+uv sync --extra native
+# Or: python -m pip install '.[native]'
+
+cmake -S alignment -B build/alignment \
+  -DPython_EXECUTABLE="$PWD/.venv/bin/python" -DCMAKE_BUILD_TYPE=Release
+cmake --build build/alignment -j 2
+```
+
+This requires CMake 3.28+, a C++17 compiler and Python development headers.
+Rebuild after changing the alignment sources or switching Python versions. See
+[the alignment build instructions](alignment/README.md) for details and checks.
+
 ### Running the code
 Place your .dng image burst in the `./test_burst/` folder. You can download some dng bursts [here](https://github.com/goutamgmb/deep-rep), or download the latest release of the code already containing test bursts. Now, simply run the code for x2 super-resolution with:
 ```bash

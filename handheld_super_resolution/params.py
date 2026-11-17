@@ -1,10 +1,10 @@
 import warnings
 from copy import deepcopy
+from fractions import Fraction
 
 import numpy as np
-from typing import List, Literal, Optional, Union, Tuple
 
-from .config import Config, SNRBasedFloat, SNR_BASED
+from .config import SNR_BASED, Config, GrayscaleMethod
 
 
 def runtime_config(config: Config):
@@ -14,48 +14,74 @@ def runtime_config(config: Config):
     return deepcopy(config)
 
 
-def sanitize_config(config: Config, imshape: Tuple[int, int]):
-    if config.mode == "grey" and config.alignment.grey_method != "FFT":
-        raise ValueError("Demosaicing alignment requires Bayer input")
-        
-    assert config.scale >= 1
+def sanitize_config(config: Config, imshape: tuple[int, int]):
+    if config.scale < 1:
+        raise ValueError("scale must be >= 1")
 
-    assert config.merging.kernel_type in ['steerable', 'iso'], f"Unknown kernel type {config.merging.kernel_type}"
-    assert config.mode in ["bayer", 'grey'], f"Unknown mode {config.mode}"
+    if config.merging.kernel_type not in ("steerable", "iso"):
+        raise ValueError(f"Unknown kernel type {config.merging.kernel_type}")
+    if config.mode not in ("bayer", "grey"):
+        raise ValueError(f"Unknown mode {config.mode}")
+    if len(imshape) != 2:
+        raise ValueError(f"Input image shape should be 2D, got {imshape}")
 
-    assert config.alignment.ica.sigma_blur >= 0, f"Invalid sigma blur {config.alignment.ica.sigma_blur}."
+    alignment = config.alignment
+    expected_tiles = alignment_tile_sizes(config)
+    if alignment.tile_sizes != expected_tiles:
+        raise ValueError("alignment.tile_sizes must be derived from tile_size and search_radii")
 
-    assert len(imshape) == 2, f"Input image shape should be 2D, got {imshape}."
+    height, width = imshape
+    if height <= 0 or width <= 0:
+        raise ValueError(f"Input image dimensions must be positive, got {imshape}")
+    if config.mode == "bayer":
+        if height % 2 or width % 2:
+            raise ValueError("Bayer input must have even dimensions")
+        if alignment.grey_method is GrayscaleMethod.DECIMATING:
+            height, width = height // 2, width // 2
+    for level, tile in enumerate(alignment.tile_sizes):
+        if level:
+            factor = alignment.factors[level - 1]
+            height = (height + factor - 1) // factor
+            width = (width + factor - 1) // factor
+        if height < tile or width < tile:
+            raise ValueError(
+                f"Image of shape {imshape} is incompatible with alignment at level {level}: "
+                f"image of shape {(height, width)} cannot fit tiles of size {tile}"
+            )
 
-    ts = config.alignment.tile_size
-    assert isinstance(ts, int), f"invalid tile size: {ts}"
 
-    # Checking if image pyramid is possible
-    padded_imshape_x = ts*(int(np.ceil(imshape[1]/ts)))
-    padded_imshape_y = ts*(int(np.ceil(imshape[0]/ts)))
-    
-    lvl_imshape_y, lvl_imshape_x = padded_imshape_y, padded_imshape_x
-    for lvl, (factor, ts) in enumerate(zip(config.alignment.factors, config.alignment.tile_sizes)):
-        lvl_imshape_y, lvl_imshape_x = np.floor(lvl_imshape_y/factor), np.floor(lvl_imshape_x/factor)
-        
-        n_tiles_y = lvl_imshape_y/ts
-        n_tiles_x = lvl_imshape_x/ts
-        
-        if n_tiles_y < 1 or n_tiles_x < 1:
-            raise ValueError("Image of shape {} is incompatible with the given "\
-                             "block matching tile sizes and factors : at level {}, "\
-                             "coarse image of shape {} cannot be divided into "\
-                             "tiles of size {}.".format(
-                                 imshape, lvl,
-                                 (lvl_imshape_y, lvl_imshape_x),
-                                 ts))
+def alignment_tile_sizes(config: Config) -> list[int]:
+    """Derive fine-to-coarse tile sizes."""
+    alignment = config.alignment
+    levels = len(alignment.factors) + 1
+    if len(alignment.search_radii) != levels or len(alignment.block_matching.metrics) != levels:
+        raise ValueError("search_radii and block_matching.metrics must have len(factors) + 1 entries")
+    if any(type(factor) is not int or factor < 2 or factor & (factor - 1)
+           for factor in alignment.factors):
+        raise ValueError("alignment.factors must be powers of two >= 2")
+    if any(type(radius) is not int or radius < 0 for radius in alignment.search_radii):
+        raise ValueError("alignment.search_radii must be nonnegative integers")
+    if any(metric not in ("L1", "L2") for metric in alignment.block_matching.metrics):
+        raise ValueError("block_matching.metrics entries must be L1 or L2")
+    if type(alignment.ica.n_iter) is not int or alignment.ica.n_iter < 0:
+        raise ValueError("alignment.ica.n_iter must be a nonnegative integer")
+    if type(alignment.tile_size) is not int or alignment.tile_size not in (8, 16, 32, 64):
+        raise ValueError("alignment.tile_size must be 8, 16, 32 or 64 after SNR selection")
 
-    # Esnure that the flow upscaling mode is valid
-    valid_upsample_modes = ['nearest', 'bilinear', 'bicubic']
-    assert config.alignment.flow_upscale_mode in valid_upsample_modes, \
-        f"Unknown flow upscaling mode {config.alignment.flow_upscale_mode}, " \
-        f"should be one of {valid_upsample_modes}."
-    
+    tiles = [alignment.tile_size]
+    cap = Fraction(64)
+    for level, radius in enumerate(alignment.search_radii[1:], start=1):
+        tile = max(8, min(tiles[-1], cap))
+        if tile != int(tile) or int(tile) & (int(tile) - 1):
+            raise ValueError(
+                f"alignment.search_radii produce tile size {tile} at level {level}; "
+                "tile sizes must be powers of two"
+            )
+        tiles.append(int(tile))
+        cap /= radius + 1
+    return tiles
+
+
 def update_snr_config(config: Config, snr: float):
     if snr < 6 or snr > 30:
         warnings.warn(f"Clipped snr {snr} between 6 and 30.")
@@ -70,7 +96,7 @@ def update_snr_config(config: Config, snr: float):
             ts = 16
         config.alignment.tile_size = ts
         
-    config.alignment.tile_sizes = [int(config.alignment.tile_size * s) for s in config.alignment.tile_size_factors]
+    config.alignment.tile_sizes = alignment_tile_sizes(config)
 
     if config.merging.kernel.k_detail == SNR_BASED:
         config.merging.kernel.k_detail = lerp(snr, [6, 30], [0.33, 0.25])

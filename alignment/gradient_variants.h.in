@@ -1,0 +1,13 @@
+#pragma once
+#include "alignment.h"
+@gradient_headers@
+namespace alignment::kernels::detail {
+using GradientKernel = int (*)(halide_buffer_t *, halide_buffer_t *, halide_buffer_t *,
+                              halide_buffer_t *, halide_buffer_t *, halide_buffer_t *);
+struct GradientVariant {
+    int tile_size;
+    GradientKernel kernel;
+};
+inline const GradientVariant gradient_variants[] = {
+@gradient_entries@};
+}  // namespace alignment::kernels::detail

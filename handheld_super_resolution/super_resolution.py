@@ -1,42 +1,41 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Fri Sep 30 16:56:22 2022
-
-This script contains : 
-    - The implementation of Alg. 1, the main the body of the method
-    - The implementation of Alg. 2, where the function necessary to
-        compute the optical flow are called
-    - All the operations necessary before its call, such as whitebalance,
-        exif reading, and manipulations of the user's parameters.
-    - The call to post-processing operations (if enabled)
-
-
-@author: jamyl
-"""
-
 import time
 import warnings
-
 from pathlib import Path
-from typing import Union, Tuple, Dict
-import numpy as np
-from numpy.typing import NDArray
-from numba import cuda
 
-from .utils_image import compute_grey_images, apply_orientation, rggb_to_cfa, estimate_image_snr
-from .utils import getTime, DEFAULT_NUMPY_FLOAT_TYPE, divide, add, timer
-from .alignment import align, init_alignment
+import numpy as np
+from numba import cuda
+from numpy.typing import NDArray
+
+from . import alignment, raw2rgb
 from .config import Config
-from .debug_writer import DebugWriter, NAN_COLOR
-from .params import runtime_config, sanitize_config, update_snr_config
-from .robustness import init_robustness, compute_robustness
-from .utils_dng import load_dng_burst, expand_noise_profile_to_rgbg
-from .noise_lut import load_noise_lut
+from .debug_writer import NAN_COLOR, DebugWriter
 from .kernels import estimate_kernels
 from .merge import merge
-from . import raw2rgb
+from .noise_lut import load_noise_lut
+from .params import runtime_config, sanitize_config, update_snr_config
+from .robustness import compute_robustness, init_robustness
+from .utils import DEFAULT_NUMPY_FLOAT_TYPE, add, divide, getTime, timer, FINAL_TILE_SIZE, FINAL_TILE_STRIDE
+from .utils_dng import expand_noise_profile_to_rgbg, load_dng_burst
+from .utils_image import (
+    apply_orientation,
+    compute_grey_images,
+    estimate_image_snr,
+    rggb_to_cfa,
+)
 
-def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: Config) -> Tuple[NDArray, Dict[str, NDArray]]:
+
+def alignment_options(config: Config) -> dict:
+    """Translate fine-to-coarse pipeline settings to the native API."""
+    return {
+        "scale_factors": config.alignment.factors,
+        "tile_sizes": config.alignment.tile_sizes,
+        "search_radii": config.alignment.search_radii,
+        "norm": config.alignment.block_matching.metrics,
+        "ica_iterations": config.alignment.ica.n_iter,
+    }
+
+
+def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: Config) -> tuple[NDArray, dict[str, NDArray]]:
     """
     This is the implementation of Alg. 1: HandheldBurstSuperResolution.
     Some part of Alg. 2: Registration are also integrated for optimisation.
@@ -67,15 +66,17 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
     verbose = config.verbose >= 1
     verbose_2 = config.verbose >= 2
     verbose_3 = config.verbose >= 3
+    t1 = 0.
+    im_time = 0.
 
     init_robustness_ = timer(init_robustness, verbose_2, "\nEstimating ref image local stats", 'Local stats estimated (Total)')
-    compute_grey_images_ = timer(compute_grey_images, verbose_3, end_s="- Grey images estimated by {}".format(grey_method))
+    compute_grey_images_ = timer(compute_grey_images, verbose_3, end_s=f"- Grey images estimated by {grey_method.value}")
     compute_robustness_ = timer(compute_robustness, verbose_2, '\nEstimating robustness', 'Robustness estimated (Total)')
     estimate_kernels_ = timer(estimate_kernels, verbose_2, '\nEstimating kernels', 'Kernels estimated (Total)')
     merge_ = timer(merge, verbose_2, '\nAccumulating Image', 'Image accumulated (Total)')
     divide_ = timer(divide, verbose_2, end_s='\n------------------------\nImage normalized (Total)')
-    init_alignment_ = timer(init_alignment, verbose_2, '\nInitializing alignment', 'Alignment initialized (Total)')
-    align_ = timer(align, verbose_2, '\nBeginning alignment', 'Image aligned (Total)')
+    init_alignment_ = timer(alignment.build_reference_pyramid, verbose_2, '\nInitializing alignment', 'Alignment initialized (Total)')
+    align_ = timer(alignment.align, verbose_2, '\nBeginning alignment', 'Image aligned (Total)')
 
     bayer_mode = config.mode=='bayer'
     debug_dict = {}
@@ -106,15 +107,14 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
         print("\nProcessing reference image ---------\n")
         t1 = time.perf_counter()
 
-    #### Raw to grey
-    if bayer_mode :
-        cuda_ref_grey = compute_grey_images_(cuda_ref_img, grey_method)
-    else:
-        cuda_ref_grey = cuda_ref_img
-
-    ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian = init_alignment_(
-        cuda_ref_grey, config, debug_writer
-    )
+    #### alignment reference (NumPy gray input)
+    ref_grey = compute_grey_images_(ref_img, grey_method) if bayer_mode else ref_img
+    options = alignment_options(config)
+    ref_pyramid = init_alignment_(ref_grey, **options)
+    if debug_writer is not None:
+        debug_writer.write_grayscale_pyramid(
+            "alignment_reference_grey_pyramid", (level.image for level in ref_pyramid.levels)
+        )
 
     #### Local stats estimation
     if config.robustness.enabled:
@@ -140,7 +140,9 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
     cuda_kernels = estimate_kernels_(cuda_ref_img, config)
     
     ##### Merge ref
-    dummy_alignment = cuda.to_device(np.zeros(ref_hessian[-1].shape[:-1], dtype = DEFAULT_NUMPY_FLOAT_TYPE))
+    dummy_alignment = cuda.to_device(np.zeros(((ref_grey.shape[0] - FINAL_TILE_SIZE) // FINAL_TILE_STRIDE + 1,
+                                              (ref_grey.shape[1] - FINAL_TILE_SIZE) // FINAL_TILE_STRIDE + 1, 2),
+                                             dtype=DEFAULT_NUMPY_FLOAT_TYPE))
     dummy_r = cuda.to_device(np.ones(cuda_ref_img.shape, dtype = DEFAULT_NUMPY_FLOAT_TYPE))
     merge_(cuda_ref_img, dummy_alignment, cuda_kernels, dummy_r, num, den, config)
     
@@ -155,30 +157,32 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
 
         if verbose :
             cuda.synchronize()
-            print("\nProcessing image {} ---------\n".format(im_id+1))
+            print(f"\nProcessing image {im_id+1} ---------\n")
             im_time = time.perf_counter()
         
         #### Moving to GPU
         cuda.to_device(comp_imgs[im_id], to=cuda_img, stream=stream)
         
-        #### Compute Grey Images
-        if bayer_mode:
-            cuda_im_grey = compute_grey_images(cuda_img, grey_method)
-        else:
-            cuda_im_grey = cuda_img
-
-        alignment = align_(ref_pyramid, tyled_pyr, ref_tiled_fft, ref_gradx, ref_grady, ref_hessian,
-                        cuda_im_grey, config, debug_writer)
-        
+        #### CPU alignment (NumPy in, NumPy out)
+        moving_grey = (compute_grey_images_(comp_imgs[im_id], grey_method)
+                       if bayer_mode else comp_imgs[im_id])
+        moving_pyramid = alignment.build_moving_pyramid(moving_grey, **options)
         if debug_writer is not None:
-            debug_writer.write_flow("optical_flow", alignment.copy_to_host())
-            
+            debug_writer.write_grayscale_pyramid(
+                "alignment_moving_grey_pyramid", (level.image for level in moving_pyramid.levels)
+            )
+        flow = align_(ref_pyramid, moving_pyramid)
+        device_flow = cuda.to_device(flow)
+
+        if debug_writer is not None:
+            debug_writer.write_flow("optical_flow", flow)
+
         #### Robustness
         if config.robustness.enabled:
             assert ref_local_means is not None
             assert ref_local_stds is not None
             robustness = compute_robustness_(
-                cuda_img, ref_local_means, ref_local_stds, alignment,
+                cuda_img, ref_local_means, ref_local_stds, device_flow,
                 (cuda_sigma_sq_curve, cuda_d_sq_curve), config, debug_writer,
             )
         else:
@@ -192,7 +196,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
         cuda_kernels = estimate_kernels_(cuda_img, config)
         
         #### Merging
-        merge_(cuda_img, alignment, cuda_kernels, robustness, num, den, config)
+        merge_(cuda_img, device_flow, cuda_kernels, robustness, num, den, config)
         
         if verbose :
             cuda.synchronize()
@@ -220,7 +224,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
     return num.copy_to_host(), debug_dict
 
 
-def process(burst_path: Union[Path, str], config: Config):
+def process(burst_path: Path | str, config: Config):
     """
     Processes the burst
 
@@ -329,8 +333,7 @@ def process(burst_path: Union[Path, str], config: Config):
         
         hr_output = raw2rgb.postprocess(hr_output, dng_stack, config) 
         
-    if 'accumulated robustness' in debug_dict and config.postprocessing.orientate_image:
-        if 'Image Orientation' in dng_stack.tags.keys() :
+    if 'accumulated robustness' in debug_dict and config.postprocessing.orientate_image and 'Image Orientation' in dng_stack.tags:
             ori = dng_stack.tags['Image Orientation'].values[0]
             debug_dict['accumulated robustness'] = apply_orientation(debug_dict['accumulated robustness'], ori)
     

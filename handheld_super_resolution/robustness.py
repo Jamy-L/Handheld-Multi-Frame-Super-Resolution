@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 else:
     DeviceNDArray = Any
 
-from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE,DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS, clamp, timer
+from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE,DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS, clamp, timer, FINAL_TILE_SIZE, FINAL_TILE_STRIDE, FINAL_TILE_ORIGIN
 from .utils_image import dogson_biquadratic_kernel, dogson_quadratic_kernel
 from .config import Config
 from .debug_writer import DebugWriter
@@ -310,7 +310,6 @@ def warp_stats(local_stats: DeviceNDArray, tile_size: int, flow: DeviceNDArray):
     
 @cuda.jit
 def cuda_warp_dogson(source, flow, tile_size, warped):
-    tile_size = tile_size // 2
     n_channels, ny, nx = source.shape
     
     x, y = cuda.grid(2)
@@ -320,23 +319,19 @@ def cuda_warp_dogson(source, flow, tile_size, warped):
         return
     
     # Flow is defined on the raw image basis
-    patch_idy = int(y//tile_size)
-    patch_idx = int(x//tile_size)
+    nty, ntx, _ = flow.shape
+    patch_idy = int((y - FINAL_TILE_ORIGIN)//FINAL_TILE_STRIDE)
+    patch_idy = min(max(patch_idy, 0), nty-1)
+    patch_idx = int((x - FINAL_TILE_ORIGIN)//FINAL_TILE_STRIDE)
+    patch_idx = min(max(patch_idx, 0), ntx-1)
     
     flow_x = flow[patch_idy, patch_idx, 0]
     flow_y = flow[patch_idy, patch_idx, 1]
         
         
     # Jumping from ref guide to mov guide  
-    y_mov = y + flow_y * 0.5
-    x_mov = x + flow_x * 0.5
-    
-    # Out of bounds
-    if not (0 <= y_mov < ny and
-            0 <= x_mov < nx):
-        for c in range(n_channels):
-            warped[c, y, x] = math.inf # infinity will imply R = 0
-        return
+    y_mov = y + flow_y
+    x_mov = x + flow_x
     
     center_y = round(y_mov)
     center_x = round(x_mov)
@@ -527,7 +522,6 @@ def robustness_threshold(d_sq: DeviceNDArray, sigma_sq: DeviceNDArray, S: Device
 @cuda.jit    
 def cuda_robustness_threshold(d_sq, sigma_sq, S, t, tile_size, bayer_mode, R):
     idx, idy = cuda.grid(2)
-    tile_size = tile_size//2
 
     if not (0 <= idy < R.shape[0] and
             0 <= idx < R.shape[1]):

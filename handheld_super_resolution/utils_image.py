@@ -1,18 +1,21 @@
 import math
-from typing import Any, Tuple, TYPE_CHECKING
 
 import numpy as np
-from numpy.typing import NDArray
-from scipy.ndimage._filters import _gaussian_kernel1d
-from numba import cuda
-from numba.cuda.cudadrv.devicearray import DeviceNDArray
-
-
 import torch as th
 import torch.fft
-import torch.nn.functional as F
+from numba import cuda
+from numba.cuda.cudadrv.devicearray import DeviceNDArray
+from numpy.typing import NDArray
+from scipy.ndimage import convolve1d
 
-from .utils import getSigned, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
+from .config import GrayscaleMethod
+from .utils import (
+    DEFAULT_NUMPY_FLOAT_TYPE,
+    DEFAULT_THREADS,
+    DEFAULT_TORCH_FLOAT_TYPE,
+    getSigned,
+)
+
 
 def apply_orientation(img, ori):
     """
@@ -60,69 +63,31 @@ def apply_orientation(img, ori):
     
     return img
 
-def compute_grey_images(img: DeviceNDArray, method: str):
-    """
-    This function converts a raw image to a grey image, using the decimation or
-    the method of Alg. 3: ComputeGrayscaleImage
-
-    Parameters
-    ----------
-    img : device Array[:, :]
-        Raw image J to convert to gray level.
-    method : str
-        ``FFT``, ``demosaicing``, or ``decimating``.
-
-    Raises
-    ------
-    ValueError
-        DESCRIPTION.
-
-    Returns
-    -------
-    img_grey : device Array[:, :]
-        Corresponding grey scale image G
-
-    """
-    assert isinstance(img, DeviceNDArray), f"Got {type(img)}"
-    imsize_y, imsize_x = img.shape
-    if method == "FFT":
-        torch_img_grey = th.as_tensor(img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
-        torch_img_grey = torch.fft.fft2(torch_img_grey) 
-        # th FFT induces copy on the fly : this is good because we dont want to 
-        # modify the raw image, it is needed in the future
-        # Note : the complex dtype of the fft2 is inherited from DEFAULT_TORCH_FLOAT_TYPE.
-        # Therefore, for DEFAULT_TORCH_FLOAT_TYPE = float32 we directly get complex64
-        torch_img_grey = torch.fft.fftshift(torch_img_grey)
-        
-        torch_img_grey[:imsize_y//4, :] = 0
-        torch_img_grey[:, :imsize_x//4] = 0
-        torch_img_grey[-imsize_y//4:, :] = 0
-        torch_img_grey[:, -imsize_x//4:] = 0
-        
-        torch_img_grey = torch.fft.ifftshift(torch_img_grey)
-        torch_img_grey = torch.fft.ifft2(torch_img_grey)
-        # Here, .real() type inherits once again from the complex type.
-        # numba type is read directly from the torch tensor, so everything goes fine.
-        return cuda.as_cuda_array(torch_img_grey.real)
-    elif method == "demosaicing":
-        raw_img = img.copy_to_host()
-        img_grey = demosaic_to_grey(raw_img)
-        return cuda.to_device(img_grey)
-    elif method == "decimating":
-        grey_imshape_y, grey_imshape_x = grey_imshape = imsize_y//2, imsize_x//2
-        
-        img_grey = cuda.device_array(grey_imshape, DEFAULT_NUMPY_FLOAT_TYPE)
-        
-        threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
-        blockspergrid_x = math.ceil(grey_imshape_x/threadsperblock[1])
-        blockspergrid_y = math.ceil(grey_imshape_y/threadsperblock[0])
-        blockspergrid = (blockspergrid_x, blockspergrid_y)
-        
-        cuda_decimate_to_grey[blockspergrid, threadsperblock](img, img_grey)
-        return img_grey
-        
+def compute_grey_images(image: NDArray, method: GrayscaleMethod) -> NDArray[np.float32]:
+    """Convert normalized RGGB Bayer data to NumPy gray for CPU alignment."""
+    image = np.asarray(image, dtype=np.float32)
+    if image.ndim != 2 or any(size % 2 for size in image.shape):
+        raise ValueError("Bayer input must be a 2D image with even dimensions")
+    if method is GrayscaleMethod.DECIMATING:
+        gray = (image[::2, ::2] + image[::2, 1::2]
+                + image[1::2, ::2] + image[1::2, 1::2]) * 0.25
+        kernel = np.array([0.25, 0.5, 0.25], dtype=np.float32)
+        gray = convolve1d(convolve1d(gray, kernel, axis=0, mode="nearest"),
+                          kernel, axis=1, mode="nearest")
+    elif method is GrayscaleMethod.DEMOSAICING:
+        gray = demosaic_to_grey(image)
     else:
         raise ValueError(f"Unknown grayscale method: {method}")
+    # Demosaicing can overshoot the normalized sensor range; the native API
+    # requires finite grayscale samples in [0, 1].
+    return np.ascontiguousarray(np.clip(gray, 0, 1), dtype=np.float32)
+
+def average_bayer_quads(img: DeviceNDArray) -> DeviceNDArray:
+    """Average Bayer quads on the GPU for merging kernel estimation."""
+    image = th.as_tensor(img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+    gray = (image[::2, ::2] + image[::2, 1::2]
+            + image[1::2, ::2] + image[1::2, 1::2]) * 0.25
+    return cuda.as_cuda_array(gray)
 
 
 def demosaic_to_grey(img: NDArray) -> NDArray[np.float32]:
@@ -137,7 +102,8 @@ def demosaic_to_grey(img: NDArray) -> NDArray[np.float32]:
         ) from error
 
     rgb = demosaicing_CFA_Bayer_Menon2007(img, pattern="RGGB")
-    return np.ascontiguousarray(np.mean(rgb, axis=-1), dtype=DEFAULT_NUMPY_FLOAT_TYPE)
+    gray = 0.25*(rgb[:, :, 0] + 2*rgb[:, :, 1] + rgb[:, :, 2]) # Luma conversion, consistent with quad averaging
+    return np.ascontiguousarray(gray, dtype=DEFAULT_NUMPY_FLOAT_TYPE)
 
 def preprocess(img: torch.Tensor, preprocessing: str):
     if preprocessing == "sqrt":
@@ -147,7 +113,7 @@ def preprocess(img: torch.Tensor, preprocessing: str):
     else:
         raise ValueError(f"Unknown preprocessing: {preprocessing}")
 
-def gat(image: DeviceNDArray, alpha: Tuple[float, float, float, float], beta: Tuple[float, float, float, float]) -> DeviceNDArray:
+def gat(image: DeviceNDArray, alpha: tuple[float, float, float, float], beta: tuple[float, float, float, float]) -> DeviceNDArray:
     """
     Generalized Ascombe Transform
     noise model : std² = alpha * I + beta
@@ -206,69 +172,6 @@ def cuda_GAT(image, VST_image, alpha, beta):
     VST_image[y, x] = 2/alpha_ * math.sqrt(VST)     
                 
     
-def fft_lowpass(img_grey):
-    img_grey = th.from_numpy(img_grey).to("cuda")
-    img_grey = torch.fft.fft2(img_grey)
-    img_grey = torch.fft.fftshift(img_grey)
-    
-    imsize_y, imsize_x = img_grey.shape
-    img_grey[:imsize_y//4, :] = 0
-    img_grey[:, :imsize_x//4] = 0
-    img_grey[-imsize_y//4:, :] = 0
-    img_grey[:, -imsize_x//4:] = 0
-    
-    img_grey = torch.fft.ifftshift(img_grey)
-    img_grey = torch.fft.ifft2(img_grey)
-    return img_grey.cpu().numpy().real
-
-@cuda.jit
-def cuda_decimate_to_grey(img, grey_img):
-    x, y = cuda.grid(2)
-    grey_imshape_y, grey_imshape_x = grey_img.shape
-    
-    if (0 <= y < grey_imshape_y and
-        0 <= x < grey_imshape_x):
-        c = 0
-        for i in range(0, 2):
-            for j in range(0, 2):
-                c += img[2*y + i, 2*x + j]
-        grey_img[y, x] = c/4
-        
-
-def cuda_downsample(th_img, kernel='gaussian', factor=2):
-    '''Apply a convolution by a kernel if required, then downsample an image.
-    Args:
-     	image: Device Array the input image (WARNING: single channel only!)
-     	kernel: None / str ('gaussian' / 'bayer') / 2d numpy array
-     	factor: downsampling factor
-    '''
-    # Special case
-    if factor == 1:
-        return th_img
-    
-    if kernel is None:
-        raise ValueError('use Kernel')
-    elif kernel == 'gaussian':
-        # gaussian kernel std is proportional to downsampling factor
-        # filteredImage = gaussian_filter(image, sigma=factor * 0.5, order=0, output=None, mode='reflect')
-        
-        # This is the default kernel of scipy gaussian_filter1d
-        # Note that pytorch Convolve is actually a correlation, hence the ::-1 flip.
-        # copy to avoid negative stride
-        gaussian_kernel = _gaussian_kernel1d(sigma=factor * 0.5, order=0, radius=int(4*factor * 0.5 + 0.5))[::-1].copy()
-        th_gaussian_kernel = torch.as_tensor(gaussian_kernel, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
-
-        temp = F.conv2d(th_img, th_gaussian_kernel[None, None, :, None]) # convolve y
-        th_filteredImage = F.conv2d(temp, th_gaussian_kernel[None, None, None, :]) # convolve x
-    else:
-        raise ValueError("please use gaussian kernel")
-
-    # Shape of the downsampled image
-    h2, w2 = np.floor(np.array(th_filteredImage.shape[2:]) / float(factor)).astype(int)
-
-    return th_filteredImage[:, :, :h2 * factor:factor, :w2 * factor:factor]
-
-
 @cuda.jit(device=True)
 def dogson_biquadratic_kernel(x, y):
     return dogson_quadratic_kernel(x) * dogson_quadratic_kernel(y)
@@ -311,7 +214,7 @@ def computePSNR(image, noisyImage):
         mse = np.mean(np.multiply(error, error))
         return 10 * np.log10(maxValue**2 / mse)
     else:
-        print('WARNING: images have different sizes: {}, {}. Returning None'.format(image.shape, noisyImage.shape))
+        print(f'WARNING: images have different sizes: {image.shape}, {noisyImage.shape}. Returning None')
         return None
 
 def cfa_to_rggb(x: np.ndarray, source_cfa: np.ndarray):
@@ -338,7 +241,7 @@ def rggb_to_cfa(x: np.ndarray, target_cfa: np.ndarray):
     # the function is its own inverse...
     return cfa_to_rggb(x, target_cfa)
 
-def estimate_image_snr(ref_img: NDArray[np.float32], alpha: Tuple[float, float, float, float], beta: Tuple[float, float, float, float]) -> float:
+def estimate_image_snr(ref_img: NDArray[np.float32], alpha: tuple[float, float, float, float], beta: tuple[float, float, float, float]) -> float:
     r = ref_img[::2, ::2]
     g1 = ref_img[::2, 1::2]
     g2 = ref_img[1::2, ::2]

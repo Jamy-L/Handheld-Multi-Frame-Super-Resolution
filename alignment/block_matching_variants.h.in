@@ -1,0 +1,16 @@
+#pragma once
+#include "alignment.h"
+@bm_headers@
+namespace alignment::kernels::detail {
+using BlockMatchingKernel = int (*)(halide_buffer_t *, halide_buffer_t *,
+                                   halide_buffer_t *, halide_buffer_t *,
+                                   halide_buffer_t *, halide_buffer_t *);
+struct BlockMatchingVariant {
+    int tile_size;
+    int search_radius;
+    Norm norm;
+    BlockMatchingKernel kernel;
+};
+inline const BlockMatchingVariant block_matching_variants[] = {
+@bm_entries@};
+}  // namespace alignment::kernels::detail
