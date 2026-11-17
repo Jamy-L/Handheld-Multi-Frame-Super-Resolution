@@ -1,17 +1,15 @@
-# -*- coding: utf-8 -*-
 """
 Created on Fri Sep 30 16:22:15 2022
 
 @author: jamyl
 """
-import time
 import math
+import time
 
 import numpy as np
-from numba import float32, float64, complex64, cuda
 import torch as th
 import torch.fft
-
+from numba import cuda, float32
 
 DEFAULT_CUDA_FLOAT_TYPE = float32
 DEFAULT_NUMPY_FLOAT_TYPE = np.float32
