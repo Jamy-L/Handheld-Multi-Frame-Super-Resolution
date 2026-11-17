@@ -1,6 +1,7 @@
 """Typed configuration schema for handheld super-resolution."""
 
 from dataclasses import dataclass, field, fields, is_dataclass
+from enum import Enum
 from pathlib import Path
 from pprint import pformat
 from typing import List, Literal, Optional, Tuple, Union
@@ -11,6 +12,13 @@ import tyro
 SNR_BASED = "SNR_based"
 SNRBasedFloat = Union[float, Literal["SNR_based"]]
 TileSize = Union[int, Literal["SNR_based"]]
+
+
+class GrayscaleMethod(Enum):
+    """Methods for converting a raw image to grayscale."""
+
+    DEMOSAICING = "demosaicing"
+    DECIMATING = "decimating"
 
 
 def _format_config_fields(config, indent: int) -> List[str]:
@@ -51,7 +59,7 @@ class NoiseModelConfig:
 
 @dataclass
 class BlockMatchingConfig:
-    metrics: List[Literal["L1", "L2"]] = field(default_factory=lambda: ["L1", "L2", "L2", "L2"])
+    metrics: List[Literal["L1", "L2"]] = field(default_factory=lambda: ["L1", "L2", "L2", "L2", "L2"])
 
 
 @dataclass
@@ -63,13 +71,13 @@ class ICAConfig:
 
 @dataclass
 class AlignmentConfig:
-    grey_method: Literal["FFT", "demosaicing"] = "FFT" # How to compute raw -> grayscale
+    grey_method: Literal[GrayscaleMethod.DEMOSAICING, GrayscaleMethod.DECIMATING] = GrayscaleMethod.DECIMATING # How to compute raw -> grayscale
     preprocessing: Union[Literal["sqrt", "gamma"], None] = None # Apply a non-linearity to the grayscale image
-    search_radii: List[int] = field(default_factory=lambda: [1, 4, 4, 4])
+    search_radii: List[int] = field(default_factory=lambda: [1, 4, 4, 4, 4])
     flow_upscale_mode: Literal["nearest", "bilinear", "bicubic"] = "bilinear"
-    factors: List[int] = field(default_factory=lambda: [1, 2, 4, 4])
+    factors: List[int] = field(default_factory=lambda: [2, 4, 4, 4])
     tile_size: TileSize = SNR_BASED
-    tile_size_factors: List[float] = field(default_factory=lambda: [1, 1, 1, 0.5])
+    tile_size_factors: List[float] = field(default_factory=lambda: [1, 1, 1, 0.5, 0.5])
     tile_sizes: tyro.conf.Suppress[List[int]] = field(default_factory=list, init=False)
     block_matching: BlockMatchingConfig = field(default_factory=BlockMatchingConfig)
     ica: ICAConfig = field(default_factory=ICAConfig)

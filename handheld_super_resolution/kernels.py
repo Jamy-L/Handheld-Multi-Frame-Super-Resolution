@@ -21,7 +21,7 @@ import torch.nn.functional as F
 from .linalg import get_eigen_elmts_2x2
 from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS, getTime, timer
 from .utils_image import compute_grey_images, gat, preprocess
-from .config import Config
+from .config import Config, GrayscaleMethod
 
 
 SEL_HARD_THRESHOLD = 0
@@ -89,7 +89,7 @@ def estimate_kernels(img: DeviceNDArray, config: Config):
 
     #__ Decimate to grey
     if bayer_mode : 
-        img_grey = compute_grey_images_(img, method="decimating")
+        img_grey = compute_grey_images_(img, method=GrayscaleMethod.DECIMATING)
     
     else :
         img_grey = img # no need to copy now, they will be copied to gpu later.

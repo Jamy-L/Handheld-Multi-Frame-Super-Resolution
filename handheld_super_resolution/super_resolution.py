@@ -69,7 +69,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
     verbose_3 = config.verbose >= 3
 
     init_robustness_ = timer(init_robustness, verbose_2, "\nEstimating ref image local stats", 'Local stats estimated (Total)')
-    compute_grey_images_ = timer(compute_grey_images, verbose_3, end_s="- Grey images estimated by {}".format(grey_method))
+    compute_grey_images_ = timer(compute_grey_images, verbose_3, end_s="- Grey images estimated by {}".format(grey_method.value))
     compute_robustness_ = timer(compute_robustness, verbose_2, '\nEstimating robustness', 'Robustness estimated (Total)')
     estimate_kernels_ = timer(estimate_kernels, verbose_2, '\nEstimating kernels', 'Kernels estimated (Total)')
     merge_ = timer(merge, verbose_2, '\nAccumulating Image', 'Image accumulated (Total)')

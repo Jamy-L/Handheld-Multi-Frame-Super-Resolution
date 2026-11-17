@@ -16,7 +16,6 @@ if TYPE_CHECKING:
 from .ICA import init_ica, align_lvl_ica
 from .block_matching import align_lvl_block_matching_L2, align_lvl_block_matching_L1
 from .utils import getTime, clamp, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS
-from .utils_image import cuda_downsample
 from .config import Config, AlignmentConfig
 
 SOBEL_Y = torch.as_tensor(np.array([[-1], [0], [1]]), dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
@@ -54,7 +53,7 @@ def init_alignment(
     # factors, tileSizes, distances, searchRadia and subpixels are described fine-to-coarse
     factors = config.alignment.factors
 
-    pyramid = build_gaussian_pyramid(th_ref_img_padded, factors, preprocessing=config.alignment.preprocessing)
+    pyramid = build_pyramid(th_ref_img_padded, factors, preprocessing=config.alignment.preprocessing)
 
     if debug_writer is not None:
         _write_grayscale_pyramid(
@@ -89,19 +88,31 @@ def init_alignment(
     return pyramid, tiled_pyr, tiled_fft, gradx_pyramid, grady_pyramid, hessian_pyramid
 
 
-def build_gaussian_pyramid(image: torch.Tensor, factors: List[int]=[1, 2, 4, 4], kernel='gaussian', preprocessing: Union[str, None]=None):
+def build_pyramid(image: torch.Tensor, factors: List[int], preprocessing: Union[str, None]=None):
     if preprocessing is not None:
         image = preprocess(image, preprocessing)
+    pyramid = [binomial_blur(image)]
 
-    pyramid = [cuda_downsample(image, kernel, factors[0])]
-
-    for factor in factors[1:]:
-        pyramid.append(cuda_downsample(pyramid[-1], kernel, factor))
+    for factor in factors:
+        pyramid.append(downsample_lvl(pyramid[-1], factor))
     
     pyramid = [lvl.squeeze() for lvl in pyramid]
 
     return pyramid[::-1]
 
+def binomial_blur(img: torch.Tensor):
+    assert img.ndim == 4
+    kernel = img.new_tensor([[1, 2, 1], [2, 4, 2], [1, 2, 1]]) / 16
+    filtered = F.conv2d(F.pad(img, (1, 1, 1, 1), mode="replicate"), kernel[None, None])
+    return filtered
+
+def downsample_lvl(img: torch.Tensor, factor: int):
+    assert img.ndim == 4
+    if factor == 1:
+        return img
+    assert factor % 2 == 0, f"Expected multiple of 2, got {factor}"
+    filtered = binomial_blur(img)
+    return filtered[::2, ::2]
 
 def _write_grayscale_pyramid(
         debug_writer: "DebugWriter",
@@ -130,7 +141,7 @@ def align(ref_pyramid: List[torch.Tensor],
     # factors, tileSizes, distances, searchRadia and subpixels are described fine-to-coarse
     factors = config.alignment.factors
 
-    moving_pyramid = build_gaussian_pyramid(th_img, factors)
+    moving_pyramid = build_pyramid(th_img, factors)
 
     if debug_writer is not None:
         _write_grayscale_pyramid(

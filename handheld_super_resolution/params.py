@@ -4,7 +4,7 @@ from copy import deepcopy
 import numpy as np
 from typing import List, Literal, Optional, Union, Tuple
 
-from .config import Config, SNRBasedFloat, SNR_BASED
+from .config import Config, GrayscaleMethod, SNRBasedFloat, SNR_BASED
 
 
 def runtime_config(config: Config):
@@ -15,9 +15,6 @@ def runtime_config(config: Config):
 
 
 def sanitize_config(config: Config, imshape: Tuple[int, int]):
-    if config.mode == "grey" and config.alignment.grey_method != "FFT":
-        raise ValueError("Demosaicing alignment requires Bayer input")
-        
     assert config.scale >= 1
 
     assert config.merging.kernel_type in ['steerable', 'iso'], f"Unknown kernel type {config.merging.kernel_type}"

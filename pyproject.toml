@@ -19,10 +19,14 @@ dependencies = [
     "matplotlib",
     "tyro",
     "imageio",
+    "halide>=21.0.0",
 ]
 
 [project.scripts]
 handheld = "handheld_super_resolution.cli:main"
+
+[project.optional-dependencies]
+native = ["pybind11>=3.0"]
 
 [build-system]
 requires = ["hatchling"]
