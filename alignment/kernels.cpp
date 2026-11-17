@@ -110,8 +110,8 @@ Flow ica(const PyramidLevel &, const Image &, const Flow &, int) {
 }
 
 Flow transfer_flow(const Flow &source, const Image &reference, const Image &moving,
-                   int target_tile_size, int target_stride, float scale_ratio,
-                   float offset_x, float offset_y) {
+                   int target_tile_size, int target_stride, float grid_scale_ratio,
+                   float flow_scale, float offset_x_px, float offset_y_px) {
   detail::FlowTransferKernel kernel = nullptr;
   for (const auto &variant : detail::flow_transfer_variants)
     if (variant.tile_size == target_tile_size) {
@@ -121,9 +121,9 @@ Flow transfer_flow(const Flow &source, const Image &reference, const Image &movi
   if (!kernel)
     throw std::invalid_argument("flow transfer tile size not compiled: " + std::to_string(target_tile_size));
   if (target_stride <= 0 || source.stride <= 0 || source.tile_size <= 0 ||
-      !std::isfinite(scale_ratio) || scale_ratio <= 0 ||
-      !std::isfinite(offset_x) || !std::isfinite(offset_y))
-    throw std::invalid_argument("flow transfer requires positive strides/scale and finite offsets");
+      !std::isfinite(grid_scale_ratio) || grid_scale_ratio < 1 ||
+      !std::isfinite(offset_x_px) || !std::isfinite(offset_y_px))
+    throw std::invalid_argument("flow transfer requires positive strides, grid_scale_ratio >= 1, and finite pixel offsets");
   if (reference.dimensions() != 2 || moving.dimensions() != 2 ||
       reference.width() < target_tile_size || reference.height() < target_tile_size ||
       reference.width() != moving.width() || reference.height() != moving.height() ||
@@ -136,7 +136,6 @@ Flow transfer_flow(const Flow &source, const Image &reference, const Image &movi
       source.dx.dim(0).min() != 0 || source.dx.dim(1).min() != 0 ||
       source.dy.dim(0).min() != 0 || source.dy.dim(1).min() != 0)
     throw std::invalid_argument("flow transfer expects matching nonempty zero-based flow components");
-  const float flow_scale = scale_ratio * target_stride / source.stride;
   if (!std::isfinite(flow_scale) || flow_scale <= 0)
     throw std::invalid_argument("flow displacement scale must be finite and positive");
   const int cols = (reference.width() - target_tile_size) / target_stride + 1;
@@ -146,7 +145,7 @@ Flow transfer_flow(const Flow &source, const Image &reference, const Image &movi
   Image ref = reference, mov = moving;
   const int status = kernel(source_dx.raw_buffer(), source_dy.raw_buffer(),
                             ref.raw_buffer(), mov.raw_buffer(), target_stride,
-                            scale_ratio, offset_x, offset_y, flow_scale,
+                            grid_scale_ratio, flow_scale, offset_x_px, offset_y_px,
                             output.dx.raw_buffer(), output.dy.raw_buffer());
   if (status != 0)
     throw std::runtime_error("Halide flow transfer failed with status " + std::to_string(status));

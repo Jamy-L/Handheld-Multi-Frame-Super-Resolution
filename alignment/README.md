@@ -153,11 +153,15 @@ compiled kernels. Flow transfer is implemented; ICA remains an explicit stub.
 
 `Flow` stores its source tile size and stride alongside `dx` and `dy`.
 `transfer_flow` takes that source flow, the target reference and moving images,
-target tile size, target stride, grid scale ratio, and x/y offsets. Grid coordinates
-refer to tile centers and obey `target_index = scale_ratio * source_index + offset`.
-Pixel displacements scale by `scale_ratio * target_stride / source.stride`.
-The caller derives the transform from the pyramid downsampling factor and both
-tile grids. Current grids use non-overlapping square tiles (stride = tile size).
+target tile size, target stride, `grid_scale_ratio`, independent `flow_scale`,
+and x/y offsets in pixels.
+`grid_scale_ratio >= 1` is source grid spacing divided by target grid spacing,
+with both spacings expressed in target-image pixels. `flow_scale` is supplied
+explicitly and multiplies displacement values only; it is never derived from
+grid spacing or stride.
+The first tiles share a top-left corner. Their centers are `tile_size/2`, so the
+caller passes `source.tile_size * pixel_scale / 2 - target_tile_size / 2` as the
+source-minus-target first-center offset, in target-image pixels. Current grids use non-overlapping square tiles (stride = tile size).
 
 ## Compiled block-matching variants
 
@@ -185,12 +189,16 @@ flow and ties. Further SIMD and cache tuning are deferred.
 ## Flow transfer / upsampling
 
 `flow_transfer.cpp` maps each target tile center back to the previous grid via
-`source_index = (target_index - offset) / scale_ratio`. It gathers the nearest
+`source_index = (target_index * target_stride - offset_px) /
+(grid_scale_ratio * target_stride)`. The offset is the difference between first
+tile centers in target-image pixels, not a difference between tile corners and
+not a tile-index offset. The caller accounts for `tile_size/2` centers once;
+the kernel applies the supplied offset without another center correction. It gathers the nearest
 source flow and its horizontal and vertical neighbors from the bilinear cell,
 omitting the opposite diagonal. Source-grid half ties choose the larger index.
 Flow-grid reads and both image reads use repeated edges.
 
-Each candidate flow is multiplied by the pixel displacement scale. For L1
+Each candidate flow is multiplied by the explicit `flow_scale` argument. For L1
 scoring only, its components are rounded to integers (nearest-even on half ties)
 to sample the moving image. The minimum-cost candidate wins; equal costs prefer
 nearest, then horizontal, then vertical. Output preserves the selected candidate's
@@ -210,9 +218,10 @@ Python tests exercise the full coarse-to-fine loop, including recovery of a know
 After block matching at level 0, a final transfer uses the same full-resolution
 reference/moving images, tile size 16, stride 8 and pixel scale 1. It selects
 among the same three source-flow candidates with L1, without further block
-matching or ICA. The grid scale is `source.stride / 8`, which preserves pixel
-flow magnitudes while moving to the overlapping grid. Tile-center offsets also
-account for a finest-level source tile size other than 16. The image must fit at
+matching or ICA. The grid scale ratio is `source.stride / 8`; the independently supplied
+`flow_scale=1` preserves pixel flow magnitudes.
+The center offset is `source.tile_size/2 - 16/2` in full-resolution pixels, which
+also handles a finest-level source tile size other than 16. The image must fit at
 least one complete 16x16 output tile.
 
 ## Final flow median
@@ -223,3 +232,14 @@ sample. A fixed min/max network computes each median in Halide; values remain
 float32 with no integer rounding. Tile size, stride, and output shape stay the
 same. Tests cover isolated outliers, fractional values, corners, odd dimensions,
 and grids as small as 1x1 against an independent scalar sort.
+
+For example, transferring 16x16 coarse tiles to 16x16 fine tiles at pixel scale 2
+and target stride 16 uses `grid_scale_ratio=2`, `flow_scale=2`, and
+`offset_x_px=offset_y_px=8`.
+The final same-image transfer from 16x16/stride-16 to 16x16/stride-8 uses
+`grid_scale_ratio=2`, `flow_scale=1`, and zero center offset. Non-finite values or grid scale
+ratios below 1 are rejected.
+
+Grid geometry and displacement scaling are separate API arguments. Tests vary
+`grid_scale_ratio` and `flow_scale` independently, including combinations that
+cannot be inferred from source/target strides.

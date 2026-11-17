@@ -17,16 +17,20 @@ Flow ica(const PyramidLevel &reference, const Image &moving,
          const Flow &initial_flow, int iterations);
 
 // Images are the reference and moving images at the target pyramid level.
-// Grid transform: target_tile_index = scale_ratio * source_tile_index + offset.
-// The offsets are in target-grid index units and refer to tile centers.
-// Pixel displacement scale = scale_ratio * target_stride / source.stride.
-// Select nearest/horizontal/vertical source flows by target-tile L1 cost.
-// Score scaled candidates with integer-rounded samples; return the winner
-// with its original fractional displacement (scaled to target-level pixels).
+// grid_scale_ratio >= 1 is source_spacing_px / target_stride, with both grid
+// spacings expressed in target-image pixels.
+// flow_scale is an independent multiplier applied to the flow values.
+// offset_{x,y}_px = first source tile center - first target tile center, in
+// target-image pixels. First tile corners align; centers use tile_size/2, so
+// offset = source.tile_size * pixel_scale / 2 - target_tile_size / 2.
+// Mapping: source_index = (target_index * target_stride - offset_px) /
+//                         (grid_scale_ratio * target_stride).
+// Select nearest/horizontal/vertical source flows by integer-sampled L1 cost,
+// preserving the winner's fractional displacement in target-level pixels.
 // Images and source flow use repeated edges.
 Flow transfer_flow(const Flow &source, const Image &reference, const Image &moving,
                    int target_tile_size, int target_stride,
-                   float scale_ratio, float offset_x, float offset_y);
+                   float grid_scale_ratio, float flow_scale, float offset_x_px, float offset_y_px);
 // Independent 3x3 medians of dx/dy on the tile grid, with repeated edges.
 Flow median_filter(const Flow &source);
 }  // namespace alignment::kernels

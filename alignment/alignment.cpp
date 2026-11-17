@@ -109,27 +109,25 @@ Flow align(const Pyramid &reference, const Pyramid &moving) {
     const int target_tile_size = reference.tile_sizes[target];
     const int target_stride = target_tile_size; // Non-overlapping tiles for now.
     const float pixel_scale = static_cast<float>(reference.scale_factors[target]);
-    // Decimation preserves pixel origins; account for differing tile-center grids.
-    const float scale_ratio = pixel_scale * flow.stride / target_stride;
-    const float source_center = 0.5f * (flow.tile_size - 1);
-    const float target_center = 0.5f * (target_tile_size - 1);
-    const float offset_x = (pixel_scale * source_center - target_center) / target_stride;
-    const float offset_y = offset_x; // Square tiles and equal strides on both axes.
+    // First tile corners align; their centers do not generally coincide.
+    // Express both grid spacings and the center difference in target pixels.
+    const float grid_scale_ratio = pixel_scale * flow.stride / target_stride;
+    const float source_center_px = flow.tile_size * pixel_scale / 2.0f;
+    const float target_center_px = target_tile_size / 2.0f;
+    const float offset_px = source_center_px - target_center_px;
     flow = kernels::transfer_flow(flow, reference.levels[target].image,
                                   moving.levels[target].image,
                                   target_tile_size, target_stride,
-                                  scale_ratio, offset_x, offset_y);
+                                  grid_scale_ratio, pixel_scale, offset_px, offset_px);
   }
-  // Final overlapping grid at the same image scale: 16x16 tiles, stride 8.
+  // Final overlapping grid: same image scale, aligned first tile corners.
   constexpr int output_tile_size = 16;
   constexpr int output_stride = output_tile_size / 2;
-  const float grid_scale = static_cast<float>(flow.stride) / output_stride;
-  const float offset = (0.5f * (flow.tile_size - 1) -
-                        0.5f * (output_tile_size - 1)) / output_stride;
-  // grid_scale * output_stride / flow.stride == 1: displacement units stay unchanged.
+  const float grid_scale_ratio = static_cast<float>(flow.stride) / output_stride;
+  const float offset_px = flow.tile_size / 2.0f - output_tile_size / 2.0f;
   flow = kernels::transfer_flow(flow, reference.levels[0].image, moving.levels[0].image,
                                 output_tile_size, output_stride,
-                                grid_scale, offset, offset);
+                                grid_scale_ratio, 1.0f, offset_px, offset_px);
   return kernels::median_filter(flow);
 }
 } // namespace alignment

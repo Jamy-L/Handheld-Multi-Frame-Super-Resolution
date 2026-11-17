@@ -9,11 +9,13 @@ public:
   Input<Halide::Buffer<float>> reference{"reference", 2};
   Input<Halide::Buffer<float>> moving{"moving", 2};
   Input<int> target_stride{"target_stride"};
-  // target_grid_index = scale_ratio * source_grid_index + offset.
-  Input<float> scale_ratio{"scale_ratio"};
-  Input<float> offset_x{"offset_x"};
-  Input<float> offset_y{"offset_y"};
+  // Source/target grid spacing ratio, with both measured in target-image pixels.
+  Input<float> grid_scale_ratio{"grid_scale_ratio"};
+  // Independent multiplier for displacement values, not for grid coordinates.
   Input<float> flow_scale{"flow_scale"};
+  // First source tile center minus first target tile center, in target-image pixels.
+  Input<float> offset_x_px{"offset_x_px"};
+  Input<float> offset_y_px{"offset_y_px"};
   Output<Halide::Buffer<float>> dx{"dx", 2};
   Output<Halide::Buffer<float>> dy{"dy", 2};
 
@@ -25,10 +27,11 @@ public:
     auto ref = Halide::BoundaryConditions::repeat_edge(reference);
     auto mov = Halide::BoundaryConditions::repeat_edge(moving);
 
-    // Map target tile centers to source-grid coordinates. The caller has
-    // already accounted for image scale, tile-center offsets and both strides.
-    const Halide::Expr u = (tx - offset_x) / scale_ratio;
-    const Halide::Expr v = (ty - offset_y) / scale_ratio;
+    // The caller supplies the center-to-center offset in target-image pixels.
+    // Account for it once; do not add another tile-center correction here.
+    const Halide::Expr source_spacing_px = grid_scale_ratio * target_stride;
+    const Halide::Expr u = (tx * target_stride - offset_x_px) / source_spacing_px;
+    const Halide::Expr v = (ty * target_stride - offset_y_px) / source_spacing_px;
     const Halide::Expr left = Halide::cast<int>(Halide::floor(u));
     const Halide::Expr top = Halide::cast<int>(Halide::floor(v));
     // On an exact half-grid tie, choose the larger index consistently.
