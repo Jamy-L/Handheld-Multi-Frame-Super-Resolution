@@ -1,4 +1,5 @@
 #include "Halide.h"
+#include <limits>
 
 class ICAIteration : public Halide::Generator<ICAIteration> {
 public:
@@ -41,12 +42,12 @@ public:
 
     const Halide::Expr a = hxx(tx, ty), b = hxy(tx, ty), c = hyy(tx, ty);
     const Halide::Expr determinant =
-        a * c - b * b + 1.0f; // + 1 is a regularisation for numeric stability
+        a * c - b * b + std::numeric_limits<float>::epsilon();
     const Halide::Expr update_x =
         (c * rhs(tx, ty)[0] - b * rhs(tx, ty)[1]) / determinant;
     const Halide::Expr update_y =
         (a * rhs(tx, ty)[1] - b * rhs(tx, ty)[0]) / determinant;
-    // Update flow, clip the update to -1,1 textels at most
+    // Update flow, clip the update to -1,1 texels at most
     dx(tx, ty) = initial_dx(tx, ty) + Halide::clamp(update_x, -1.0f, 1.0f);
     dy(tx, ty) = initial_dy(tx, ty) + Halide::clamp(update_y, -1.0f, 1.0f);
 

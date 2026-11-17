@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <stdexcept>
 
@@ -31,7 +32,7 @@ Flow scalar_ica(const PyramidLevel &ref, const Image &moving, const Flow &initia
             by += ref.precomputed[1](x,y) * residual;
           }
         double a=ref.precomputed[2](tx,ty), b=ref.precomputed[3](tx,ty), c=ref.precomputed[4](tx,ty);
-        double det=a*c-b*b+1;
+        double det=a*c-b*b+std::numeric_limits<float>::epsilon();
         result.dx(tx,ty) += float(std::clamp((c*bx-b*by)/det,-1.0,1.0));
         result.dy(tx,ty) += float(std::clamp((a*by-b*bx)/det,-1.0,1.0));
       }
@@ -81,7 +82,7 @@ void regularization_and_clipping() {
   auto expected=scalar_ica(ref,moving,initial,3);
   if (std::abs(result.dx(0,0)-expected.dx(0,0))>2e-6f ||
       std::abs(result.dy(0,0)-expected.dy(0,0))>2e-6f)
-    throw std::runtime_error("determinant must be a*c-b*b+1; iterations must feed updated flow");
+    throw std::runtime_error("determinant must include float epsilon; iterations must feed updated flow");
   // Deliberately strong RHS: clipping applies to each increment, not total flow.
   ref_image.fill(1); moving.fill(0); gx.fill(1); gy.fill(-1);
   xx.fill(1); xy.fill(0); yy.fill(1);
@@ -93,10 +94,30 @@ void regularization_and_clipping() {
   catch (const std::invalid_argument &) { rejected=true; }
   if (!rejected) throw std::runtime_error("negative iteration count accepted");
 }
+void low_contrast_translation() {
+  constexpr int tile = 32, size = 3 * tile;
+  auto texture = [](float x, float y) {
+    return 0.5f + 0.0375f * std::sin(0.13f*x + 0.07f*y)
+                + 0.0375f * std::cos(0.05f*x - 0.17f*y)
+                + 0.025f * std::sin(0.19f*x - 0.11f*y);
+  };
+  Image image(size, size), moving(size, size);
+  for (int y = 0; y < size; ++y)
+    for (int x = 0; x < size; ++x) {
+      image(x, y) = texture(x, y);
+      moving(x, y) = texture(x - 0.4f, y + 0.3f);
+    }
+  PyramidLevel ref{image, kernels::precompute_reference(image, tile)};
+  Flow initial(3, 3, tile, tile);
+  auto result = kernels::ica(ref, moving, initial, 50);
+  if (std::hypot(result.dx(1, 1) - 0.4f, result.dy(1, 1) + 0.3f) > 0.06f)
+    throw std::runtime_error("ICA failed to refine a low-contrast subpixel translation");
+}
 int main() {
   try {
     for (const auto &variant : kernels::detail::ica_variants) check(variant.tile_size);
     regularization_and_clipping();
+    low_contrast_translation();
     std::cout << "ICA checks passed\n";
   } catch (const std::exception &e) { std::cerr << e.what() << '\n'; return 1; }
 }
