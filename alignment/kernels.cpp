@@ -1,4 +1,5 @@
 #include "kernels.h"
+#include "alignment_flow_median.h"
 #include "block_matching_variants.h"
 #include "downsample_variants.h"
 #include "gradient_variants.h"
@@ -149,6 +150,21 @@ Flow transfer_flow(const Flow &source, const Image &reference, const Image &movi
                             output.dx.raw_buffer(), output.dy.raw_buffer());
   if (status != 0)
     throw std::runtime_error("Halide flow transfer failed with status " + std::to_string(status));
+  return output;
+}
+Flow median_filter(const Flow &source) {
+  if (source.dx.dimensions() != 2 || source.dy.dimensions() != 2 ||
+      source.dx.width() <= 0 || source.dx.height() <= 0 ||
+      source.dx.width() != source.dy.width() || source.dx.height() != source.dy.height() ||
+      source.dx.dim(0).min() != 0 || source.dx.dim(1).min() != 0 ||
+      source.dy.dim(0).min() != 0 || source.dy.dim(1).min() != 0)
+    throw std::invalid_argument("flow median expects matching nonempty zero-based flow components");
+  Flow output(source.tiles_x(), source.tiles_y(), source.tile_size, source.stride);
+  auto dx = source.dx, dy = source.dy;
+  const int status = alignment_flow_median(dx.raw_buffer(), dy.raw_buffer(),
+                                           output.dx.raw_buffer(), output.dy.raw_buffer());
+  if (status != 0)
+    throw std::runtime_error("Halide flow median failed with status " + std::to_string(status));
   return output;
 }
 } // namespace alignment::kernels

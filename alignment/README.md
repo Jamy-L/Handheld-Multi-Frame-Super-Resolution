@@ -50,7 +50,9 @@ to contiguous float32. Pyramids own their buffers and expose `is_reference` and 
 Alignment initializes zero float32 flow internally at the coarsest level, with
 one `(dx, dy)` vector per complete tile. C++ uses a dedicated `Flow` struct
 with separate float32 `dx` and `dy` buffers indexed by `(tile_x, tile_y)`;
-Python flow layout is `(tile_rows, tile_cols, 2)`. Vectors are measured
+Python flow layout is `(tile_rows, tile_cols, 2)`. The final flow always uses
+full-resolution 16x16 tiles with stride 8, so its shape is
+`((height - 16) // 8 + 1, (width - 16) // 8 + 1, 2)`. Vectors are measured
 in the current level's pixels. No initial-flow argument is required. Multi-level `align` performs block
 matching at each level and transfers flow to the next finer grid. ICA remains
 commented out and unimplemented.
@@ -188,11 +190,12 @@ source flow and its horizontal and vertical neighbors from the bilinear cell,
 omitting the opposite diagonal. Source-grid half ties choose the larger index.
 Flow-grid reads and both image reads use repeated edges.
 
-Each candidate flow is multiplied by the pixel displacement scale, then rounded
-to an integer (nearest-even on half ties). The target tile is matched against the
-moving image at that displacement using L1. The candidate with minimum cost wins;
-equal costs prefer nearest, then horizontal, then vertical. Returned components
-are float32 integer-valued displacements, not interpolated flow averages.
+Each candidate flow is multiplied by the pixel displacement scale. For L1
+scoring only, its components are rounded to integers (nearest-even on half ties)
+to sample the moving image. The minimum-cost candidate wins; equal costs prefer
+nearest, then horizontal, then vertical. Output preserves the selected candidate's
+full floating-point displacement in target-level pixels, without rounding or
+averaging the candidate flows.
 
 Target tile size is compiled from `ALIGNMENT_BM_TILE_SIZES`, with generated dispatch
 from `flow_transfer_variants.h.in`. Target stride and the grid transform remain
@@ -203,3 +206,20 @@ The scalar-reference test covers every compiled tile size, changes of scale and
 stride, boundaries, omitted diagonal, each winning candidate, rounding and ties.
 Python tests exercise the full coarse-to-fine loop, including recovery of a known
 `(dx, dy) = (3, -2)` translation for both L1 and L2 block matching.
+
+After block matching at level 0, a final transfer uses the same full-resolution
+reference/moving images, tile size 16, stride 8 and pixel scale 1. It selects
+among the same three source-flow candidates with L1, without further block
+matching or ICA. The grid scale is `source.stride / 8`, which preserves pixel
+flow magnitudes while moving to the overlapping grid. Tile-center offsets also
+account for a finest-level source tile size other than 16. The image must fit at
+least one complete 16x16 output tile.
+
+## Final flow median
+
+After the final 16x16 / stride-8 transfer, `flow_median.cpp` applies independent
+3x3 medians to `dx` and `dy` on the flow grid. Boundaries repeat the nearest flow
+sample. A fixed min/max network computes each median in Halide; values remain
+float32 with no integer rounding. Tile size, stride, and output shape stay the
+same. Tests cover isolated outliers, fractional values, corners, odd dimensions,
+and grids as small as 1x1 against an independent scalar sort.

@@ -106,9 +106,25 @@ class WrapperTests(unittest.TestCase):
                     )
                     with self.subTest(tile=tile, radius=radius, norm=norm):
                         flow = alignment.align(reference, moving)
-                        self.assertEqual(flow.shape, (64 // tile, 64 // tile, 2))
+                        self.assertEqual(flow.shape, ((64 - 16) // 8 + 1, (64 - 16) // 8 + 1, 2))
                         self.assertEqual(flow.dtype, np.float32)
                         np.testing.assert_array_equal(flow, 0)
+
+    def test_final_overlapping_grid_from_different_tile_sizes(self):
+        image = np.random.default_rng(13).random((65, 73), dtype=np.float32)
+        for tile in (8, 16, 32, 64):
+            reference = alignment.build_reference_pyramid(
+                image, scale_factors=[], tile_sizes=[tile], search_radii=[4],
+                norm=["L1"], ica_iterations=0,
+            )
+            moving = alignment.build_moving_pyramid(
+                image, scale_factors=[], tile_sizes=[tile], search_radii=[4],
+                norm=["L1"], ica_iterations=0,
+            )
+            with self.subTest(source_tile=tile):
+                flow = alignment.align(reference, moving)
+                self.assertEqual(flow.shape, (7, 8, 2))
+                np.testing.assert_array_equal(flow, 0)
 
     def test_uncompiled_block_matching_variant(self):
         image = np.zeros((16, 16), np.float32)
@@ -141,7 +157,7 @@ class WrapperTests(unittest.TestCase):
             search_radii=[1, 4, 4], norm=["L1", "L2", "L2"], ica_iterations=3,
         )
         flow = alignment.align(reference, moving)
-        self.assertEqual(flow.shape, (129 // 32, 145 // 32, 2))
+        self.assertEqual(flow.shape, ((129 - 16) // 8 + 1, (145 - 16) // 8 + 1, 2))
         self.assertEqual(flow.dtype, np.float32)
         np.testing.assert_array_equal(flow, 0)
 
@@ -161,6 +177,7 @@ class WrapperTests(unittest.TestCase):
             )
             with self.subTest(norm=norm):
                 flow = alignment.align(reference, moving)
+                self.assertEqual(flow.shape, (15, 15, 2))
                 np.testing.assert_array_equal(flow[..., 0], 3)
                 np.testing.assert_array_equal(flow[..., 1], -2)
 

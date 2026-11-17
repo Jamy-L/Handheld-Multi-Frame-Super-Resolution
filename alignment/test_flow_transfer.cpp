@@ -26,16 +26,18 @@ Flow scalar_transfer(const Flow &source, const Image &ref, const Image &mov,
       const int ys[] = {ny, ny, ny == top ? top + 1 : top};
       double best = std::numeric_limits<double>::infinity();
       for (int c = 0; c < 3; ++c) {
-        const int dx = static_cast<int>(std::nearbyint(edge(source.dx, xs[c], ys[c]) * flow_scale));
-        const int dy = static_cast<int>(std::nearbyint(edge(source.dy, xs[c], ys[c]) * flow_scale));
+        const float candidate_dx = edge(source.dx, xs[c], ys[c]) * flow_scale;
+        const float candidate_dy = edge(source.dy, xs[c], ys[c]) * flow_scale;
+        const int dx = static_cast<int>(std::nearbyint(candidate_dx));
+        const int dy = static_cast<int>(std::nearbyint(candidate_dy));
         double cost = 0;
         for (int y = ty * stride; y < ty * stride + tile; ++y)
           for (int x = tx * stride; x < tx * stride + tile; ++x)
             cost += std::abs(static_cast<double>(edge(ref, x, y)) - edge(mov, x + dx, y + dy));
         if (cost < best) {
           best = cost;
-          result.dx(tx, ty) = static_cast<float>(dx);
-          result.dy(tx, ty) = static_cast<float>(dy);
+          result.dx(tx, ty) = candidate_dx;
+          result.dy(tx, ty) = candidate_dy;
         }
       }
     }
@@ -89,11 +91,30 @@ void candidate_selection(int tile) {
   source.dx(1, 0) = 2; source.dx(0, 1) = 0;
   out = kernels::transfer_flow(source, image, image, tile, tile, 1, -0.25f, -0.25f);
   if (out.dx(0, 0) != 0) throw std::runtime_error("vertical candidate cannot win");
-  // A scaled fractional flow must be rounded after scaling, not before.
+  // Scoring rounds after scaling, but the winner retains its fractional value.
   image.fill(0.0f); source.dx.fill(0.4f); source.dy.fill(-0.4f);
   out = kernels::transfer_flow(source, image, image, tile, tile, 1.5f, 0, 0);
-  if (out.dx(0, 0) != 1 || out.dy(0, 0) != -1)
-    throw std::runtime_error("flow rounded before scaling");
+  if (std::abs(out.dx(0, 0) - 0.6f) > 1e-6f || std::abs(out.dy(0, 0) + 0.6f) > 1e-6f)
+    throw std::runtime_error("fractional winner was rounded or not scaled");
+  // Identical rounded samples must retain the nearest candidate's own floats.
+  source.dx.fill(0.4f); source.dy.fill(-0.3f);
+  source.dx(0, 0) = 0.2f;
+  out = kernels::transfer_flow(source, image, image, tile, tile, 1, -0.25f, -0.25f);
+  if (out.dx(0, 0) != 0.2f || out.dy(0, 0) != -0.3f)
+    throw std::runtime_error("equal quantized costs lost the nearest floating candidate");
+  // A non-nearest winner must also return its original float, not the sampled int.
+  Image shifted(tile, tile);
+  for (int y = 0; y < tile; ++y)
+    for (int x = 0; x < tile; ++x) {
+      image(x, y) = float(x) / tile;
+      shifted(x, y) = float(std::max(0, x - 1)) / tile;
+    }
+  source.dx.fill(3.3f); source.dy.fill(0);
+  source.dx(0, 0) = 2.2f; source.dx(1, 0) = 1.2f;
+  out = kernels::transfer_flow(source, image, shifted, tile, tile, 1, -0.25f, -0.25f);
+  if (out.dx(0, 0) != 1.2f)
+    throw std::runtime_error("non-nearest winner lost its fractional displacement");
+  image.fill(0.0f);
   // Exact halfway between grid centers: nearest uses the larger grid index.
   source.dx.fill(0); source.dy.fill(0); source.dx(1, 1) = 2;
   out = kernels::transfer_flow(source, image, image, tile, tile, 1, -0.5f, -0.5f);

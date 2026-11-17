@@ -120,6 +120,16 @@ Flow align(const Pyramid &reference, const Pyramid &moving) {
                                   target_tile_size, target_stride,
                                   scale_ratio, offset_x, offset_y);
   }
-  return flow;
+  // Final overlapping grid at the same image scale: 16x16 tiles, stride 8.
+  constexpr int output_tile_size = 16;
+  constexpr int output_stride = output_tile_size / 2;
+  const float grid_scale = static_cast<float>(flow.stride) / output_stride;
+  const float offset = (0.5f * (flow.tile_size - 1) -
+                        0.5f * (output_tile_size - 1)) / output_stride;
+  // grid_scale * output_stride / flow.stride == 1: displacement units stay unchanged.
+  flow = kernels::transfer_flow(flow, reference.levels[0].image, moving.levels[0].image,
+                                output_tile_size, output_stride,
+                                grid_scale, offset, offset);
+  return kernels::median_filter(flow);
 }
 } // namespace alignment

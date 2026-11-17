@@ -39,17 +39,18 @@ public:
     const Halide::Expr cx = Halide::select(c == 1, other_x, near_x);
     const Halide::Expr cy = Halide::select(c == 2, other_y, near_y);
     // Three candidates: nearest, horizontal neighbor, vertical neighbor.
-    // Scale before rounding; the returned float32 displacements are integers.
-    candidates(tx, ty, c) = Halide::Tuple(
-        Halide::cast<int>(Halide::round(flow_x(cx, cy) * flow_scale)),
-        Halide::cast<int>(Halide::round(flow_y(cx, cy) * flow_scale)));
+    // Preserve the original subpixel flow, expressed in target-level pixels.
+    candidates(tx, ty, c) = Halide::Tuple(flow_x(cx, cy) * flow_scale,
+                                         flow_y(cx, cy) * flow_scale);
 
     Halide::RDom pixel(0, ts, 0, ts, "pixel");
     const Halide::Expr x = tx * target_stride + pixel.x;
     const Halide::Expr y = ty * target_stride + pixel.y;
+    // Integer sampling is only a proxy for scoring the floating candidates.
+    const Halide::Expr sample_dx = Halide::cast<int>(Halide::round(candidates(tx, ty, c)[0]));
+    const Halide::Expr sample_dy = Halide::cast<int>(Halide::round(candidates(tx, ty, c)[1]));
     cost(tx, ty, c) = 0.0f;
-    cost(tx, ty, c) += Halide::abs(ref(x, y) - mov(
-        x + candidates(tx, ty, c)[0], y + candidates(tx, ty, c)[1]));
+    cost(tx, ty, c) += Halide::abs(ref(x, y) - mov(x + sample_dx, y + sample_dy));
 
     // Prefer nearest, then horizontal, then vertical when costs tie.
     best(tx, ty) = Halide::Tuple(0, std::numeric_limits<float>::infinity());
@@ -58,8 +59,8 @@ public:
     best(tx, ty) = Halide::Tuple(
         Halide::select(candidate_cost < best(tx, ty)[1], choice.x, best(tx, ty)[0]),
         Halide::min(candidate_cost, best(tx, ty)[1]));
-    dx(tx, ty) = Halide::cast<float>(candidates(tx, ty, best(tx, ty)[0])[0]);
-    dy(tx, ty) = Halide::cast<float>(candidates(tx, ty, best(tx, ty)[0])[1]);
+    dx(tx, ty) = candidates(tx, ty, best(tx, ty)[0])[0];
+    dy(tx, ty) = candidates(tx, ty, best(tx, ty)[0])[1];
 
     source_dx.dim(0).set_min(0);
     source_dx.dim(1).set_min(0);

@@ -61,5 +61,6 @@ Pyramid build_moving_pyramid(const Image &image, const std::vector<int> &scale_f
                                 const std::vector<int> &tile_sizes, const std::vector<int> &search_radii,
                                 const std::vector<Norm> &norm, int ica_iterations);
 // Initializes zero flow on the coarsest tile grid.
+// Returns full-resolution flow on complete 16x16 tiles with stride 8.
 Flow align(const Pyramid &reference, const Pyramid &moving);
 }  // namespace alignment

@@ -91,8 +91,10 @@ add_halide_generator(flow_transfer_generator SOURCES flow_transfer.cpp)
 set(flow_transfer_libraries "")
 set(transfer_headers "")
 set(transfer_entries "")
-# Target tiles use the same sizes as the block-matching stage they feed.
-foreach(tile IN LISTS ALIGNMENT_BM_TILE_SIZES)
+# Include the fixed final 16x16 grid, even if BM uses other tile sizes only.
+set(flow_transfer_tile_sizes 16 ${ALIGNMENT_BM_TILE_SIZES})
+list(REMOVE_DUPLICATES flow_transfer_tile_sizes)
+foreach(tile IN LISTS flow_transfer_tile_sizes)
     set(kernel "alignment_flow_transfer_${tile}")
     add_halide_library(${kernel} FROM flow_transfer_generator
         GENERATOR alignment_flow_transfer USE_RUNTIME alignment_runtime
@@ -103,8 +105,12 @@ foreach(tile IN LISTS ALIGNMENT_BM_TILE_SIZES)
 endforeach()
 configure_file(flow_transfer_variants.h.in flow_transfer_variants.h @ONLY)
 
+add_halide_generator(flow_median_generator SOURCES flow_median.cpp)
+add_halide_library(alignment_flow_median FROM flow_median_generator
+    GENERATOR alignment_flow_median USE_RUNTIME alignment_runtime TARGETS host)
+
 add_library(alignment_core STATIC alignment.cpp kernels.cpp)
-target_link_libraries(alignment_core PUBLIC Halide::Runtime PRIVATE ${downsample_libraries} ${gradient_libraries} ${block_matching_libraries} ${flow_transfer_libraries})
+target_link_libraries(alignment_core PUBLIC Halide::Runtime PRIVATE ${downsample_libraries} ${gradient_libraries} ${block_matching_libraries} ${flow_transfer_libraries} alignment_flow_median)
 target_include_directories(alignment_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
     PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 
@@ -133,4 +139,7 @@ if(BUILD_TESTING)
     target_include_directories(test_flow_transfer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
     target_link_libraries(test_flow_transfer PRIVATE alignment_core)
     add_test(NAME flow_transfer COMMAND test_flow_transfer)
+    add_executable(test_flow_median test_flow_median.cpp)
+    target_link_libraries(test_flow_median PRIVATE alignment_core)
+    add_test(NAME flow_median COMMAND test_flow_median)
 endif()

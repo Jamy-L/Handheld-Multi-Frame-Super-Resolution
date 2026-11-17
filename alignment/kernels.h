@@ -21,8 +21,12 @@ Flow ica(const PyramidLevel &reference, const Image &moving,
 // The offsets are in target-grid index units and refer to tile centers.
 // Pixel displacement scale = scale_ratio * target_stride / source.stride.
 // Select nearest/horizontal/vertical source flows by target-tile L1 cost.
-// Scale before integer rounding. Images and source flow use repeated edges.
+// Score scaled candidates with integer-rounded samples; return the winner
+// with its original fractional displacement (scaled to target-level pixels).
+// Images and source flow use repeated edges.
 Flow transfer_flow(const Flow &source, const Image &reference, const Image &moving,
                    int target_tile_size, int target_stride,
                    float scale_ratio, float offset_x, float offset_y);
+// Independent 3x3 medians of dx/dy on the tile grid, with repeated edges.
+Flow median_filter(const Flow &source);
 }  // namespace alignment::kernels
