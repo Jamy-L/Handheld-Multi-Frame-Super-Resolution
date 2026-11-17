@@ -101,8 +101,8 @@ Flow align(const Pyramid &reference, const Pyramid &moving) {
     flow = kernels::block_matching(ref.image, mov.image, flow, current_tile_size,
                                    reference.search_radii[level], reference.norm[level]);
 
-    // ICA will be implemented last.
-    // flow = kernels::ica(ref, mov.image, flow, reference.ica_iterations);
+    if (reference.ica_iterations > 0)
+      flow = kernels::ica(ref, mov.image, flow, reference.ica_iterations);
 
     if (level == 0) break;
     const size_t target = level - 1;

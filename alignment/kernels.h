@@ -12,7 +12,8 @@ Flow block_matching(const Image &reference, const Image &moving,
                     const Flow &initial_flow, int tile_size, int search_radius,
                     Norm norm);
 
-// Reference includes cached gradients and per-tile gradient products.
+// C++ iterates one Halide ICA step using cached gradients and Hessian sums.
+// Bilinear warp, determinant + 1, per-component update clamped to [-1, 1].
 Flow ica(const PyramidLevel &reference, const Image &moving,
          const Flow &initial_flow, int iterations);
 

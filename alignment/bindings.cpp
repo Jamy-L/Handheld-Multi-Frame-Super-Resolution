@@ -116,5 +116,5 @@ PYBIND11_MODULE(_alignment_native, module) {
     bind_builder("build_reference_pyramid", true);
     bind_builder("build_moving_pyramid", false);
     module.def("align", &align, py::arg("reference"), py::arg("moving"),
-               "Align coarse to fine, then return flow on full-resolution 16x16 tiles with stride 8. ICA is disabled.");
+               "Align coarse to fine, then return flow on full-resolution 16x16 tiles with stride 8. ICA runs for the configured ica_iterations (zero disables it).");
 }

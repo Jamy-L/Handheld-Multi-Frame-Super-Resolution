@@ -1,4 +1,6 @@
 #include "kernels.h"
+#include "ica_variants.h"
+#include <utility>
 #include "alignment_flow_median.h"
 #include "block_matching_variants.h"
 #include "downsample_variants.h"
@@ -105,8 +107,54 @@ Flow block_matching(const Image &reference, const Image &moving,
   return output;
 }
 
-Flow ica(const PyramidLevel &, const Image &, const Flow &, int) {
-  throw KernelNotImplemented("Halide ICA kernel is not implemented");
+Flow ica(const PyramidLevel &reference, const Image &moving,
+         const Flow &initial_flow, int iterations) {
+  if (iterations < 0) throw std::invalid_argument("ICA iterations must be nonnegative");
+  const int tile = initial_flow.tile_size;
+  detail::ICAKernel kernel = nullptr;
+  for (const auto &variant : detail::ica_variants)
+    if (variant.tile_size == tile) { kernel = variant.kernel; break; }
+  if (!kernel) throw std::invalid_argument("ICA tile size not compiled: " + std::to_string(tile));
+  const auto &image = reference.image;
+  if (image.dimensions() != 2 || moving.dimensions() != 2 ||
+      image.width() < tile || image.height() < tile ||
+      image.width() != moving.width() || image.height() != moving.height() ||
+      image.dim(0).min() != 0 || image.dim(1).min() != 0 ||
+      moving.dim(0).min() != 0 || moving.dim(1).min() != 0)
+    throw std::invalid_argument("ICA expects matching zero-based images containing a complete tile");
+  const int cols = image.width() / tile, rows = image.height() / tile;
+  auto has_shape = [](const Image &buffer, int width, int height) {
+    return buffer.dimensions() == 2 && buffer.width() == width && buffer.height() == height &&
+           buffer.dim(0).min() == 0 && buffer.dim(1).min() == 0;
+  };
+  if (initial_flow.stride != tile || !has_shape(initial_flow.dx, cols, rows) ||
+      !has_shape(initial_flow.dy, cols, rows))
+    throw std::invalid_argument("ICA initial flow must match the non-overlapping tile grid");
+  if (reference.precomputed.size() != 5)
+    throw std::invalid_argument("ICA requires cached gx, gy, sum_gxx, sum_gxy, sum_gyy");
+  for (size_t i = 0; i < 5; ++i)
+    if (!has_shape(reference.precomputed[i], i < 2 ? image.width() : cols,
+                   i < 2 ? image.height() : rows))
+      throw std::invalid_argument("ICA reference precomputation shapes do not match");
+
+  Flow result(cols, rows, tile, tile);
+  result.dx = initial_flow.dx.copy();
+  result.dy = initial_flow.dy.copy();
+  if (iterations == 0) return result;
+  Flow scratch(cols, rows, tile, tile);
+  Image ref = image, mov = moving;
+  auto gx = reference.precomputed[0], gy = reference.precomputed[1];
+  auto hxx = reference.precomputed[2], hxy = reference.precomputed[3], hyy = reference.precomputed[4];
+  for (int iteration = 0; iteration < iterations; ++iteration) {
+    const int status = kernel(ref.raw_buffer(), mov.raw_buffer(), gx.raw_buffer(), gy.raw_buffer(),
+                              hxx.raw_buffer(), hxy.raw_buffer(), hyy.raw_buffer(),
+                              result.dx.raw_buffer(), result.dy.raw_buffer(),
+                              scratch.dx.raw_buffer(), scratch.dy.raw_buffer());
+    if (status != 0)
+      throw std::runtime_error("Halide ICA iteration failed with status " + std::to_string(status));
+    std::swap(result, scratch);
+  }
+  return result;
 }
 
 Flow transfer_flow(const Flow &source, const Image &reference, const Image &moving,

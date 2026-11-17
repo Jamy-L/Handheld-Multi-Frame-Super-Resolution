@@ -41,7 +41,7 @@ flow = alignment.align(reference, moving)
 ```
 
 Both pyramid builders work, including reference gradients and patch sums.
-Coarse-to-fine block matching and flow transfer are available; ICA remains disabled.
+Coarse-to-fine block matching, ICA refinement, and flow transfer are available.
 
 Images are nonempty 2D grayscale floating arrays with finite values in `[0, 1]`.
 Integer inputs are rejected. Floating dtypes and strided layouts are converted
@@ -54,8 +54,8 @@ Python flow layout is `(tile_rows, tile_cols, 2)`. The final flow always uses
 full-resolution 16x16 tiles with stride 8, so its shape is
 `((height - 16) // 8 + 1, (width - 16) // 8 + 1, 2)`. Vectors are measured
 in the current level's pixels. No initial-flow argument is required. Multi-level `align` performs block
-matching at each level and transfers flow to the next finer grid. ICA remains
-commented out and unimplemented.
+matching and ICA refinement at each level, then transfers flow to the next finer
+grid. Set `ica_iterations=0` to disable ICA.
 Inputs are not modified. Do not mutate input arrays concurrently during a call;
 C++ orchestration releases the GIL.
 
@@ -146,10 +146,10 @@ read-only and float64 inputs, odd dimensions, and buffer lifetime checks.
 
 ## Alignment backbone
 
-The loop runs coarsest to finest: block matching, a commented-out ICA call, then
+The loop runs coarsest to finest: block matching, ICA refinement, then
 flow transfer to the next finer grid (except after the finest level). Block
 matching dispatches by tile size, search radius and norm, all baked into the
-compiled kernels. Flow transfer is implemented; ICA remains an explicit stub.
+compiled kernels. The C++ ICA wrapper iterates the compiled one-step kernel.
 
 `Flow` stores its source tile size and stride alongside `dx` and `dy`.
 `transfer_flow` takes that source flow, the target reference and moving images,
@@ -217,8 +217,7 @@ Python tests exercise the full coarse-to-fine loop, including recovery of a know
 
 After block matching at level 0, a final transfer uses the same full-resolution
 reference/moving images, tile size 16, stride 8 and pixel scale 1. It selects
-among the same three source-flow candidates with L1, without further block
-matching or ICA. The grid scale ratio is `source.stride / 8`; the independently supplied
+among the same three source-flow candidates with L1, without another block-matching or ICA pass. The grid scale ratio is `source.stride / 8`; the independently supplied
 `flow_scale=1` preserves pixel flow magnitudes.
 The center offset is `source.tile_size/2 - 16/2` in full-resolution pixels, which
 also handles a finest-level source tile size other than 16. The image must fit at
@@ -243,3 +242,30 @@ ratios below 1 are rejected.
 Grid geometry and displacement scaling are separate API arguments. Tests vary
 `grid_scale_ratio` and `flow_scale` independently, including combinations that
 cannot be inferred from source/target strides.
+
+## ICA refinement
+
+`ica.cpp` defines one inverse-compositional translation iteration, compiled for
+8/16/32/64 tiles using the BM tile-size list and generated `ica_variants.h` dispatch.
+The kernel bilinearly samples the moving image at the incoming floating flow;
+each sample uses repeated image edges. It uses cached reference `gx`, `gy` and
+per-tile Hessian sums. For residual `reference - warped_moving`, it computes
+`bx=sum(gx*residual)`, `by=sum(gy*residual)` and solves:
+
+```
+det = Hxx*Hyy - Hxy*Hxy + 1
+update_x = (Hyy*bx - Hxy*by) / det
+update_y = (Hxx*by - Hxy*bx) / det
+```
+
+Each update component is clamped to `[-1, 1]`, then added to the original flow.
+This regularizes the determinant directly; it does not add to the Hessian diagonal
+or clamp the accumulated displacement. C++ repeats the step `ica_iterations`
+times, swapping two flow buffers between calls and reusing reference precomputation.
+Inputs remain unchanged; zero iterations returns an independent flow copy.
+
+ICA is enabled immediately after BM at each pyramid level when iterations are
+positive. It uses the non-overlapping per-level grid; the final overlapping-grid
+transfer and median follow refinement. Tests compare iterations to scalar bilinear
+warping and the exact regularized solve, exercise clipping and flat patches, and
+verify recovery of a fractional translation through the Python binding.

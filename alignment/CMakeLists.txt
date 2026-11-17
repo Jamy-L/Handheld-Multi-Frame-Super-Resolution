@@ -109,8 +109,23 @@ add_halide_generator(flow_median_generator SOURCES flow_median.cpp)
 add_halide_library(alignment_flow_median FROM flow_median_generator
     GENERATOR alignment_flow_median USE_RUNTIME alignment_runtime TARGETS host)
 
+add_halide_generator(ica_generator SOURCES ica.cpp)
+set(ica_libraries "")
+set(ica_headers "")
+set(ica_entries "")
+foreach(tile IN LISTS ALIGNMENT_BM_TILE_SIZES)
+    set(kernel "alignment_ica_${tile}")
+    add_halide_library(${kernel} FROM ica_generator
+        GENERATOR alignment_ica_iteration USE_RUNTIME alignment_runtime
+        TARGETS host PARAMS tile_size=${tile})
+    list(APPEND ica_libraries ${kernel})
+    string(APPEND ica_headers "#include \"${kernel}.h\"\n")
+    string(APPEND ica_entries "    {${tile}, ${kernel}},\n")
+endforeach()
+configure_file(ica_variants.h.in ica_variants.h @ONLY)
+
 add_library(alignment_core STATIC alignment.cpp kernels.cpp)
-target_link_libraries(alignment_core PUBLIC Halide::Runtime PRIVATE ${downsample_libraries} ${gradient_libraries} ${block_matching_libraries} ${flow_transfer_libraries} alignment_flow_median)
+target_link_libraries(alignment_core PUBLIC Halide::Runtime PRIVATE ${downsample_libraries} ${gradient_libraries} ${block_matching_libraries} ${flow_transfer_libraries} alignment_flow_median ${ica_libraries})
 target_include_directories(alignment_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
     PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 
@@ -142,4 +157,8 @@ if(BUILD_TESTING)
     add_executable(test_flow_median test_flow_median.cpp)
     target_link_libraries(test_flow_median PRIVATE alignment_core)
     add_test(NAME flow_median COMMAND test_flow_median)
+    add_executable(test_ica test_ica.cpp)
+    target_include_directories(test_ica PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(test_ica PRIVATE alignment_core)
+    add_test(NAME ica COMMAND test_ica)
 endif()

@@ -169,17 +169,45 @@ class WrapperTests(unittest.TestCase):
         for norm in ("L1", "L2"):
             reference = alignment.build_reference_pyramid(
                 image, scale_factors=[2, 2], tile_sizes=[16, 16, 16],
-                search_radii=[4, 4, 4], norm=[norm, norm, norm], ica_iterations=3,
+                search_radii=[4, 4, 4], norm=[norm, norm, norm], ica_iterations=0,
             )
             moving = alignment.build_moving_pyramid(
                 moving_image, scale_factors=[2, 2], tile_sizes=[16, 16, 16],
-                search_radii=[4, 4, 4], norm=[norm, norm, norm], ica_iterations=3,
+                search_radii=[4, 4, 4], norm=[norm, norm, norm], ica_iterations=0,
             )
             with self.subTest(norm=norm):
                 flow = alignment.align(reference, moving)
                 self.assertEqual(flow.shape, (15, 15, 2))
                 np.testing.assert_array_equal(flow[..., 0], 3)
                 np.testing.assert_array_equal(flow[..., 1], -2)
+
+    def test_ica_recovers_subpixel_translation(self):
+        y, x = np.mgrid[:128, :128]
+        def texture(x, y):
+            return (0.5 + 0.15 * np.sin(0.13*x + 0.07*y)
+                    + 0.15 * np.cos(0.05*x - 0.17*y)
+                    + 0.1 * np.sin(0.19*x - 0.11*y)).astype(np.float32)
+        image = texture(x, y)
+        moving_image = texture(x - 0.4, y + 0.3)
+        errors = []
+        for iterations in (0, 20):
+            reference = alignment.build_reference_pyramid(
+                image, scale_factors=[], tile_sizes=[32], search_radii=[1],
+                norm=["L1"], ica_iterations=iterations,
+            )
+            moving = alignment.build_moving_pyramid(
+                moving_image, scale_factors=[], tile_sizes=[32], search_radii=[1],
+                norm=["L1"], ica_iterations=iterations,
+            )
+            flow = alignment.align(reference, moving)
+            self.assertTrue(np.isfinite(flow).all())
+            interior = flow[2:-2, 2:-2]
+            errors.append(float(np.median(np.linalg.norm(interior - [0.4, -0.3], axis=-1))))
+            if iterations:
+                self.assertTrue(np.any(np.abs(interior - np.rint(interior)) > 1e-4))
+                np.testing.assert_allclose(np.median(interior, axis=(0, 1)), [0.4, -0.3], atol=0.06)
+        self.assertLess(errors[1], 0.1)
+        self.assertLess(errors[1], errors[0] / 3)
 
 
 if __name__ == '__main__':
