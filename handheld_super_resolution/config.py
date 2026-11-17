@@ -64,7 +64,7 @@ class BlockMatchingConfig:
 
 @dataclass
 class ICAConfig:
-    n_iter: int = 50
+    n_iter: int = 3
 
 
 @dataclass
