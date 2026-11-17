@@ -93,13 +93,33 @@ Flow align(const Pyramid &reference, const Pyramid &moving) {
     throw std::invalid_argument("coarsest image must contain at least one complete tile");
 
   // One (dx, dy) vector per complete tile, in coarsest-level pixels.
-  Flow flow(tiles_x, tiles_y);
-  flow = kernels::align_level(reference.levels[coarsest], moving.levels[coarsest],
-                             flow, tile_size, reference.search_radii[coarsest],
-                             reference.norm[coarsest], reference.ica_iterations);
-  // TODO: upscale tile flow and refine at each finer level.
-  if (coarsest != 0)
-    throw KernelNotImplemented("coarse-to-fine alignment is not implemented");
+  Flow flow(tiles_x, tiles_y, tile_size, tile_size);
+  for (size_t level = coarsest;; --level) {
+    const auto &ref = reference.levels[level];
+    const auto &mov = moving.levels[level];
+    const int current_tile_size = reference.tile_sizes[level];
+    flow = kernels::block_matching(ref.image, mov.image, flow, current_tile_size,
+                                   reference.search_radii[level], reference.norm[level]);
+
+    // ICA will be implemented last.
+    // flow = kernels::ica(ref, mov.image, flow, reference.ica_iterations);
+
+    if (level == 0) break;
+    const size_t target = level - 1;
+    const int target_tile_size = reference.tile_sizes[target];
+    const int target_stride = target_tile_size; // Non-overlapping tiles for now.
+    const float pixel_scale = static_cast<float>(reference.scale_factors[target]);
+    // Decimation preserves pixel origins; account for differing tile-center grids.
+    const float scale_ratio = pixel_scale * flow.stride / target_stride;
+    const float source_center = 0.5f * (flow.tile_size - 1);
+    const float target_center = 0.5f * (target_tile_size - 1);
+    const float offset_x = (pixel_scale * source_center - target_center) / target_stride;
+    const float offset_y = offset_x; // Square tiles and equal strides on both axes.
+    flow = kernels::transfer_flow(flow, reference.levels[target].image,
+                                  moving.levels[target].image,
+                                  target_tile_size, target_stride,
+                                  scale_ratio, offset_x, offset_y);
+  }
   return flow;
 }
 } // namespace alignment

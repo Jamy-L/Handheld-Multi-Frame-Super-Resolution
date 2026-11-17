@@ -1,0 +1,12 @@
+#pragma once
+#include "alignment.h"
+@downsample_headers@
+namespace alignment::kernels::detail {
+using DownsampleKernel = int (*)(halide_buffer_t *, halide_buffer_t *);
+struct DownsampleVariant {
+    int scale_factor;
+    DownsampleKernel kernel;
+};
+inline const DownsampleVariant downsample_variants[] = {
+@downsample_entries@};
+}  // namespace alignment::kernels::detail

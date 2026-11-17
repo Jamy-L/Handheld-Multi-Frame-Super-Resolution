@@ -41,7 +41,7 @@ flow = alignment.align(reference, moving)
 ```
 
 Both pyramid builders work, including reference gradients and patch sums.
-Motion estimation still raises `NotImplementedError`.
+Coarse-to-fine block matching and flow transfer are available; ICA remains disabled.
 
 Images are nonempty 2D grayscale floating arrays with finite values in `[0, 1]`.
 Integer inputs are rejected. Floating dtypes and strided layouts are converted
@@ -51,9 +51,9 @@ Alignment initializes zero float32 flow internally at the coarsest level, with
 one `(dx, dy)` vector per complete tile. C++ uses a dedicated `Flow` struct
 with separate float32 `dx` and `dy` buffers indexed by `(tile_x, tile_y)`;
 Python flow layout is `(tile_rows, tile_cols, 2)`. Vectors are measured
-in the current level's pixels. No initial-flow argument is required. Motion
-estimation and coarse-to-fine refinement remain unimplemented: `align` reaches
-the coarsest alignment kernel stub and raises `NotImplementedError`.
+in the current level's pixels. No initial-flow argument is required. Multi-level `align` performs block
+matching at each level and transfers flow to the next finer grid. ICA remains
+commented out and unimplemented.
 Inputs are not modified. Do not mutate input arrays concurrently during a call;
 C++ orchestration releases the GIL.
 
@@ -86,11 +86,12 @@ at every stage. Output dimensions round up, so odd sizes and 1-pixel axes work.
 Scale `2^n` performs exactly `n` such stages; scale 1 makes an independent copy.
 
 Scales 2, 4, 8 and 16 are specialized at build time with a Halide GeneratorParam.
-A switch in `kernels.cpp` directly calls the corresponding compiled function.
+`ALIGNMENT_DOWNSAMPLE_SCALES` in CMake controls compilation and automatically
+generates kernel includes and dispatch entries using `downsample_variants.h.in`.
 Intermediate levels are materialized once within each specialized pipeline.
 Unsupported scales raise `ValueError` (`std::invalid_argument` in C++); there is
-no fallback or JIT. To add a scale, extend the CMake specialization list and the
-includes and switch in `kernels.cpp`.
+no fallback or JIT. To add a scale, edit that list and rebuild; no C++ changes
+are needed. Scale 1 remains a plain copy.
 
 The C++ numerical test compares against independent scalar 3x3 convolution for
 constant, patterned and impulse images, odd/even and tiny dimensions, all
@@ -100,7 +101,9 @@ specializations, and scale-1 copy semantics. Unsupported scales are rejected.
 
 `gradients.cpp` generates one pipeline with five outputs: full-resolution `gx`
 and `gy`, and `sum_gxx`, `sum_gxy`, `sum_gyy` on non-overlapping tiles. `tile_size` is a GeneratorParam;
-CMake builds variants for 8, 16, 32 and 64. The generated entry points take the
+`ALIGNMENT_GRADIENT_TILE_SIZES` in CMake controls the variants (8, 16, 32, 64
+by default) and generates includes and dispatch using `gradient_variants.h.in`.
+Edit that list and rebuild; no C++ changes are needed. The generated entry points take the
 input buffer followed by the five output buffers; tile size is baked into each
 function. Gradients are computed once into their output buffers, then reused by
 the patch reduction.
@@ -138,3 +141,65 @@ for level in reference.levels:
 `test_numpy_pyramid.py` exercises the complete NumPy/C++/Halide path against
 independent NumPy filtering, gradients and patch reductions, including strided,
 read-only and float64 inputs, odd dimensions, and buffer lifetime checks.
+
+## Alignment backbone
+
+The loop runs coarsest to finest: block matching, a commented-out ICA call, then
+flow transfer to the next finer grid (except after the finest level). Block
+matching dispatches by tile size, search radius and norm, all baked into the
+compiled kernels. Flow transfer is implemented; ICA remains an explicit stub.
+
+`Flow` stores its source tile size and stride alongside `dx` and `dy`.
+`transfer_flow` takes that source flow, the target reference and moving images,
+target tile size, target stride, grid scale ratio, and x/y offsets. Grid coordinates
+refer to tile centers and obey `target_index = scale_ratio * source_index + offset`.
+Pixel displacements scale by `scale_ratio * target_stride / source.stride`.
+The caller derives the transform from the pyramid downsampling factor and both
+tile grids. Current grids use non-overlapping square tiles (stride = tile size).
+
+## Compiled block-matching variants
+
+Maintain three lists in `CMakeLists.txt`: `ALIGNMENT_BM_TILE_SIZES`,
+`ALIGNMENT_BM_SEARCH_RADII`, and `ALIGNMENT_BM_NORMS`. Nested loops compile their
+Cartesian product and generate the dispatch-table entries automatically. Defaults
+are tiles 8/16/32/64, radii 1/4, and L1/L2 (16 variants). Edit a list and rebuild;
+no C++ switch, declarations, or template specializations need manual edits.
+
+`block_matching.cpp` is the single generator for all combinations. Its three
+GeneratorParams are resolved at build time; generated functions take only the
+reference/moving images, incoming flow components, and output flow components.
+`block_matching_variants.h.in` describes the generated registry, which is filled
+from the CMake combinations. Uncompiled combinations raise `ValueError`; there is no
+fallback or JIT.
+
+The initial implementation rounds incoming flow, searches integer offsets in
+`[-radius, radius]` in both axes, repeats the moving-image edge outside its bounds, and skips
+incomplete reference tiles. Equal costs keep the first candidate, with x varying
+fastest from `(-radius, -radius)`. Its CPU schedule is a correctness baseline.
+`test_block_matching.cpp` checks every entry in the generated registry against
+independent scalar search, including boundaries, translation, fractional initial
+flow and ties. Further SIMD and cache tuning are deferred.
+
+## Flow transfer / upsampling
+
+`flow_transfer.cpp` maps each target tile center back to the previous grid via
+`source_index = (target_index - offset) / scale_ratio`. It gathers the nearest
+source flow and its horizontal and vertical neighbors from the bilinear cell,
+omitting the opposite diagonal. Source-grid half ties choose the larger index.
+Flow-grid reads and both image reads use repeated edges.
+
+Each candidate flow is multiplied by the pixel displacement scale, then rounded
+to an integer (nearest-even on half ties). The target tile is matched against the
+moving image at that displacement using L1. The candidate with minimum cost wins;
+equal costs prefer nearest, then horizontal, then vertical. Returned components
+are float32 integer-valued displacements, not interpolated flow averages.
+
+Target tile size is compiled from `ALIGNMENT_BM_TILE_SIZES`, with generated dispatch
+from `flow_transfer_variants.h.in`. Target stride and the grid transform remain
+runtime arguments. Complete target tiles are enumerated with
+`(image_extent - tile_size) / stride + 1`, supporting overlapping strides.
+
+The scalar-reference test covers every compiled tile size, changes of scale and
+stride, boundaries, omitted diagonal, each winning candidate, rounding and ties.
+Python tests exercise the full coarse-to-fine loop, including recovery of a known
+`(dx, dy) = (3, -2)` translation for both L1 and L2 block matching.

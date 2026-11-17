@@ -1,4 +1,6 @@
 #include "kernels.h"
+#include "downsample_variants.h"
+#include <vector>
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -28,6 +30,9 @@ Image reference_downsample(Image image, int scale) {
 
 int main() {
     try {
+        std::vector<int> scales{1};
+        for (const auto &variant : alignment::kernels::detail::downsample_variants)
+            scales.push_back(variant.scale_factor);
         // Odd/even dimensions, tiny images, borders, ramps, and impulses.
         for (const auto shape : {std::pair{1, 1}, {1, 9}, {10, 1}, {3, 5}, {32, 24}, {65, 49}}) {
             for (int pattern = 0; pattern < 3; ++pattern) {
@@ -37,7 +42,7 @@ int main() {
                         image(x, y) = pattern == 0 ? 0.375f : pattern == 1 ?
                             float((x * 13 + y * 7) % 101) / 100.0f : float(x == 0 && y == 0);
                 const Image before = image.copy();
-                for (int scale : {1, 2, 4, 8, 16}) {
+                for (int scale : scales) {
                     Image expected = reference_downsample(image, scale);
                     Image actual = alignment::kernels::downsample(image, scale);
                     if (actual.width() != expected.width() || actual.height() != expected.height())
@@ -52,7 +57,7 @@ int main() {
                             if (image(x, y) != before(x, y))
                                 throw std::runtime_error("input was modified");
                 }
-                for (int invalid : {-2, 0, 3, 6, 32, 64}) {
+                for (int invalid : {-2, 0, 3, 6}) {
                     bool rejected = false;
                     try { alignment::kernels::downsample(image, invalid); }
                     catch (const std::invalid_argument &) { rejected = true; }

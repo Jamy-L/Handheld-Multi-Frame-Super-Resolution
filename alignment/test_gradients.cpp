@@ -1,4 +1,5 @@
 #include "kernels.h"
+#include "gradient_variants.h"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -62,11 +63,9 @@ void check(int tile) {
 
 int main() {
   try {
-    check(8);
-    check(16);
-    check(32);
-    check(64);
-    for (int tile : {8, 16, 32, 64}) {
+    for (const auto &variant : alignment::kernels::detail::gradient_variants) {
+      const int tile = variant.tile_size;
+      check(tile);
       for (auto shape : {std::pair{tile - 1, tile}, {tile, tile - 1}, {1, 1}}) {
         bool rejected = false;
         try { alignment::kernels::precompute_reference(Image(shape.first, shape.second), tile); }
@@ -74,7 +73,7 @@ int main() {
         if (!rejected) throw std::runtime_error("image without a complete tile accepted");
       }
     }
-    for (int tile : {0, 4, 12, 128}) {
+    for (int tile : {0, -1}) {
       bool rejected = false;
       try { alignment::kernels::precompute_reference(Image(16, 16), tile); }
       catch (const std::invalid_argument &) { rejected = true; }

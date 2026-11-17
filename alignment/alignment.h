@@ -11,10 +11,15 @@ using Image = Halide::Runtime::Buffer<float>;
 struct Flow {
     Halide::Runtime::Buffer<float> dx;
     Halide::Runtime::Buffer<float> dy;
+    int tile_size;
+    int stride;
 
-    Flow(int tiles_x, int tiles_y) {
+    Flow(int tiles_x, int tiles_y, int tile_size, int stride)
+        : tile_size(tile_size), stride(stride) {
         if (tiles_x <= 0 || tiles_y <= 0)
             throw std::invalid_argument("flow must contain at least one tile");
+        if (tile_size <= 0 || stride <= 0)
+            throw std::invalid_argument("flow tile size and stride must be positive");
         dx = Halide::Runtime::Buffer<float>(tiles_x, tiles_y);
         dy = Halide::Runtime::Buffer<float>(tiles_x, tiles_y);
         dx.fill(0.0f);

@@ -91,11 +91,30 @@ class WrapperTests(unittest.TestCase):
             reference_builder(np.zeros((16, 16), np.float32), scale_factors=[2],
                               tile_sizes=[16, 16], search_radii=[1, 1], norm=["L1", "L2"])
 
-    def test_alignment_placeholder(self):
+    def test_block_matching_dispatch(self):
+        image = np.random.default_rng(123).random((64, 64), dtype=np.float32)
+        for tile in (8, 16, 32, 64):
+            for radius in (1, 4):
+                for norm in ("L1", "L2"):
+                    reference = alignment.build_reference_pyramid(
+                        image, scale_factors=[], tile_sizes=[tile], search_radii=[radius],
+                        norm=[norm], ica_iterations=3,
+                    )
+                    moving = alignment.build_moving_pyramid(
+                        image, scale_factors=[], tile_sizes=[tile], search_radii=[radius],
+                        norm=[norm], ica_iterations=3,
+                    )
+                    with self.subTest(tile=tile, radius=radius, norm=norm):
+                        flow = alignment.align(reference, moving)
+                        self.assertEqual(flow.shape, (64 // tile, 64 // tile, 2))
+                        self.assertEqual(flow.dtype, np.float32)
+                        np.testing.assert_array_equal(flow, 0)
+
+    def test_uncompiled_block_matching_variant(self):
         image = np.zeros((16, 16), np.float32)
-        reference = reference_builder(image)
-        moving = moving_builder(image)
-        with self.assertRaises(NotImplementedError):
+        reference = reference_builder(image, search_radii=[3])
+        moving = moving_builder(image, search_radii=[3])
+        with self.assertRaisesRegex(ValueError, "variant not compiled.*radius=3"):
             alignment.align(reference, moving)
 
     def test_alignment_validation(self):
@@ -111,18 +130,39 @@ class WrapperTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'options must match'):
             alignment.align(reference, mismatched)
 
-    def test_multilevel_alignment_reaches_coarsest_kernel(self):
-        image = np.zeros((129, 145), np.float32)
+    def test_multilevel_alignment(self):
+        image = np.random.default_rng(321).random((129, 145), dtype=np.float32)
         reference = alignment.build_reference_pyramid(
             image, scale_factors=[2, 4], tile_sizes=[32, 16, 8],
-            search_radii=[1, 2, 4], norm=["L1", "L2", "L2"], ica_iterations=3,
+            search_radii=[1, 4, 4], norm=["L1", "L2", "L2"], ica_iterations=3,
         )
         moving = alignment.build_moving_pyramid(
             image, scale_factors=[2, 4], tile_sizes=[32, 16, 8],
-            search_radii=[1, 2, 4], norm=["L1", "L2", "L2"], ica_iterations=3,
+            search_radii=[1, 4, 4], norm=["L1", "L2", "L2"], ica_iterations=3,
         )
-        with self.assertRaisesRegex(NotImplementedError, 'Halide alignment kernel'):
-            alignment.align(reference, moving)
+        flow = alignment.align(reference, moving)
+        self.assertEqual(flow.shape, (129 // 32, 145 // 32, 2))
+        self.assertEqual(flow.dtype, np.float32)
+        np.testing.assert_array_equal(flow, 0)
+
+    def test_multilevel_translation(self):
+        image = np.random.default_rng(10).random((128, 128), dtype=np.float32)
+        # moving(x + 3, y - 2) = reference(x, y), with repeated edge pixels.
+        moving_image = image[np.clip(np.arange(128) + 2, 0, 127)[:, None],
+                             np.clip(np.arange(128) - 3, 0, 127)[None, :]].copy()
+        for norm in ("L1", "L2"):
+            reference = alignment.build_reference_pyramid(
+                image, scale_factors=[2, 2], tile_sizes=[16, 16, 16],
+                search_radii=[4, 4, 4], norm=[norm, norm, norm], ica_iterations=3,
+            )
+            moving = alignment.build_moving_pyramid(
+                moving_image, scale_factors=[2, 2], tile_sizes=[16, 16, 16],
+                search_radii=[4, 4, 4], norm=[norm, norm, norm], ica_iterations=3,
+            )
+            with self.subTest(norm=norm):
+                flow = alignment.align(reference, moving)
+                np.testing.assert_array_equal(flow[..., 0], 3)
+                np.testing.assert_array_equal(flow[..., 1], -2)
 
 
 if __name__ == '__main__':
