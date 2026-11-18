@@ -98,14 +98,14 @@ def update_snr_config(config: Config, snr: float):
         
     config.alignment.tile_sizes = alignment_tile_sizes(config)
 
-    if config.merging.kernel.k_detail == SNR_BASED:
-        config.merging.kernel.k_detail = lerp(snr, [6, 30], [0.33, 0.25])
+    if config.merging.kernel.sigma_detail == SNR_BASED:
+        config.merging.kernel.sigma_detail = lerp(snr, [6, 30], [0.33, 0.25])
     if config.merging.kernel.k_denoise == SNR_BASED:
         config.merging.kernel.k_denoise = lerp(snr, [6, 30], [5.0, 3.0])
     if config.merging.kernel.D_th == SNR_BASED:
-        config.merging.kernel.D_th = lerp(snr, [6, 30], [0.81, 0.71])
+        config.merging.kernel.D_th = lerp(snr, [6, 30], [1e-2, 1e-3])
     if config.merging.kernel.D_tr == SNR_BASED:
-        config.merging.kernel.D_tr = lerp(snr, [6, 30], [1.24, 1])
+        config.merging.kernel.D_tr = lerp(snr, [6, 30], [1e-2, 1e-3])
 
 
 def lerp(x, x_range, y_range):

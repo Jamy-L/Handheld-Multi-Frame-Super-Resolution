@@ -3,6 +3,7 @@ import warnings
 from pathlib import Path
 
 import numpy as np
+import slangpy as spy
 from numba import cuda
 from numpy.typing import NDArray
 
@@ -14,7 +15,15 @@ from .merge import merge
 from .noise_lut import load_noise_lut
 from .params import runtime_config, sanitize_config, update_snr_config
 from .robustness import compute_robustness, init_robustness
-from .utils import DEFAULT_NUMPY_FLOAT_TYPE, add, divide, getTime, timer, FINAL_TILE_SIZE, FINAL_TILE_STRIDE
+from .utils import (
+    DEFAULT_NUMPY_FLOAT_TYPE,
+    FINAL_TILE_SIZE,
+    FINAL_TILE_STRIDE,
+    add,
+    divide,
+    getTime,
+    timer,
+)
 from .utils_dng import expand_noise_profile_to_rgbg, load_dng_burst
 from .utils_image import (
     apply_orientation,
@@ -95,6 +104,26 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
 
     #### Moving to GPU
     cuda_ref_img = cuda.to_device(ref_img)
+    device = spy.current_device()
+    tx_ref_img = device.create_texture(
+        type=spy.TextureType.texture_2d,
+        width=ref_img.shape[1],
+        height=ref_img.shape[0],
+        format=spy.Format.r32_float,
+        mip_count=1,
+        usage=(
+            spy.TextureUsage.shader_resource
+        ),
+        sampler = device.create_sampler(
+            min_filter=spy.TextureFilteringMode.point,
+            mag_filter=spy.TextureFilteringMode.point,
+            mip_filter=spy.TextureFilteringMode.point,
+            address_u=spy.TextureAddressingMode.clamp_to_edge,
+            address_v=spy.TextureAddressingMode.clamp_to_edge,
+        ),
+        data=ref_img,
+        label="ref_image",
+    )
 
     # This running buffer is for the image being processed
     stream = cuda.stream()
@@ -118,17 +147,17 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
 
     #### Local stats estimation
     if config.robustness.enabled:
-        ref_local_means, ref_local_stds = init_robustness_(cuda_ref_img, config)
+        tx_local_stats = init_robustness_(tx_ref_img, config)
     else:
-        ref_local_means, ref_local_stds = None, None
+        tx_local_stats = None
 
     
     accumulated_r = None
     if config.robustness.save_mask and config.robustness.enabled:
-        assert ref_local_means
-        accumulated_r = cuda.to_device(np.zeros(ref_local_means.shape[1:]))
+        assert tx_local_stats
+        accumulated_r = cuda.to_device(np.zeros((tx_local_stats.height, tx_local_stats.width)))
 
-    native_imshape_y, native_imshape_x = cuda_ref_img.shape
+    native_imshape_y, native_imshape_x = ref_img.shape
     output_size = (
         round(config.scale*native_imshape_y),
         round(config.scale*native_imshape_x))
@@ -137,7 +166,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
     den = cuda.to_device(np.zeros((*output_size, 3), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
 
     #### Ref kernel estimation
-    cuda_kernels = estimate_kernels_(cuda_ref_img, config)
+    cuda_kernels = estimate_kernels_(tx_ref_img, config)
     
     ##### Merge ref
     dummy_alignment = cuda.to_device(np.zeros(((ref_grey.shape[0] - FINAL_TILE_SIZE) // FINAL_TILE_STRIDE + 1,
@@ -306,7 +335,16 @@ def process(burst_path: Path | str, config: Config):
     
     
     #### Running the handheld pipeline
-    hr_output, debug_dict = main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), config)
+    import slangpy as spy
+    HERE = Path(__file__).resolve().parent
+    backend = spy.DeviceType.vulkan
+    device = spy.Device(
+        type=backend,
+        adapter_luid=None,
+        compiler_options={"include_paths": [HERE]},
+    )
+    with device:
+        hr_output, debug_dict = main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), config)
 
     if np.any(np.isnan(hr_output)):
         mask = np.any(np.isnan(hr_output), axis=-1)

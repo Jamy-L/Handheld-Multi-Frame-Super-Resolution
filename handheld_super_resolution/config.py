@@ -93,12 +93,12 @@ class RobustnessConfig:
 
 @dataclass
 class KernelConfig:
-    k_detail: SNRBasedFloat = SNR_BASED
+    sigma_detail: SNRBasedFloat = SNR_BASED
     k_denoise: SNRBasedFloat = SNR_BASED
     D_th: SNRBasedFloat = SNR_BASED
     D_tr: SNRBasedFloat = SNR_BASED
     k_stretch: float = 4
-    k_shrink: float = 2
+    k_shrink: float = 2.2
 
 
 @dataclass

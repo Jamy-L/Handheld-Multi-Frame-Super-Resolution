@@ -1,33 +1,33 @@
-# -*- coding: utf-8 -*-
 """
 Created on Sat Aug  6 17:26:48 2022
 
-This script contains the implementation of Alg. 5: ComputeKernelCovariance, 
+This script contains the implementation of Alg. 5: ComputeKernelCovariance,
 where the merge kernels are estimated
 
 
 @author: jamyl
 """
 
-import time
 import math
+import time
+from pathlib import Path
 
-import numpy as np
+import slangpy as spy
 from numba import cuda
-from numba.cuda.cudadrv.devicearray import DeviceNDArray
-import torch as th
-import torch.nn.functional as F
 
-from .linalg import get_eigen_elmts_2x2
-from .utils import clamp, DEFAULT_CUDA_FLOAT_TYPE, DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_TORCH_FLOAT_TYPE, DEFAULT_THREADS, getTime, timer
-from .utils_image import average_bayer_quads, gat, preprocess
 from .config import Config
-
+from .linalg import get_eigen_elmts_2x2
+from .utils import (
+    DEFAULT_CUDA_FLOAT_TYPE,
+    clamp,
+    getTime,
+)
 
 SEL_HARD_THRESHOLD = 0
 SEL_LINEAR = 1
 
-def estimate_kernels(img: DeviceNDArray, config: Config):
+
+def estimate_kernels(img: spy.Texture, config: Config):
     """
     Implementation of Alg. 5: ComputeKernelCovariance
     Returns the kernels covariance matrices for the frame J_n, sampled at the
@@ -48,26 +48,17 @@ def estimate_kernels(img: DeviceNDArray, config: Config):
     covs : device Array[imshape_y//2, imshape_x//2, 2, 2]
         Covariance matrices Omega_n, sampled at the center of each bayer quad.
 
-    """    
-    bayer_mode = config.mode=='bayer'
+    """
+    bayer_mode = config.mode == "bayer"
     verbose_3 = config.verbose >= 3
+    t1 = 0.
 
-    gat_ = timer(gat, verbose_3, end_s="- Variance Stabilized")
-    average_bayer_quads_ = timer(average_bayer_quads, verbose_3, end_s="- Decimated Image")
-
-    k_detail = config.merging.kernel.k_detail
-    k_denoise = config.merging.kernel.k_denoise
-    D_th = config.merging.kernel.D_th
-    D_tr = config.merging.kernel.D_tr
-    k_stretch = config.merging.kernel.k_stretch
-    k_shrink = config.merging.kernel.k_shrink
-    
-    if config.merging.selection_law == 'hard_threshold':
-        selection_law = SEL_HARD_THRESHOLD
-    elif config.merging.selection_law == 'linear':
-        selection_law = SEL_LINEAR
-    else:
-        raise ValueError(f"Unknown selection law: {config.merging.selection_law}")
+    sigma_detail = float(config.merging.kernel.sigma_detail)
+    k_denoise = float(config.merging.kernel.k_denoise)
+    D_th = float(config.merging.kernel.D_th)
+    D_tr = float(config.merging.kernel.D_tr)
+    k_stretch = float(config.merging.kernel.k_stretch)
+    k_shrink = float(config.merging.kernel.k_shrink)
 
     alpha = config.noise_model.alpha
     beta = config.noise_model.beta
@@ -75,186 +66,41 @@ def estimate_kernels(img: DeviceNDArray, config: Config):
     if verbose_3:
         cuda.synchronize()
         t1 = time.perf_counter()
-    
-    #__ Preprocessing
-    if config.merging.preprocessing is None:
-        pass
-    elif config.merging.preprocessing == "gat":
-        assert alpha is not None and beta is not None, "alpha and beta must be provided for GAT"
-        img = gat_(img, alpha, beta)
-    else:
-        img_ = th.as_tensor(img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
-        img_ = preprocess(img_, config.merging.preprocessing)
-        img = cuda.as_cuda_array(img_)
 
-    #__ Decimate to grey
-    if bayer_mode : 
-        img_grey = average_bayer_quads_(img)
-    
-    else :
-        img_grey = img # no need to copy now, they will be copied to gpu later.
-        
-    grey_imshape_y, grey_imshape_x = grey_imshape = img_grey.shape
-    
-        
-    #__ Computing grads
-    # Horizontal filters
-    th_grey_img = th.as_tensor(img_grey, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")[None, None]
-    
-    
-    grad_kernel1 = np.array([[[[-0.5, 0.5]]],
-                              
-                              [[[ 0.5, 0.5]]]])
-    grad_kernel1 = th.as_tensor(grad_kernel1, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
-    
-    # Vertical filters
-    grad_kernel2 = np.array([[[[0.5], 
-                                [0.5]]],
-                              
-                              [[[-0.5], 
-                                [0.5]]]])
-    grad_kernel2 = th.as_tensor(grad_kernel2, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
+    device = spy.current_device()
 
+    precision_matrices = device.create_texture(
+        width=img.width // 2,
+        height=img.height // 2,
+        format=spy.Format.rgba32_float,
+        usage=spy.TextureUsage.unordered_access | spy.TextureUsage.shader_resource,
+    )
+    shader = Path(__file__).resolve().parents[1] / "shaders" / "covariance.slang"
+    program = device.load_program(str(shader), ["computeCovariance"])
+    kernel = device.create_compute_kernel(program)
+    kernel.dispatch(
+        thread_count=[precision_matrices.width, precision_matrices.height, 1],
+        vars={
+            "var_noise": 1e-4,  # TODO Placeholder until calibrated noise variance is wired in.
+            "covariance_parameters1": spy.float4(
+                k_shrink / sigma_detail,  # 1 / sigma_shrink
+                1.0 / (k_stretch * sigma_detail),  # 1 / sigma_stretched
+                D_th,  # gradient clip
+                1.0 / sigma_detail,  # 1/ sigma_base (or sigma_detail)
+            ),
+            "covariance_parameters2": spy.float4(
+                1.0 / (sigma_detail * k_denoise),  # 1 / (sigma_blurry)
+                1.0 / D_tr,  # Gradient transition
+                0.0,
+                0.0,
+            ),  # Dummy padding
+        },
+        sourceRaw=img,
+        out=precision_matrices,
+    )
 
-    tmp = F.conv2d(th_grey_img, grad_kernel1)
-    th_full_grad = F.conv2d(tmp, grad_kernel2, groups=2)
-    # The default padding mode reduces the shape of grey_img of 1 pixel in each
-    # direction, as expected
-    
-    cuda_full_grads = cuda.as_cuda_array(th_full_grad.squeeze().transpose(0,1).transpose(1, 2))
-    # shape [y, x, 2]
-    if verbose_3:
-        cuda.synchronize()
-        t1 = getTime(t1, "- Gradients computed")
-        
-    covs = cuda.device_array(grey_imshape + (2,2), DEFAULT_NUMPY_FLOAT_TYPE)
-    is_iso = config.merging.kernel_type == "iso"
-
-    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
-    blockspergrid_x = math.ceil(grey_imshape_x/threadsperblock[1])
-    blockspergrid_y = math.ceil(grey_imshape_y/threadsperblock[0])
-    blockspergrid = (blockspergrid_x, blockspergrid_y)
-    
-    cuda_estimate_kernel[blockspergrid, threadsperblock](cuda_full_grads,
-                                    k_detail, k_denoise, D_th, D_tr, k_stretch, k_shrink,
-                                    covs, selection_law, is_iso)  
     if verbose_3:
         cuda.synchronize()
         t1 = getTime(t1, "- Covariances estimated")
-    
-    return covs
 
-@cuda.jit
-def cuda_estimate_kernel(full_grads,
-                         k_detail, k_denoise,
-                         D_th, D_tr,
-                         k_stretch, k_shrink,
-                         covs,
-                         selection_law, is_iso):
-    pixel_idx, pixel_idy = cuda.grid(2)
-    imshape_y, imshape_x, _, _ = covs.shape
-
-    if not(0 <= pixel_idy < imshape_y and
-           0 <= pixel_idx < imshape_x) :
-        return
-
-    if is_iso:
-        covs[pixel_idy, pixel_idx, 0, 0] = k_detail
-        covs[pixel_idy, pixel_idx, 0, 1] = 0.0
-        covs[pixel_idy, pixel_idx, 1, 0] = 0.0
-        covs[pixel_idy, pixel_idx, 1, 1] = k_detail
-        return
-    
-    structure_tensor = cuda.local.array((2, 2), DEFAULT_CUDA_FLOAT_TYPE)
-    structure_tensor[0, 0] = 0
-    structure_tensor[0, 1] = 0
-    structure_tensor[1, 0] = 0
-    structure_tensor[1, 1] = 0
-    
-
-    for i in range(0, 2):
-        for j in range(0, 2):
-            x = pixel_idx - 1 + j
-            y = pixel_idy - 1 + i
-            
-            if (0 <= y < full_grads.shape[0] and
-                0 <= x < full_grads.shape[1]):
-                
-                gx = full_grads[y, x, 0]
-                gy = full_grads[y, x, 1]
-
-                structure_tensor[0, 0] += gx * gx
-                structure_tensor[1, 0] += gx * gy
-                structure_tensor[0, 1] += gx * gy
-                structure_tensor[1, 1] += gy * gy
-    
-    l = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-    e1 = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-    e2 = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-    k = cuda.local.array(2, dtype=DEFAULT_CUDA_FLOAT_TYPE)
-
-    get_eigen_elmts_2x2(structure_tensor, l, e1, e2)
-
-    compute_k(l[0], l[1], k, k_detail, k_denoise, D_th, D_tr, k_stretch,
-        k_shrink, selection_law)
-
-    k_1_sq = k[0]*k[0]
-    k_2_sq = k[1]*k[1]
-    
-    covs[pixel_idy, pixel_idx, 0, 0] = k_1_sq*e1[0]*e1[0] + k_2_sq*e2[0]*e2[0]
-    covs[pixel_idy, pixel_idx, 0, 1] = k_1_sq*e1[0]*e1[1] + k_2_sq*e2[0]*e2[1] 
-    covs[pixel_idy, pixel_idx, 1, 0] = k_1_sq*e1[0]*e1[1] + k_2_sq*e2[0]*e2[1]
-    covs[pixel_idy, pixel_idx, 1, 1] = k_1_sq*e1[1]*e1[1] + k_2_sq*e2[1]*e2[1]
-
-    
-@cuda.jit(device=True)
-def compute_k(l1, l2, k, k_detail, k_denoise, D_th, D_tr, k_stretch, k_shrink, selection_law):
-    """
-    Computes k_1 and k_2 based on lambda1, lambda2 and the constants.
-
-    Parameters
-    ----------
-    l1 : float
-        lambda1 (dominant eigen value)
-    l2 : float
-        lambda2 : second eigenvalue
-    k : Array[2]
-        empty vector where k_1 and k_2 will be stored
-    k_detail : float
-    k_denoise : float
-    D_th : float
-    D_tr : float
-    k_stretch : float
-    k_shrink : float
-        Parameters to compute k_1 and k_2, all detailed in the article.
-        
-
-
-    """
-    A = 1 + math.sqrt((l1 - l2)/(l1 + l2))
-    D = clamp(1 - math.sqrt(l1)/D_tr + D_th, 0, 1)
-
-    if selection_law == SEL_HARD_THRESHOLD:
-        k1, k2 = hard_threshold(A, k_shrink, k_stretch)
-    else: # LINEAR
-        k1, k2 = linear(A, k_shrink, k_stretch)
-    
-    k[0] = k_detail * ((1-D)*k1 + D*k_denoise)
-    k[1] = k_detail * ((1-D)*k2 + D*k_denoise)
-
-@cuda.jit(device=True)
-def hard_threshold(A, k_shrink, k_stretch):
-    if A > 1.95:
-        k1 = 1/k_shrink
-        k2 = k_stretch
-    else: # When A is Nan, we fall back to this condition
-        k1 = 1
-        k2 = 1
-    return k1, k2
-
-@cuda.jit(device=True)
-def linear(A, k_shrink, k_stretch):
-    k1 = (2-A) + (A-1)/k_shrink 
-    k2 = (2-A) + (A-1)*k_stretch
-    return k1, k2
-
+    return precision_matrices

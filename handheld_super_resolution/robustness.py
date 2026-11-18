@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Created on Fri Sep  9 09:00:17 2022
 
@@ -11,26 +10,36 @@ This script contains :
 
 @author: jamyl
 """
-import time
 import math
+import time
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from numba import cuda, uint8
-import torch
-from typing import Any, Optional, Tuple, TYPE_CHECKING
+from numba import cuda
 
 if TYPE_CHECKING:
     from numba.cuda.cudadrv.devicearray import DeviceNDArray
 else:
     DeviceNDArray = Any
 
-from .utils import getTime, DEFAULT_CUDA_FLOAT_TYPE,DEFAULT_NUMPY_FLOAT_TYPE, DEFAULT_THREADS, clamp, timer, FINAL_TILE_SIZE, FINAL_TILE_STRIDE, FINAL_TILE_ORIGIN
-from .utils_image import dogson_biquadratic_kernel, dogson_quadratic_kernel
+import slangpy as spy
+
 from .config import Config
 from .debug_writer import DebugWriter
+from .utils import (
+    DEFAULT_CUDA_FLOAT_TYPE,
+    DEFAULT_NUMPY_FLOAT_TYPE,
+    DEFAULT_THREADS,
+    FINAL_TILE_ORIGIN,
+    FINAL_TILE_STRIDE,
+    clamp,
+    timer,
+)
+from .utils_image import dogson_quadratic_kernel
 
 
-def init_robustness(ref_img: DeviceNDArray, config: Config):
+def init_robustness(ref_img: spy.Texture, config: Config):
     """
     Initialiazes the robustness etimation procedure by
     computing the local stats of the reference image
@@ -53,29 +62,17 @@ def init_robustness(ref_img: DeviceNDArray, config: Config):
     """
     verbose_3 = config.verbose >= 3
     
-    compute_guide_image_ = timer(compute_guide_image, verbose_3, " - Decimating images to RGB", ' - Image decimated')
     compute_local_stats_ = timer(compute_local_stats, verbose_3, end_s=' - Local stats estimated')
     
-    imshape_y, imshape_x = ref_img.shape
-
-    bayer_mode = (config.mode == 'bayer')
-
-    # Computing guide image
-    if bayer_mode:
-        guide_ref_img = compute_guide_image_(ref_img)
-    else:
-        # Numba friendly code to add 1 channel
-        guide_ref_img = ref_img.reshape((1, imshape_y, imshape_x)) 
-
-    local_means, local_stds = compute_local_stats_(guide_ref_img)
+    local_stats = compute_local_stats_(ref_img)
     
-    return local_means, local_stds
+    return local_stats
     
     
 def compute_robustness(comp_img: DeviceNDArray, ref_local_means: DeviceNDArray, ref_local_var: DeviceNDArray,
                        flows: DeviceNDArray,
-                       noise_model: Tuple[DeviceNDArray, DeviceNDArray], config: Config,
-                       debug_writer: Optional[DebugWriter] = None) -> DeviceNDArray:
+                       noise_model: tuple[DeviceNDArray, DeviceNDArray], config: Config,
+                       debug_writer: DebugWriter | None = None) -> DeviceNDArray:
     """
     this is the implementation of Algorithm 6: ComputeRobustness
     Returns the robustnesses of the compared image J_n (n>1), based on the
@@ -161,112 +158,24 @@ def compute_robustness(comp_img: DeviceNDArray, ref_local_means: DeviceNDArray, 
     return r
 
 
-def compute_guide_image(raw_img: DeviceNDArray):
-    """
-    This is the implementation of Algorithm 7: ComputeGuideImage
-    Return the guide image G associated with the raw frame J
+def compute_local_stats(raw_img: spy.Texture) -> spy.Texture:
+    device = spy.current_device()
 
-    Parameters
-    ----------
-    raw_img : device Array[imshape_y, imshape_x]
-        Raw frame J_n.
-
-    Returns
-    -------
-    guide_img : device Array[3, imshape_y//2, imshape_x//2]
-        guide image.
-
-    """
-    imshape_y, imshape_x = raw_img.shape
-    guide_imshape_y, guide_imshape_x = imshape_y//2, imshape_x//2
-    guide_img = cuda.device_array((3, guide_imshape_y, guide_imshape_x), DEFAULT_NUMPY_FLOAT_TYPE)
-    
-    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
-    blockspergrid_x = math.ceil(guide_imshape_x/threadsperblock[1])
-    blockspergrid_y = math.ceil(guide_imshape_y/threadsperblock[0])
-    blockspergrid = (blockspergrid_x, blockspergrid_y)
-            
-    cuda_compute_guide_image[blockspergrid, threadsperblock](raw_img, guide_img)
-    
-    return guide_img
-    
-@cuda.jit
-def cuda_compute_guide_image(raw_img, guide_img):
-    tx, ty = cuda.grid(2)
-    _, h, w = guide_img.shape
-    
-    if not (0 <= ty < h and
-            0 <= tx < w):
-        return
-
-    guide_img[0, ty, tx] = math.sqrt(max(raw_img[2*ty, 2*tx], 0))
-    guide_img[1, ty, tx] = math.sqrt(max(0.5*(raw_img[2*ty, 2*tx+1] + raw_img[2*ty+1, 2*tx]), 0))
-    guide_img[2, ty, tx] = math.sqrt(max(raw_img[2*ty+1, 2*tx+1], 0))
-
-def compute_local_stats(guide_img: DeviceNDArray):
-    """
-    Implementation of Algorithm 8: ComputeLocalStatistics
-    Computes the mean color and variance associated for each 3 by 3 patches of
-    the guide image G_n.
-
-    Parameters
-    ----------
-    guide_img : device Array[channels, guide_imshape_y, guide_imshape_x]
-        Guide image G_n. 
-        
-    Returns
-    -------
-    ref_local_means : device Array[guide_imshape_y, guide_imshape_x, channels]
-        Array that contains the local mean for every position of the guide image.
-    ref_local_stds : device Array[guide_imshape_y, guide_imshape_x, channels]
-        Array that contains the local variance sigma² for every position of the guide image.
-
-
-    """
-    n_channels, *guide_imshape = guide_img.shape
-    if n_channels == 1:
-        mean = cuda.device_array((1, *guide_imshape), DEFAULT_NUMPY_FLOAT_TYPE)
-        var = cuda.device_array((1, *guide_imshape), DEFAULT_NUMPY_FLOAT_TYPE)
-    elif n_channels == 3:
-        mean = cuda.device_array((3, *guide_imshape), DEFAULT_NUMPY_FLOAT_TYPE)
-        var = cuda.device_array((3, *guide_imshape), DEFAULT_NUMPY_FLOAT_TYPE)
-    else: 
-        raise ValueError("Incoherent number of channel : {}".format(n_channels))
-    
-    threadsperblock = (1, DEFAULT_THREADS, DEFAULT_THREADS) # maximum, we may take less
-    blockspergrid_x = math.ceil(guide_imshape[1]/threadsperblock[2])
-    blockspergrid_y = math.ceil(guide_imshape[0]/threadsperblock[1])
-    blockspergrid = (n_channels, blockspergrid_x, blockspergrid_y)
-    
-    cuda_compute_local_stats[blockspergrid, threadsperblock](guide_img, mean, var)
-    
-    return mean, var
-    
-    
-@cuda.jit
-def cuda_compute_local_stats(guide_img, mean, var):
-    _, guide_imshape_y, guide_imshape_x = guide_img.shape
-    
-    channel, idx, idy = cuda.grid(3)
-    if not(0 <= idy < guide_imshape_y and
-           0 <= idx < guide_imshape_x):
-        return
-
-    mean_ = 0
-    var_ = 0
-    for i in range(-1, 2):
-        for j in range(-1, 2):
-            y = clamp(idy + i, 0, guide_imshape_y-1)
-            x = clamp(idx + j, 0, guide_imshape_x-1)
-
-            color = guide_img[channel, y, x]
-            mean_ += color
-            var_ += color * color
-
-    # normalizing
-    mean_ /= 9
-    mean[channel, idy, idx] = mean_
-    var[channel, idy, idx] = var_ / 9 - mean_ * mean_
+    output = device.create_texture(
+        width=raw_img.width // 2,
+        height=raw_img.height // 2,
+        format=spy.Format.rgba32_float,
+        usage=spy.TextureUsage.unordered_access | spy.TextureUsage.shader_resource,
+    )
+    shader = Path(__file__).resolve().parents[1] / "shaders" / "guide_image.slang"
+    program = device.load_program(str(shader), ["computeGuide"])
+    kernel = device.create_compute_kernel(program)
+    kernel.dispatch(
+        thread_count=[output.width, output.height, 1],
+        sourceRaw=raw_img,
+        out=output,
+    )
+    return output
 
 def warp_stats(local_stats: DeviceNDArray, tile_size: int, flow: DeviceNDArray):
     """

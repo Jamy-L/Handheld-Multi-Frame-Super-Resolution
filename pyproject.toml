@@ -20,6 +20,7 @@ dependencies = [
     "tyro",
     "imageio",
     "halide>=21.0.0",
+    "slangpy>=0.43.1",
 ]
 
 [project.scripts]
