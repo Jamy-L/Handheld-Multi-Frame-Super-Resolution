@@ -8,7 +8,6 @@ where the merge kernels are estimated
 @author: jamyl
 """
 
-import math
 import time
 from pathlib import Path
 
@@ -16,10 +15,7 @@ import slangpy as spy
 from numba import cuda
 
 from .config import Config
-from .linalg import get_eigen_elmts_2x2
 from .utils import (
-    DEFAULT_CUDA_FLOAT_TYPE,
-    clamp,
     getTime,
 )
 
@@ -27,7 +23,7 @@ SEL_HARD_THRESHOLD = 0
 SEL_LINEAR = 1
 
 
-def estimate_kernels(img: spy.Texture, config: Config):
+def estimate_precision_matrices(img: spy.Texture, config: Config):
     """
     Implementation of Alg. 5: ComputeKernelCovariance
     Returns the kernels covariance matrices for the frame J_n, sampled at the
@@ -49,9 +45,8 @@ def estimate_kernels(img: spy.Texture, config: Config):
         Covariance matrices Omega_n, sampled at the center of each bayer quad.
 
     """
-    bayer_mode = config.mode == "bayer"
     verbose_3 = config.verbose >= 3
-    t1 = 0.
+    t1 = 0.0
 
     sigma_detail = float(config.merging.kernel.sigma_detail)
     k_denoise = float(config.merging.kernel.k_denoise)

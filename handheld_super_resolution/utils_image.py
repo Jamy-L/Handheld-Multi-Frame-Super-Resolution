@@ -76,9 +76,6 @@ def compute_grey_images(image: NDArray, method: GrayscaleMethod) -> NDArray[np.f
                           kernel, axis=1, mode="nearest")
     elif method is GrayscaleMethod.DEMOSAICING:
         gray = demosaic_to_grey(image)
-        gray = (
-            gray[::2, ::2] + gray[::2, 1::2] + gray[1::2, ::2] + gray[1::2, 1::2]
-        ) * 0.25
     else:
         raise ValueError(f"Unknown grayscale method: {method}")
     # Demosaicing can overshoot the normalized sensor range; the native API
