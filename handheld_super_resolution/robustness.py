@@ -13,15 +13,8 @@ This script contains :
 
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
 
 import numpy as np
-
-if TYPE_CHECKING:
-    from numba.cuda.cudadrv.devicearray import DeviceNDArray
-else:
-    DeviceNDArray = Any
-
 import slangpy as spy
 
 from .config import Config
@@ -69,7 +62,7 @@ def compute_robustness(
     flow: spy.Texture,
     flow_offset_uv: tuple[float, float],
     flow_scale_uv: tuple[float, float],
-    noise_model: tuple[DeviceNDArray, DeviceNDArray],
+    noise_estimatss: spy.Texture,
     config: Config,
     debug_writer: DebugWriter | None = None,
 ) -> spy.Texture:
@@ -108,8 +101,6 @@ def compute_robustness(
         compute_rejection_coeff, verbose_3, end_s=" - Rejection coeffs evaluated"
     )
 
-    cuda_sigma_sq_curve, cuda_d_sq_curve = noise_model
-
     # Computing guide image
     local_stats = compute_local_stats_(comp_img)
 
@@ -123,17 +114,41 @@ def compute_robustness(
         upper = std[np.isfinite(std)].max(initial=0.0)
         debug_writer.write_scalar("guide_std", std, value_range=(0.0, upper or 1.0))
 
-    rejection_coeff = compute_rejection_coeff_(
+    rejection_mask = compute_rejection_coeff_(
         ref_local_stats, local_stats, flow, flow_offset_uv, flow_scale_uv, config
     )
 
     if debug_writer is not None:
-        r = rejection_coeff.to_numpy()
+        r = rejection_mask.to_numpy()
         debug_writer.write_scalar("robustness", r, value_range=(0.0, 1.0))
 
-    # TODO mask dilation here
-    #
-    return rejection_coeff
+    rejection_mask = mask_dilation(rejection_mask, config)
+
+    if debug_writer is not None:
+        r = rejection_mask.to_numpy()
+        debug_writer.write_scalar("robustness_dilated", r, value_range=(0.0, 1.0))
+
+    return rejection_mask
+
+
+def mask_dilation(rejection_mask: spy.Texture, config: Config) -> spy.Texture:
+    device = spy.current_device()
+    output = device.create_texture(
+        width=rejection_mask.width,
+        height=rejection_mask.height,
+        format=rejection_mask.format,
+        usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
+    )
+    shader = Path(__file__).resolve().parents[1] / "shaders" / "5x5min.slang"
+    program = device.load_program(str(shader), ["min5x5"])
+    kernel = device.create_compute_kernel(program)
+    kernel.dispatch(
+        thread_count=[output.width, output.height, 1],
+        source=rejection_mask,
+        out=output,
+    )
+
+    return output
 
 
 def compute_local_stats(raw_img: spy.Texture) -> spy.Texture:
