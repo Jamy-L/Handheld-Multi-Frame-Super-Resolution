@@ -163,7 +163,9 @@ def main(
 
     if config.robustness.enabled and config.robustness.noise_correction:
         lut_path = config.noise_model.lut_path
-        assert lut_path is not None, "robustness noise correction requires --noise-model.lut-path PATH"
+        assert lut_path is not None, (
+            "robustness noise correction requires --noise-model.lut-path PATH"
+        )
         noise_lut, noise_offset_uv, noise_scale_uv = load_noise_lut(
             device, lut_path, config.noise_model.alpha, config.noise_model.beta
         )
@@ -225,10 +227,13 @@ def main(
     )
 
     #### Ref covariance estimation
-    precision_matrices = estimate_precision_matrices_(tx_ref_img, noise_lut, noise_offset_uv, noise_scale_uv, config)
+    precision_matrices = estimate_precision_matrices_(
+        tx_ref_img, noise_lut, noise_offset_uv, noise_scale_uv, config
+    )
     if debug_writer is not None:
-        debug_writer.write_precision_matrix("ref_precision", precision_matrices.to_numpy())
-
+        debug_writer.write_precision_matrix(
+            "ref_precision", precision_matrices.to_numpy()
+        )
 
     ##### Merge ref
     flow_height = (ref_grey.shape[0] - FINAL_TILE_SIZE) // FINAL_TILE_STRIDE + 1
@@ -349,7 +354,9 @@ def main(
         )
 
         if debug_writer is not None:
-            debug_writer.write_precision_matrix("precision", precision_matrices.to_numpy())
+            debug_writer.write_precision_matrix(
+                "precision", precision_matrices.to_numpy()
+            )
 
         #### Merging
         merge_(
@@ -456,7 +463,6 @@ def process(burst_path: Path | str, config: Config):
     if verbose_1:
         print(f"\nRuntime configuration:\n{config.dump()}\n")
 
-
     #### Running the handheld pipeline
     import slangpy as spy
 
@@ -518,9 +524,7 @@ def process(burst_path: Path | str, config: Config):
 
 
 def prepare_flow(
-    texture: spy.Texture,
-    flow: NDArray[np.float32],
-    guide_imshape: tuple[int, int]
+    texture: spy.Texture, flow: NDArray[np.float32], guide_imshape: tuple[int, int]
 ) -> None:
     if flow.shape != (texture.height, texture.width, 2):
         raise ValueError("Flow must match the texture dimensions and have two channels")
@@ -533,9 +537,9 @@ def prepare_flow(
     filtered_flow = median_filter(flow_uv, size=(3, 3, 1), mode="nearest")
 
     # Filter only the spatial axes, with the outermost tiles repeated at the edges.
-    spread = maximum_filter(filtered_flow, size=(3, 3, 1), mode="nearest") - minimum_filter(
+    spread = maximum_filter(
         filtered_flow, size=(3, 3, 1), mode="nearest"
-    )
+    ) - minimum_filter(filtered_flow, size=(3, 3, 1), mode="nearest")
     data = np.zeros((texture.height, texture.width, 4), dtype=np.float32)
     data[..., :2] = filtered_flow
     data[..., 2] = np.hypot(spread[..., 0], spread[..., 1])

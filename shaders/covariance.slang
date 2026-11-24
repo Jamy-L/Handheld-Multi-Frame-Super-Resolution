@@ -45,8 +45,9 @@ void analyzeStructTensor(float3 tensor, float var_noise, out float2 e1, out floa
     strength = sqrt(l1);
 }
 
-float3 buildPrecisionMatrix(float strength, float coherence, float2 e1, float2 e2)
+float3 buildPrecisionMatrix(float strength, float coherence, float2 e1, float2 e2, float green_diff)
 {
+    // strength = max(strength, green_diff);
     float inv_sigma_shrink = covariance_parameters1.x;
     float inv_sigma_stretch = covariance_parameters1.y;
     float inv_sigma_base = covariance_parameters1.w;
@@ -83,6 +84,7 @@ void computeCovariance(uint3 tid: SV_DispatchThreadID, Texture2D<float> sourceRa
     int2 outTexel = int2(tid.xy);
     float luma[3][3];
     float meanLuma = 0.0;
+    float green_diff =0.0;
 
     for (int y = -1; y <= 1; ++y)
     {
@@ -99,6 +101,7 @@ void computeCovariance(uint3 tid: SV_DispatchThreadID, Texture2D<float> sourceRa
             luma[y + 1][x + 1] = 0.25 * (rggb.x + rggb.y + rggb.z + rggb.w);
             float weight = (x == 0 ? 2.0 : 1.0) * (y == 0 ? 2.0 : 1.0) / 16.0;
             meanLuma += weight * luma[y + 1][x + 1];
+            green_diff += abs(g1-g2) * weight;
         }
     }
 
@@ -121,8 +124,10 @@ void computeCovariance(uint3 tid: SV_DispatchThreadID, Texture2D<float> sourceRa
     float strength, coherence;
     float2 e1, e2;
     float2 noiseUV = (float2(meanLuma, 1.0) - noise_offset_uv) * noise_scale_uv;
-    float var_noise = noise_lut.SampleLevel(noiseSampler, noiseUV, 0.0).g;
-    analyzeStructTensor(structTensor, var_noise, e1, e2, strength, coherence);
-    float3 precisionMatrix = buildPrecisionMatrix(strength, coherence, e1, e2);
+    float4 noiseParam = noise_lut.SampleLevel(noiseSampler, noiseUV, 0.0);
+    float var_noise_luma = noiseParam.x;
+    green_diff *= green_diff / (green_diff + noiseParam.y); // The noise-induced var for green diff
+    analyzeStructTensor(structTensor, var_noise_luma, e1, e2, strength, coherence);
+    float3 precisionMatrix = buildPrecisionMatrix(strength, coherence, e1, e2, green_diff);
     out[outTexel] = float4(precisionMatrix, 0.0);
 }

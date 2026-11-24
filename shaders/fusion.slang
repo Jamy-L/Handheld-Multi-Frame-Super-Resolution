@@ -19,7 +19,7 @@ void fusion(uint3 tid: SV_DispatchThreadID, Texture2D<float> sourceRaw, Texture2
     float2 flow = alignments.SampleLevel(flowSampler, uv_flow, 0.0).xy;
     float r = robustness.SampleLevel(robustnessSampler, uv, 0.0);
 
-    float2 uv_mov = uv + flow; // TODO make sure the flow is passed in uv units
+    float2 uv_mov = uv + flow;
     float3 precisionMatrix = precision.SampleLevel(precisionSampler, uv_mov, 0.0).xyz;
     float2x2 sigmaInv = float2x2(precisionMatrix.x, precisionMatrix.z,
                                 precisionMatrix.z, precisionMatrix.y);
@@ -40,7 +40,7 @@ void fusion(uint3 tid: SV_DispatchThreadID, Texture2D<float> sourceRaw, Texture2
             int channel = bayerMode ? (ji.x & 1) + (ji.y & 1) : 0;
             float2 d = float2(ji) - ji_mov;
             float distanceSquared = max(0.0, dot(d, mul(sigmaInv, d)));
-            float weight = r ;//* exp(-0.5 * distanceSquared);
+            float weight = r * exp(-0.5 * distanceSquared);
             numDelta[channel] += weight * sourceRaw.Load(int3(ji, 0));
             denDelta[channel] += weight;
         }
