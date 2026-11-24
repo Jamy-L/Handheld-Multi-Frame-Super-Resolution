@@ -52,8 +52,6 @@ class NoiseModelConfig:
     lut_path: Path | None = None
     alpha: tuple[float, float, float, float] | None = None
     beta: tuple[float, float, float, float] | None = None
-    sigma_sq_curve: tyro.conf.Suppress[list[float]] = field(default_factory=list, init=False, repr=False)
-    d_sq_curve: tyro.conf.Suppress[list[float]] = field(default_factory=list, init=False, repr=False)
 
 
 @dataclass

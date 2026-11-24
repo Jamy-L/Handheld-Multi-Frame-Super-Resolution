@@ -23,7 +23,7 @@ SEL_HARD_THRESHOLD = 0
 SEL_LINEAR = 1
 
 
-def estimate_precision_matrices(img: spy.Texture, config: Config):
+def estimate_precision_matrices(img: spy.Texture, noise_lut: spy.Texture, noise_offset_uv: tuple[float, float], noise_scale_uv: tuple[float, float], config: Config):
     """
     Implementation of Alg. 5: ComputeKernelCovariance
     Returns the kernels covariance matrices for the frame J_n, sampled at the
@@ -76,7 +76,8 @@ def estimate_precision_matrices(img: spy.Texture, config: Config):
     kernel.dispatch(
         thread_count=[precision_matrices.width, precision_matrices.height, 1],
         vars={
-            "var_noise": 1e-4,  # TODO Placeholder until calibrated noise variance is wired in.
+            "noise_offset_uv": spy.float2(*noise_offset_uv),
+            "noise_scale_uv": spy.float2(*noise_scale_uv),
             "covariance_parameters1": spy.float4(
                 k_shrink / sigma_detail,  # 1 / sigma_shrink
                 1.0 / (k_stretch * sigma_detail),  # 1 / sigma_stretched
@@ -91,6 +92,13 @@ def estimate_precision_matrices(img: spy.Texture, config: Config):
             ),  # Dummy padding
         },
         sourceRaw=img,
+        noise_lut=noise_lut,
+        noiseSampler=device.create_sampler(
+            min_filter=spy.TextureFilteringMode.linear,
+            mag_filter=spy.TextureFilteringMode.linear,
+            address_u=spy.TextureAddressingMode.clamp_to_edge,
+            address_v=spy.TextureAddressingMode.clamp_to_edge,
+        ),
         out=precision_matrices,
     )
 

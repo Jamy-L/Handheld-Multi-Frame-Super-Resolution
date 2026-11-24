@@ -17,6 +17,7 @@ import imageio
 import numpy as np
 import rawpy
 
+from .noise_profile import expand_noise_profile_to_rgbg, noise_profile_from_tags, read_dng_noise_profile
 from . import raw2rgb
 from .utils import DEFAULT_NUMPY_FLOAT_TYPE
 from .utils_image import cfa_to_rggb
@@ -47,51 +48,6 @@ PHOTO_INTER = {
 
 # Supported Photometric Interpretations
 SUPPORTED = [1, 32803]
-
-
-def expand_noise_profile_to_rgbg(alpha, beta) -> tuple[tuple[float, float, float, float],
-                                                        tuple[float, float, float, float]]:
-    """Expand one- or three-plane profiles to R, G1, B, G2 order."""
-    alpha = tuple(float(value) for value in alpha)
-    beta = tuple(float(value) for value in beta)
-    if len(alpha) != len(beta):
-        raise ValueError(
-            f"alpha and beta must contain the same number of values, got "
-            f"{len(alpha)} and {len(beta)}"
-        )
-    if len(alpha) == 1:
-        return alpha * 4, beta * 4
-    if len(alpha) == 3:
-        return (alpha[0], alpha[1], alpha[2], alpha[1]), (
-            beta[0], beta[1], beta[2], beta[1]
-        )
-    if len(alpha) == 4:
-        return alpha, beta
-    raise ValueError(
-        f"noise profiles must contain 1, 3, or 4 values, got {len(alpha)}"
-    )
-
-
-def noise_profile_from_tags(tags) -> tuple[tuple[float, float, float, float],
-                                            tuple[float, float, float, float]]:
-    """Read the DNG NoiseProfile tag in R, G1, B, G2 color-plane order."""
-    tag = tags.get('Image Tag 0xC761')
-    if tag is None:
-        raise ValueError("DNG does not contain a NoiseProfile (0xC761) tag")
-    values = [float(value[0]) for value in tag.values]
-    if len(values) % 2:
-        raise ValueError(f"DNG NoiseProfile must contain alpha/beta pairs, got {values!r}")
-    return expand_noise_profile_to_rgbg(values[::2], values[1::2])
-
-
-def read_dng_noise_profile(path: str | Path) -> tuple[
-    tuple[float, float, float, float], tuple[float, float, float, float]
-]:
-    """Read only the noise profile needed by the Monte Carlo CLI."""
-    path = Path(path)
-    with path.open('rb') as raw_file:
-        tags = exifread.process_file(raw_file, details=False)
-    return noise_profile_from_tags(tags)
 
 
 @dataclass

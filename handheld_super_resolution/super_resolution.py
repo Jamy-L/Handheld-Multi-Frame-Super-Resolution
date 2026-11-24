@@ -12,7 +12,7 @@ from .config import Config
 from .debug_writer import NAN_COLOR, DebugWriter
 from .kernels import estimate_precision_matrices
 from .merge import merge
-from .noise_lut import load_noise_lut
+from .noise_lut import create_zero_noise_lut, load_noise_lut
 from .params import runtime_config, sanitize_config, update_snr_config
 from .robustness import compute_robustness, init_robustness
 from .utils import (
@@ -121,14 +121,6 @@ def main(
         # The fixed reference pyramid shares frame 0 with the first comparison.
         debug_writer.next_frame()
 
-    if config.robustness.enabled and config.robustness.noise_correction:
-        curve_size = len(config.noise_model.sigma_sq_curve)
-        if curve_size < 2 or len(config.noise_model.d_sq_curve) != curve_size:
-            raise ValueError(
-                "noise-correction curves were not initialized; call process() with a "
-                "validated noise_model.lut_path"
-            )
-
     #### Moving to GPU
     device = spy.current_device()
     tx_ref_img = device.create_texture(
@@ -169,12 +161,14 @@ def main(
         label="mov_image",
     )
 
-    # cuda_sigma_sq_curve = cuda.to_device(
-    #     np.asarray(config.noise_model.sigma_sq_curve, dtype=np.float32)
-    # )
-    # cuda_d_sq_curve = cuda.to_device(
-    #     np.asarray(config.noise_model.d_sq_curve, dtype=np.float32)
-    # )
+    if config.robustness.enabled and config.robustness.noise_correction:
+        lut_path = config.noise_model.lut_path
+        assert lut_path is not None, "robustness noise correction requires --noise-model.lut-path PATH"
+        noise_lut, noise_offset_uv, noise_scale_uv = load_noise_lut(
+            device, lut_path, config.noise_model.alpha, config.noise_model.beta
+        )
+    else:
+        noise_lut, noise_offset_uv, noise_scale_uv = create_zero_noise_lut(device)
 
     if verbose:
         print("\nProcessing reference image ---------\n")
@@ -231,7 +225,10 @@ def main(
     )
 
     #### Ref covariance estimation
-    precision_matrices = estimate_precision_matrices_(tx_ref_img, config)
+    precision_matrices = estimate_precision_matrices_(tx_ref_img, noise_lut, noise_offset_uv, noise_scale_uv, config)
+    if debug_writer is not None:
+        debug_writer.write_precision_matrix("ref_precision", precision_matrices.to_numpy())
+
 
     ##### Merge ref
     flow_height = (ref_grey.shape[0] - FINAL_TILE_SIZE) // FINAL_TILE_STRIDE + 1
@@ -330,7 +327,9 @@ def main(
                 tx_flow,
                 flow_texture_offset_uv,
                 flow_texture_scale_uv,
-                (0.0, 0.0),
+                noise_lut,
+                noise_offset_uv,
+                noise_scale_uv,
                 config,
                 debug_writer,
             )
@@ -345,7 +344,12 @@ def main(
             pass
 
         #### Kernel estimation
-        precision_matrices = estimate_precision_matrices_(tx_mov_img, config)
+        precision_matrices = estimate_precision_matrices_(
+            tx_mov_img, noise_lut, noise_offset_uv, noise_scale_uv, config
+        )
+
+        if debug_writer is not None:
+            debug_writer.write_precision_matrix("precision", precision_matrices.to_numpy())
 
         #### Merging
         merge_(
@@ -432,24 +436,6 @@ def process(burst_path: Path | str, config: Config):
         config.noise_model.alpha = dng_stack.alpha
         config.noise_model.beta = dng_stack.beta
 
-    if config.robustness.enabled and config.robustness.noise_correction:
-        if config.noise_model.lut_path is None:
-            raise ValueError(
-                "robustness noise correction requires --noise-model.lut-path PATH; "
-                "generate it with python -m handheld_super_resolution.monte_carlo"
-            )
-        noise_lut = load_noise_lut(
-            config.noise_model.lut_path,
-            expected_alpha=config.noise_model.alpha,
-            expected_beta=config.noise_model.beta,
-        )
-        sigma_sq_curve = noise_lut.sigma_noise_sq
-        d_sq_curve = noise_lut.d_noise_sq
-    else:
-        # The CUDA call signature remains fixed when correction is disabled.
-        sigma_sq_curve = np.zeros(2, dtype=np.float32)
-        d_sq_curve = np.zeros(2, dtype=np.float32)
-
     if verbose_2:
         currentTime = getTime(currentTime, " -- Read raw files")
 
@@ -470,8 +456,6 @@ def process(burst_path: Path | str, config: Config):
     if verbose_1:
         print(f"\nRuntime configuration:\n{config.dump()}\n")
 
-    config.noise_model.sigma_sq_curve = sigma_sq_curve.tolist()
-    config.noise_model.d_sq_curve = d_sq_curve.tolist()
 
     #### Running the handheld pipeline
     import slangpy as spy

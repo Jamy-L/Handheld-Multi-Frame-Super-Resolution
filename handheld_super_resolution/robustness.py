@@ -62,7 +62,9 @@ def compute_robustness(
     flow: spy.Texture,
     flow_offset_uv: tuple[float, float],
     flow_scale_uv: tuple[float, float],
-    noise_estimatss: spy.Texture,
+    noise_texture: spy.Texture,
+    noise_offset_uv: tuple[float, float],
+    noise_scale_uv: tuple[float, float],
     config: Config,
     debug_writer: DebugWriter | None = None,
 ) -> spy.Texture:
