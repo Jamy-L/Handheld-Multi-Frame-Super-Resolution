@@ -117,7 +117,8 @@ def compute_robustness(
         debug_writer.write_scalar("guide_std", std, value_range=(0.0, upper or 1.0))
 
     rejection_mask = compute_rejection_coeff_(
-        ref_local_stats, local_stats, flow, flow_offset_uv, flow_scale_uv, config
+        ref_local_stats, local_stats, flow, flow_offset_uv, flow_scale_uv,
+        noise_texture, noise_offset_uv, noise_scale_uv, config
     )
 
     if debug_writer is not None:
@@ -179,6 +180,9 @@ def compute_rejection_coeff(
     flow: spy.Texture,
     flow_offset_uv: tuple[float, float],
     flow_scale_uv: tuple[float, float],
+    noise_texture: spy.Texture,
+    noise_offset_uv: tuple[float, float],
+    noise_scale_uv: tuple[float, float],
     config: Config,
 ) -> spy.Texture:
 
@@ -208,13 +212,20 @@ def compute_rejection_coeff(
     kernel.dispatch(
         thread_count=[output.width, output.height, 1],
         vars={
-            # Placeholder values for the noise model and rejection tuning.
-            "var_noise": 0.0,
+            "noise_offset_uv": spy.float2(*noise_offset_uv),
+            "noise_scale_uv": spy.float2(*noise_scale_uv),
             "rejection_params": spy.float4(1.0, 0.0, 0.0, 0.0),
         },
         sourceLocalStats=ref_local_stats,
         localStats=local_stats,
         statsSampler=stats_sampler,
+        noise_lut=noise_texture,
+        noiseSampler=device.create_sampler(
+            min_filter=spy.TextureFilteringMode.linear,
+            mag_filter=spy.TextureFilteringMode.linear,
+            address_u=clamp_to_edge,
+            address_v=clamp_to_edge,
+        ),
         flow=flow,
         flowSampler=flow_sampler,
         flow_scale_uv=spy.float2(*flow_scale_uv),

@@ -40,9 +40,8 @@ void analyzeStructTensor(float3 tensor, float var_noise, out float2 e1, out floa
     float s2 = sqrt(l2);
 
     coherence = (s1 - s2) / (s1 + s2 + 1e-6);
-    // Wiener shrinkeage for strenght only
-    if (l1 > 0.0)
-        l1 *= l1 / (l1 + var_noise);
+    // Wiener shrinkeage for strength only
+    l1 *= l1 / (l1 + var_noise);
     strength = sqrt(l1);
 }
 

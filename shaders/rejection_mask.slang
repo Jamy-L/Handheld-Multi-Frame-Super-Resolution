@@ -1,4 +1,5 @@
-uniform float var_noise;
+uniform float2 noise_offset_uv;
+uniform float2 noise_scale_uv;
 uniform float4 rejection_params;
 
 [shader("compute")]
@@ -6,7 +7,7 @@ uniform float4 rejection_params;
 void computeRejectionCoeff(uint3 tid: SV_DispatchThreadID, Texture2D<float4> sourceLocalStats,
                            Texture2D<float4> localStats, SamplerState statsSampler, Texture2D<float4> flow,
                            SamplerState flowSampler, uniform float2 flow_scale_uv, uniform float2 flow_offset_uv,
-                           RWTexture2D<float> out)
+                           Texture2D<float4> noise_lut, SamplerState noiseSampler, RWTexture2D<float> out)
 {
     uint width, height;
     out.GetDimensions(width, height);
@@ -24,12 +25,16 @@ void computeRejectionCoeff(uint3 tid: SV_DispatchThreadID, Texture2D<float4> sou
     float4 refStats = sourceLocalStats.SampleLevel(statsSampler, uv, 0.0);
     float4 movStats = localStats.SampleLevel(statsSampler, uv_mov, 0.0);
 
+    float2 noiseUV = (float2(refStats.x, 0.0) - noise_offset_uv) * noise_scale_uv;
+    float4 noiseParams = noise_lut.SampleLevel(noiseSampler, noiseUV, 0.0);
+
     float std = min(refStats.w, movStats.w); // Min std between both frames
-    // TODO clip with std noise here
+    std = max(std, noiseParams.w); // noise-induced std
 
     float3 color_distances = (refStats.xyz - movStats.xyz);
     color_distances *= color_distances;
-    // TODO wiener shrinking here
+    color_distances *= color_distances / (color_distances + 2. * noiseParams.xyz); // Wiener shrinkeage
+    // The 2.* is bcs the noiseParam is the avg diff between one noisy patch and the gt clean. So diff between 2 noisy is the double
     float color_distance = color_distances.x + color_distances.y + color_distances.z;
 
     float R_boost = 1;
