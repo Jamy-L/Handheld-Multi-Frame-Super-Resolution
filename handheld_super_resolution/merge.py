@@ -14,11 +14,8 @@ from pathlib import Path
 
 import slangpy as spy
 
-from .config import Config
-
-
 def merge(comp_img: spy.Texture, alignments: spy.Texture, flow_offset_uv: tuple[float, float], flow_scale_uv: tuple[float, float], precision_matrices: spy.Texture, r: spy.Texture,
-          num: spy.Texture, den: spy.Texture, config: Config):
+          num: spy.Texture, den: spy.Texture):
     """
     Implementation of Alg. 4: Accumulation
     Accumulates comp_img (J_n, n>1) into num and den, based on the alignment
@@ -39,9 +36,7 @@ def merge(comp_img: spy.Texture, alignments: spy.Texture, flow_offset_uv: tuple[
         Numerator of the accumulator
     den : device Array[s*imshape_y, s*imshape_x, c]
         Denominator of the accumulator
-        
-    config : Config
-        parameters.
+
 
     Returns
     -------
@@ -82,7 +77,6 @@ def merge(comp_img: spy.Texture, alignments: spy.Texture, flow_offset_uv: tuple[
         robustnessSampler=robustness_sampler,
         numerator=num,
         denominator=den,
-        bayerMode=config.mode == "bayer",
         flowOffsetUV=spy.float2(*flow_offset_uv),
         flowScaleUV=spy.float2(*flow_scale_uv),
     )

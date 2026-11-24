@@ -1,5 +1,6 @@
 import time
 import warnings
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
@@ -13,7 +14,6 @@ from .debug_writer import NAN_COLOR, DebugWriter
 from .kernels import estimate_precision_matrices
 from .merge import merge
 from .noise_lut import create_zero_noise_lut, load_noise_lut
-from .params import runtime_config, sanitize_config, update_snr_config
 from .robustness import compute_robustness, init_robustness
 from .utils import (
     DEFAULT_NUMPY_FLOAT_TYPE,
@@ -114,7 +114,6 @@ def main(
         alignment.align, verbose_2, "\nBeginning alignment", "Image aligned (Total)"
     )
 
-    bayer_mode = config.mode == "bayer"
     debug_dict = {}
     debug_writer = DebugWriter() if config.debug else None
     if debug_writer is not None:
@@ -161,13 +160,9 @@ def main(
         label="mov_image",
     )
 
-    if config.robustness.enabled and config.robustness.noise_correction:
-        lut_path = config.noise_model.lut_path
-        assert lut_path is not None, (
-            "robustness noise correction requires --noise-model.lut-path PATH"
-        )
+    if config.requires_noise_lut:
         noise_lut, noise_offset_uv, noise_scale_uv = load_noise_lut(
-            device, lut_path, config.noise_model.alpha, config.noise_model.beta
+            device, config.noise_model.lut_path, config.noise_model.alpha, config.noise_model.beta
         )
     else:
         noise_lut, noise_offset_uv, noise_scale_uv = create_zero_noise_lut(device)
@@ -177,7 +172,7 @@ def main(
         t1 = time.perf_counter()
 
     #### alignment reference (NumPy gray input)
-    ref_grey = compute_grey_images_(ref_img, grey_method) if bayer_mode else ref_img
+    ref_grey = compute_grey_images_(ref_img, grey_method)
     options = alignment_options(config)
     ref_pyramid = init_alignment_(ref_grey, **options)
     if debug_writer is not None:
@@ -290,7 +285,6 @@ def main(
         rejection_mask,
         num,
         den,
-        config,
     )
 
     if verbose:
@@ -305,11 +299,7 @@ def main(
             im_time = time.perf_counter()
 
         #### CPU alignment (NumPy in, NumPy out)
-        moving_grey = (
-            compute_grey_images_(comp_imgs[im_id], grey_method)
-            if bayer_mode
-            else comp_imgs[im_id]
-        )
+        moving_grey = compute_grey_images_(comp_imgs[im_id], grey_method)
         moving_pyramid = alignment.build_moving_pyramid(moving_grey, **options)
         if debug_writer is not None:
             debug_writer.write_grayscale_pyramid(
@@ -368,7 +358,6 @@ def main(
             rejection_mask,
             num,
             den,
-            config,
         )
 
         if verbose:
@@ -414,7 +403,8 @@ def process(burst_path: Path | str, config: Config):
         The processed image
 
     """
-    config = runtime_config(config)
+    config.sanitize()
+    config = deepcopy(config)
 
     currentTime, verbose_1, verbose_2 = (
         time.perf_counter(),
@@ -429,8 +419,6 @@ def process(burst_path: Path | str, config: Config):
     )  # Scale [black level, whiteleve] -> [0, 1] WITHOUT WB, clipping or anything
 
     if config.noise_model.alpha is not None:
-        if config.noise_model.beta is None:
-            raise ValueError("If alpha is provided, beta must also be provided.")
         # User provided custom values.
         print("Using user-provided alpha and beta values")
         config.noise_model.alpha, config.noise_model.beta = (
@@ -452,13 +440,14 @@ def process(burst_path: Path | str, config: Config):
             ref_raw, config.noise_model.alpha, config.noise_model.beta
         )
         if verbose_1:
-            print(f"Estimated snr: {snr:.2f} dB")
+            snr_db = 20 * np.log10(snr) if snr != 0 else -np.inf
+            print(f"Estimated linear SNR: {snr:.2f} ({snr_db:.2f} dB)")
     else:
         snr = config.force_snr
 
-    update_snr_config(config, snr)
+    config.resolve_snr(snr)
 
-    sanitize_config(config, ref_raw.shape)
+    config.validate_alignment_shape(ref_raw.shape)
 
     if verbose_1:
         print(f"\nRuntime configuration:\n{config.dump()}\n")

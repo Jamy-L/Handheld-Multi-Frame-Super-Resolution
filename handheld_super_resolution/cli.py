@@ -39,9 +39,6 @@ def main(args=None):
     options = parse_args(args)
     config = options.config
 
-    if (config.noise_model.alpha is None) != (config.noise_model.beta is None):
-        raise ValueError("Both noise_model.alpha and noise_model.beta must be provided together")
-
     if options.outpath.suffix == ".dng":
         config.postprocessing.enabled = False
 

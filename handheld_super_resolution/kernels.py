@@ -14,7 +14,7 @@ from pathlib import Path
 import slangpy as spy
 from numba import cuda
 
-from .config import Config
+from .config import Config, KernelType
 from .utils import (
     getTime,
 )
@@ -27,8 +27,7 @@ def estimate_precision_matrices(img: spy.Texture, noise_lut: spy.Texture, noise_
     """
     Implementation of Alg. 5: ComputeKernelCovariance
     Returns the kernels covariance matrices for the frame J_n, sampled at the
-    center of every bayer quad (or at the center of every grey pixel in grey
-    mode).
+    center of every Bayer quad.
 
     Parameters
     ----------
@@ -76,6 +75,9 @@ def estimate_precision_matrices(img: spy.Texture, noise_lut: spy.Texture, noise_
     kernel.dispatch(
         thread_count=[precision_matrices.width, precision_matrices.height, 1],
         vars={
+            "is_isotropic": config.merging.kernel_type == KernelType.ISO,
+            "enable_green_diff": config.merging.kernel.enable_green_diff,
+            "noise_correction": config.merging.kernel.noise_correction,
             "noise_offset_uv": spy.float2(*noise_offset_uv),
             "noise_scale_uv": spy.float2(*noise_scale_uv),
             "covariance_parameters1": spy.float4(

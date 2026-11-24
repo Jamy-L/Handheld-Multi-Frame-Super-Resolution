@@ -1,3 +1,5 @@
+uniform float k_green_diff_impact;
+
 float3 RGBToYCoCg(float3 rgb)
 {
     // Green contains the sum of the two Bayer green samples.
@@ -20,6 +22,7 @@ void computeGuide(uint3 tid: SV_DispatchThreadID, Texture2D<float> sourceRaw, RW
     float3 avg_rgb = 0.;
     float3 m0 = float3(0.);
     float3 m1 = float3(0.);
+    float green_differences = 0.0;
 
     for (int y = -1; y <= 1; ++y)
     {
@@ -38,7 +41,9 @@ void computeGuide(uint3 tid: SV_DispatchThreadID, Texture2D<float> sourceRaw, RW
             m1 += rgb * rgb;
             float wx = x == 0. ? .5 : .25;
             float wy = y == 0. ? .5 : .25;
-            avg_rgb += rgb * wx * wy;
+            float w = wx * wy;
+            avg_rgb += rgb * w;
+            green_differences += abs(rggb.y-rggb.z) * w;
         }
     }
     m0 /= 9.;
@@ -46,6 +51,14 @@ void computeGuide(uint3 tid: SV_DispatchThreadID, Texture2D<float> sourceRaw, RW
     float3 var3 = m1 - m0 * m0;
     float var = var3.x + var3.y + var3.z;
     float std = sqrt(var) / 3.;
+
+    std = max(std, green_differences);
     avg_rgb = RGBToYCoCg(avg_rgb);
-    out[outTexel] = float4(avg_rgb, std);
+
+    // Blend the YCoCg with a green only variant, depending on how strong the green gradients are.
+    float3 greens = float3(0.5 * avg_rgb.y, 0., 0.);
+    float green_diff_impact = min(1.0, k_green_diff_impact * green_differences);
+    float3 reference_color = lerp(avg_rgb, greens, green_diff_impact);
+
+    out[outTexel] = float4(reference_color, std);
 }

@@ -1,8 +1,5 @@
-import math
-
 import numpy as np
 import torch as th
-import torch.fft
 from numba import cuda
 from numba.cuda.cudadrv.devicearray import DeviceNDArray
 from numpy.typing import NDArray
@@ -11,7 +8,6 @@ from scipy.ndimage import convolve1d
 from .config import GrayscaleMethod
 from .utils import (
     DEFAULT_NUMPY_FLOAT_TYPE,
-    DEFAULT_THREADS,
     DEFAULT_TORCH_FLOAT_TYPE,
     getSigned,
 )
@@ -105,73 +101,7 @@ def demosaic_to_grey(img: NDArray) -> NDArray[np.float32]:
     gray = 0.25*(rgb[:, :, 0] + 2*rgb[:, :, 1] + rgb[:, :, 2]) # Luma conversion, consistent with quad averaging
     return np.ascontiguousarray(gray, dtype=DEFAULT_NUMPY_FLOAT_TYPE)
 
-def preprocess(img: torch.Tensor, preprocessing: str):
-    if preprocessing == "sqrt":
-        return img.clamp(min=0).sqrt()
-    elif preprocessing == "gamma":
-        return img.clamp(min=0).pow(1/2.2)
-    else:
-        raise ValueError(f"Unknown preprocessing: {preprocessing}")
 
-def gat(image: DeviceNDArray, alpha: tuple[float, float, float, float], beta: tuple[float, float, float, float]) -> DeviceNDArray:
-    """
-    Generalized Ascombe Transform
-    noise model : std² = alpha * I + beta
-
-    The input is supposed to be a mosaiced raw image
-    r g1
-    g2 b
-
-    and alpha, beta given as [r g1 b g2]    
-
-
-
-    """
-    assert len(image.shape) == 2, f"image should be 2D, got {image.shape}"
-    assert len(alpha) == 4, f"alpha should be of length 4, got {len(alpha)}"
-    assert len(beta) == 4, f"beta should be of length 4, got {len(beta)}"
-    assert all(a > 0 for a in alpha), f"alpha should be positive, got {alpha} (VST is ill defined and kernels would be wrong)"
-    imshape_y, imshape_x = image.shape
-    
-    VST_image = cuda.device_array(image.shape, DEFAULT_NUMPY_FLOAT_TYPE)
-
-    threadsperblock = (DEFAULT_THREADS, DEFAULT_THREADS)
-    blockspergrid_x = math.ceil(imshape_x/threadsperblock[1])
-    blockspergrid_y = math.ceil(imshape_y/threadsperblock[0])
-    blockspergrid = (blockspergrid_x, blockspergrid_y)
-    
-    cuda_GAT[blockspergrid, threadsperblock](image, VST_image,
-                                             alpha, beta)
-    
-    return VST_image
-
-@cuda.jit
-def cuda_GAT(image, VST_image, alpha, beta):
-    x, y = cuda.grid(2)
-    imshape_y,  imshape_x = image.shape
-    
-    if not (0 <= y < imshape_y and
-            0 <= x < imshape_x):
-        return
-
-    # The mosaic is spatial R G1 / G2 B, whereas EXIF alpha and beta use
-    # color-plane order R, G1, B, G2.
-    # x even y even -> r -> alpha[0], beta[0]
-    # x odd y even -> g1 -> alpha[1], beta[1]
-    # x even y odd -> g2 -> alpha[3], beta[3]
-    # x odd y odd -> b -> alpha[2], beta[2]
-    px = x & 1
-    py = y & 1
-    # Spatial R,G1/G2,B -> EXIF plane indices 0,1/3,2, without divergence.
-    i = px + py * (3 - 2 * px)
-    alpha_ = alpha[i]
-    beta_ = beta[i]
-    VST = alpha_*image[y, x] + 3/8 * alpha_*alpha_ + beta_
-    VST = max(0, VST)
-    
-    VST_image[y, x] = 2/alpha_ * math.sqrt(VST)     
-                
-    
 @cuda.jit(device=True)
 def dogson_biquadratic_kernel(x, y):
     return dogson_quadratic_kernel(x) * dogson_quadratic_kernel(y)
@@ -260,6 +190,4 @@ def estimate_image_snr(ref_img: NDArray[np.float32], alpha: tuple[float, float, 
     top = np.concatenate((r[validr], g1[validg1], g2[validg2], b[validb]))
     bot = np.concatenate((varr[validr], varg1[validg1], varg2[validg2], varb[validb]))
 
-    SNR = np.sqrt(np.sum(top*top)/np.sum(bot))
-    SNR = 20 * np.log10(SNR)
-    return SNR
+    return float(np.sqrt(np.sum(top * top) / np.sum(bot)))

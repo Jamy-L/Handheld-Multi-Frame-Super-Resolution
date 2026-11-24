@@ -51,7 +51,7 @@ def init_robustness(ref_img: spy.Texture, config: Config) -> spy.Texture:
         compute_local_stats, verbose_3, end_s=" - Local stats estimated"
     )
 
-    local_stats = compute_local_stats_(ref_img)
+    local_stats = compute_local_stats_(ref_img, config.robustness.k_green_diff_impact)
 
     return local_stats
 
@@ -104,7 +104,7 @@ def compute_robustness(
     )
 
     # Computing guide image
-    local_stats = compute_local_stats_(comp_img)
+    local_stats = compute_local_stats_(comp_img, config.robustness.k_green_diff_impact)
 
     if debug_writer is not None:
         guide = local_stats.to_numpy()
@@ -154,7 +154,7 @@ def mask_dilation(rejection_mask: spy.Texture, config: Config) -> spy.Texture:
     return output
 
 
-def compute_local_stats(raw_img: spy.Texture) -> spy.Texture:
+def compute_local_stats(raw_img: spy.Texture, k_green_diff_impact: float) -> spy.Texture:
     device = spy.current_device()
 
     output = device.create_texture(
@@ -168,6 +168,7 @@ def compute_local_stats(raw_img: spy.Texture) -> spy.Texture:
     kernel = device.create_compute_kernel(program)
     kernel.dispatch(
         thread_count=[output.width, output.height, 1],
+        vars={"k_green_diff_impact": k_green_diff_impact},
         sourceRaw=raw_img,
         out=output,
     )
@@ -212,13 +213,16 @@ def compute_rejection_coeff(
     kernel.dispatch(
         thread_count=[output.width, output.height, 1],
         vars={
+            "noise_correction": config.robustness.noise_correction,
             "noise_offset_uv": spy.float2(*noise_offset_uv),
             "noise_scale_uv": spy.float2(*noise_scale_uv),
             "rejection_params": spy.float4(
-                1.0, # R_mult
-                0.0, # R_threshold
-                1e-4, # Mth
-                5.), # k_std
+                config.robustness.R_mult,
+                config.robustness.R_threshold,
+                config.robustness.M_th,
+                config.robustness.k_std,
+            ),
+            "R_boost": config.robustness.R_boost,
         },
         sourceLocalStats=ref_local_stats,
         localStats=local_stats,
