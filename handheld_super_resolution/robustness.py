@@ -214,7 +214,11 @@ def compute_rejection_coeff(
         vars={
             "noise_offset_uv": spy.float2(*noise_offset_uv),
             "noise_scale_uv": spy.float2(*noise_scale_uv),
-            "rejection_params": spy.float4(1.0, 0.0, 0.0, 0.0),
+            "rejection_params": spy.float4(
+                1.0, # R_mult
+                0.0, # R_threshold
+                1e-4, # Mth
+                5.), # k_std
         },
         sourceLocalStats=ref_local_stats,
         localStats=local_stats,
