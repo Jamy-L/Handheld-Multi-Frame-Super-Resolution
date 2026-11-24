@@ -110,6 +110,30 @@ class DebugWriter:
             for level_id, level in enumerate(levels)
         )
 
+    def write_precision_matrix(self, category: str, packed: NDArray) -> Tuple[Path, Path]:
+        """Visualize the largest precision eigenvalue and its unoriented axis."""
+        components = packed[..., :3]
+        invalid = self._invalid_masks(components)
+        xx, yy, xy = np.moveaxis(np.nan_to_num(components.astype(np.float64),
+                                               nan=0, posinf=0, neginf=0), -1, 0)
+        # Analytic eigendecomposition of the symmetric 2x2 precision matrix.
+        gap = np.hypot(xx - yy, 2 * xy)
+        largest = (xx + yy + gap) / 2
+        for mask, marker in zip(invalid, (np.nan, np.inf, -np.inf)):
+            largest[mask] = marker
+        upper = largest[np.isfinite(largest)].max(initial=0) or 1.0
+        strength_path = self.write_scalar(f"{category}_eigenvalue", largest, (0, upper))
+
+        # Twice the principal-axis angle maps the half-turn onto the full hue wheel.
+        hue = np.mod(np.arctan2(2 * xy, xx - yy), 2 * np.pi)
+        hsv = np.empty((*largest.shape, 3), dtype=np.uint8)
+        hsv[..., 0] = np.floor(hue * (180 / (2 * np.pi))) % 180
+        hsv[..., 1] = np.where(gap > 0, 255, 0)
+        hsv[..., 2] = self._to_uint8(largest, 0, upper)
+        rgb = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+        self._paint_invalid(rgb, *invalid)
+        return strength_path, self._write(f"{category}_direction", rgb)
+
     def write_flow(self, category: str, flow: NDArray) -> Path:
         """Render a ``(dx, dy)`` flow field with the conventional HSV map.
 
