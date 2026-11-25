@@ -37,43 +37,6 @@ def getTime(currentTime, labelName, printTime=True, spaceSize=50):
     return time.perf_counter()
 
 
-def isTypeInt(array):
-    """Check if the type of a numpy array is an int type."""
-    return array.dtype in [
-        np.uint8,
-        np.uint16,
-        np.uint32,
-        np.uint64,
-        np.int8,
-        np.int16,
-        np.int32,
-        np.int64,
-        np.uint,
-        np.int,
-    ]
-
-
-def getSigned(array):
-    """Return the same array, casted into a signed equivalent type."""
-    # Check if it's an unsigned dtype
-    dt = array.dtype
-    if dt == np.uint8:
-        return array.astype(np.int16)
-    if dt == np.uint16:
-        return array.astype(np.int32)
-    if dt == np.uint32:
-        return array.astype(np.int64)
-    if dt == np.uint64:
-        return array.astype(np.int)
-
-    # Otherwise, the array is already signed, no need to cast it
-    return array
-
-
-def mse(im1, im2):
-    return np.linalg.norm(im1 - im2) / np.prod(im1.shape)
-
-
 def timer(func, enabled, start_s=None, end_s=None, spaceSize=50):
     def wrapper(*args, **kwargs):
         cuda.synchronize()

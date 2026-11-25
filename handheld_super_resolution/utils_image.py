@@ -9,7 +9,6 @@ from .config import GrayscaleMethod
 from .utils import (
     DEFAULT_NUMPY_FLOAT_TYPE,
     DEFAULT_TORCH_FLOAT_TYPE,
-    getSigned,
 )
 
 
@@ -110,47 +109,6 @@ def demosaic_to_grey(img: NDArray) -> NDArray[np.float32]:
         rgb[:, :, 0] + 2 * rgb[:, :, 1] + rgb[:, :, 2]
     )  # Luma conversion, consistent with quad averaging
     return np.ascontiguousarray(gray, dtype=DEFAULT_NUMPY_FLOAT_TYPE)
-
-
-def computeRMSE(image1, image2):
-    """computes the Root Mean Square Error between two images"""
-    assert np.array_equal(image1.shape, image2.shape), "images have different sizes"
-    h, w = image1.shape[:2]
-    c = 1
-    if len(image1.shape) == 3:  # multi-channel image
-        c = image1.shape[-1]
-    error = getSigned(image1.reshape(h * w * c)) - getSigned(image2.reshape(h * w * c))
-    return np.sqrt(np.mean(np.multiply(error, error)))
-
-
-def computePSNR(image, noisyImage):
-    """computes the Peak Signal-to-Noise Ratio between a "clean" and a "noisy" image"""
-    if np.array_equal(image.shape, noisyImage.shape):
-        assert image.dtype == noisyImage.dtype, "images have different data types"
-        if np.issubdtype(image.dtype, np.unsignedinteger):
-            maxValue = np.iinfo(image.dtype).max
-        else:
-            assert (
-                np.issubdtype(image.dtype, np.floating)
-                and np.min(image) >= 0.0
-                and np.max(image) <= 1.0
-            ), "not a float image between 0 and 1"
-            maxValue = 1.0
-        h, w = image.shape[:2]
-        c = 1
-        if len(image.shape) == 3:  # multi-channel image
-            c = image.shape[-1]
-        error = np.abs(
-            getSigned(image.reshape(h * w * c))
-            - getSigned(noisyImage.reshape(h * w * c))
-        )
-        mse = np.mean(np.multiply(error, error))
-        return 10 * np.log10(maxValue**2 / mse)
-    else:
-        print(
-            f"WARNING: images have different sizes: {image.shape}, {noisyImage.shape}. Returning None"
-        )
-        return None
 
 
 def cfa_to_rggb(x: np.ndarray, source_cfa: np.ndarray):
