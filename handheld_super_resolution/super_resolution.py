@@ -412,6 +412,20 @@ def process(burst_path: Path | str, config: Config):
         config.verbose >= 2,
     )
 
+    try:
+        backend = spy.DeviceType[config.backend]
+    except KeyError:
+        raise ValueError(f"Unknown backend {config.backend!r}. Run --list-devices for choices.") from None
+
+    adapter_luid = None
+    if config.device is not None:
+        if backend == spy.DeviceType.automatic:
+            raise ValueError("Select a backend with --backend when specifying --device.")
+        adapters = spy.Device.enumerate_adapters(backend)
+        if not 0 <= config.device < len(adapters):
+            raise ValueError(f"No device {config.device} on {backend.name}. Run --list-devices for choices.")
+        adapter_luid = adapters[config.device].luid
+
     # reading image stack
     dng_stack = load_dng_burst(burst_path)
     ref_raw, raw_comp = (
@@ -453,16 +467,15 @@ def process(burst_path: Path | str, config: Config):
         print(f"\nRuntime configuration:\n{config.dump()}\n")
 
     #### Running the handheld pipeline
-    import slangpy as spy
-
     HERE = Path(__file__).resolve().parent
-    backend = spy.DeviceType.vulkan
     device = spy.Device(
         type=backend,
-        adapter_luid=None,
+        adapter_luid=adapter_luid,
         compiler_options={"include_paths": [HERE]},
     )
     with device:
+        if verbose_1:
+            print(f"Backend: {device.info.type.name}, device: {device.info.adapter_name}")
         hr_output, debug_dict = main(
             ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE),
             raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE),

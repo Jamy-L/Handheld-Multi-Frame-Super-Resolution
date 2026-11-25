@@ -63,7 +63,8 @@ class NoiseModelConfig:
 
 @dataclass
 class BlockMatchingConfig:
-    """ Fine to coarse. """
+    """Fine to coarse."""
+
     metrics: list[Literal["L1", "L2"]] = field(
         default_factory=lambda: ["L1", "L2", "L2", "L2", "L2"]
     )
@@ -104,10 +105,17 @@ class AlignmentConfig:
     def derive_tile_sizes(self) -> list[int]:
         """Derive fine-to-coarse tile sizes."""
         levels = len(self.factors) + 1
-        if len(self.search_radii) != levels or len(self.block_matching.metrics) != levels:
-            raise ValueError("search_radii and block_matching.metrics must have len(factors) + 1 entries")
-        if any(type(factor) is not int or factor < 2 or factor & (factor - 1)
-               for factor in self.factors):
+        if (
+            len(self.search_radii) != levels
+            or len(self.block_matching.metrics) != levels
+        ):
+            raise ValueError(
+                "search_radii and block_matching.metrics must have len(factors) + 1 entries"
+            )
+        if any(
+            type(factor) is not int or factor < 2 or factor & (factor - 1)
+            for factor in self.factors
+        ):
             raise ValueError("alignment.factors must be powers of two >= 2")
         if any(type(radius) is not int or radius < 0 for radius in self.search_radii):
             raise ValueError("alignment.search_radii must be nonnegative integers")
@@ -116,7 +124,9 @@ class AlignmentConfig:
         if type(self.ica.n_iter) is not int or self.ica.n_iter < 0:
             raise ValueError("alignment.ica.n_iter must be a nonnegative integer")
         if type(self.tile_size) is not int or self.tile_size not in (8, 16, 32, 64):
-            raise ValueError("alignment.tile_size must be 8, 16, 32 or 64 after SNR selection")
+            raise ValueError(
+                "alignment.tile_size must be 8, 16, 32 or 64 after SNR selection"
+            )
 
         tiles = [self.tile_size]
         cap = Fraction(64)
@@ -142,7 +152,9 @@ class RobustnessConfig:
     R_mult: float = 1.0  # Multiplier on normalized color distance.
     R_threshold: float = 0.0  # Offset in the rejection weight's base-2 exponent.
     M_th: float = 1e-4  # Minimum local flow variation for boosted rejection.
-    k_std: float = 5.0 # Minimum local standard deviation in multiples of noise std for boosting.
+    k_std: float = (
+        5.0  # Minimum local standard deviation in multiples of noise std for boosting.
+    )
     R_boost: float = 6.0  # Extra rejection multiplier when both thresholds are met.
 
 
@@ -159,12 +171,14 @@ _KERNEL_SNR_KNOTS = {
 
 @dataclass
 class KernelConfig:
-    enable_green_diff: bool = True  # Use Bayer green disagreement as a floor on steerable kernel strength.
+    enable_green_diff: bool = (
+        True  # Use Bayer green disagreement as a floor on steerable kernel strength.
+    )
     noise_correction: bool = True
-    sigma_detail: SNRBasedFloat = SNR_BASED # Smallest sigma
-    k_denoise: SNRBasedFloat = SNR_BASED # Multiplier to enlarge sigma
-    k_stretch: SNRBasedFloat = SNR_BASED # Stretches sigma_detail along edges
-    k_shrink: SNRBasedFloat = SNR_BASED # Shrinks sigma_detail across edges
+    sigma_detail: SNRBasedFloat = SNR_BASED  # Smallest sigma
+    k_denoise: SNRBasedFloat = SNR_BASED  # Multiplier to enlarge sigma
+    k_stretch: SNRBasedFloat = SNR_BASED  # Stretches sigma_detail along edges
+    k_shrink: SNRBasedFloat = SNR_BASED  # Shrinks sigma_detail across edges
     D_th: SNRBasedFloat = SNR_BASED
     D_tr: SNRBasedFloat = SNR_BASED
 
@@ -175,10 +189,11 @@ class KernelConfig:
                 setattr(self, name, float(np.interp(snr, signals, values)))
 
 
-
 @dataclass
 class MergingConfig:
-    kernel_type: Annotated[KernelType, tyro.conf.EnumChoicesFromValues] = KernelType.STEERABLE # isotropic mode uses sigma_detail
+    kernel_type: Annotated[KernelType, tyro.conf.EnumChoicesFromValues] = (
+        KernelType.STEERABLE
+    )  # isotropic mode uses sigma_detail
     kernel: KernelConfig = field(default_factory=KernelConfig)
 
 
@@ -206,12 +221,19 @@ class Config:
     scale: float = 2  # 1 for demosaicking
     debug: bool = False  # Dumps intermediate buffers as .png, and colours eventual NaN pixel in magenta
     verbose: int = 1
-    force_snr: float | None = None  # Override the estimated linear signal-to-noise ratio
+    force_snr: float | None = (
+        None  # Override the estimated linear signal-to-noise ratio
+    )
     noise_model: NoiseModelConfig = field(default_factory=NoiseModelConfig)
     alignment: AlignmentConfig = field(default_factory=AlignmentConfig)
     robustness: RobustnessConfig = field(default_factory=RobustnessConfig)
     merging: MergingConfig = field(default_factory=MergingConfig)
     postprocessing: PostprocessingConfig = field(default_factory=PostprocessingConfig)
+
+    backend: str = "automatic"
+    """SlangPy backend name. Use --list-devices to see available choices."""
+    device: int | None = None
+    """Zero-based adapter index on the selected backend (default: let SlangPy choose)."""
 
     @property
     def requires_noise_lut(self) -> bool:
@@ -225,11 +247,19 @@ class Config:
         """Check user settings before loading a burst or resolving automatic values."""
         noise = self.noise_model
         if (noise.alpha is None) != (noise.beta is None):
-            raise ValueError("Both noise_model.alpha and noise_model.beta must be provided together")
+            raise ValueError(
+                "Both noise_model.alpha and noise_model.beta must be provided together"
+            )
         if self.requires_noise_lut and noise.lut_path is None:
-            raise ValueError("enabled noise correction requires --noise-model.lut-path PATH")
+            raise ValueError(
+                "enabled noise correction requires --noise-model.lut-path PATH"
+            )
         if self.scale < 1:
             raise ValueError("scale must be >= 1")
+        if self.backend == "cpu":
+            raise NotImplementedError(
+                "CPU backend is not supported"
+            )  # CPU backend doesnt support textures and samplers
 
         self.merging.kernel_type = KernelType(self.merging.kernel_type)
 
@@ -241,7 +271,9 @@ class Config:
         alignment = self.alignment
         expected_tiles = alignment.derive_tile_sizes()
         if alignment.tile_sizes != expected_tiles:
-            raise ValueError("alignment.tile_sizes must be derived from tile_size and search_radii")
+            raise ValueError(
+                "alignment.tile_sizes must be derived from tile_size and search_radii"
+            )
 
         height, width = imshape
         if height <= 0 or width <= 0:
