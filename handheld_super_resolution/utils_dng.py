@@ -17,8 +17,10 @@ import imageio
 import numpy as np
 import rawpy
 
-from .noise_profile import expand_noise_profile_to_rgbg, noise_profile_from_tags, read_dng_noise_profile
 from . import raw2rgb
+from .noise_profile import (
+    noise_profile_from_tags,
+)
 from .utils import DEFAULT_NUMPY_FLOAT_TYPE
 from .utils_image import cfa_to_rggb
 
@@ -28,23 +30,24 @@ DNG_VALIDATE_PATH = "dng_validate"
 
 # See "PhotometricInterpretation in" https://exiftool.org/TagNames/EXIF.html
 PHOTO_INTER = {
-    0 : 'WhiteIsZero',
-    1 : 'BlackIsZero',
-    2 : 'RGB',
-    3 : 'RGB Palette',
-    4 : 'Transparency Mask',
-    5 : 'CMYK',
-    6 : 'YCbCr',
-    8 : 'CIELab',
-    9 : 'ICCLab',
-    10 : 'ITULab',
-    32803 : 'Color Filter Array',
-    32844 : 'Pixar LogL',
-    32845 : 'Pixar LogLuv',
-    32892 : 'Sequential Color Filter',
-    34892 : 'Linear Raw',
-    51177 : 'Depth Map',
-    52527 : 'Semantic Mask'}
+    0: "WhiteIsZero",
+    1: "BlackIsZero",
+    2: "RGB",
+    3: "RGB Palette",
+    4: "Transparency Mask",
+    5: "CMYK",
+    6: "YCbCr",
+    8: "CIELab",
+    9: "ICCLab",
+    10: "ITULab",
+    32803: "Color Filter Array",
+    32844: "Pixar LogL",
+    32845: "Pixar LogLuv",
+    32892: "Sequential Color Filter",
+    34892: "Linear Raw",
+    51177: "Depth Map",
+    52527: "Semantic Mask",
+}
 
 # Supported Photometric Interpretations
 SUPPORTED = [1, 32803]
@@ -79,22 +82,41 @@ class DNGStack:
     @property
     def comparison_paths(self) -> tuple[Path, ...]:
         """Paths of all non-reference frames, in stack order."""
-        return self.raw_paths[:self.reference_index] + self.raw_paths[self.reference_index + 1:]
+        return (
+            self.raw_paths[: self.reference_index]
+            + self.raw_paths[self.reference_index + 1 :]
+        )
 
     def get_raw_arrays(self) -> tuple[np.ndarray, np.ndarray]:
         # Array RGGB by design
         # wb is given as r g1 b g2
         ref = self.ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE)
-        ref[::2, ::2] = (ref[::2, ::2] - self.black_levels[0]) / (self.white_level - self.black_levels[0])
-        ref[::2, 1::2] = (ref[::2, 1::2] - self.black_levels[1]) / (self.white_level - self.black_levels[1])
-        ref[1::2, ::2] = (ref[1::2, ::2] - self.black_levels[3]) / (self.white_level - self.black_levels[3])
-        ref[1::2, 1::2] = (ref[1::2, 1::2] - self.black_levels[2]) / (self.white_level - self.black_levels[2])
+        ref[::2, ::2] = (ref[::2, ::2] - self.black_levels[0]) / (
+            self.white_level - self.black_levels[0]
+        )
+        ref[::2, 1::2] = (ref[::2, 1::2] - self.black_levels[1]) / (
+            self.white_level - self.black_levels[1]
+        )
+        ref[1::2, ::2] = (ref[1::2, ::2] - self.black_levels[3]) / (
+            self.white_level - self.black_levels[3]
+        )
+        ref[1::2, 1::2] = (ref[1::2, 1::2] - self.black_levels[2]) / (
+            self.white_level - self.black_levels[2]
+        )
 
         comp = self.raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE)
-        comp[:, ::2, ::2] = (comp[:, ::2, ::2] - self.black_levels[0]) / (self.white_level - self.black_levels[0])
-        comp[:, ::2, 1::2] = (comp[:, ::2, 1::2] - self.black_levels[1]) / (self.white_level - self.black_levels[1])
-        comp[:, 1::2, ::2] = (comp[:, 1::2, ::2] - self.black_levels[3]) / (self.white_level - self.black_levels[3])
-        comp[:, 1::2, 1::2] = (comp[:, 1::2, 1::2] - self.black_levels[2]) / (self.white_level - self.black_levels[2])
+        comp[:, ::2, ::2] = (comp[:, ::2, ::2] - self.black_levels[0]) / (
+            self.white_level - self.black_levels[0]
+        )
+        comp[:, ::2, 1::2] = (comp[:, ::2, 1::2] - self.black_levels[1]) / (
+            self.white_level - self.black_levels[1]
+        )
+        comp[:, 1::2, ::2] = (comp[:, 1::2, ::2] - self.black_levels[3]) / (
+            self.white_level - self.black_levels[3]
+        )
+        comp[:, 1::2, 1::2] = (comp[:, 1::2, 1::2] - self.black_levels[2]) / (
+            self.white_level - self.black_levels[2]
+        )
         return ref, comp
 
 
@@ -118,65 +140,78 @@ def load_dng_burst(burst_path: str | Path) -> DNGStack:
 
     burst_path = Path(burst_path)
 
-
     #### Read dng as numpy arrays
-    raw_path_list = sorted(glob.glob(os.path.join(burst_path.as_posix(), '*.dng')))
-    assert len(raw_path_list) != 0, 'At least one raw .dng file must be present in the burst folder.'
+    raw_path_list = sorted(glob.glob(os.path.join(burst_path.as_posix(), "*.dng")))
+    assert len(raw_path_list) != 0, (
+        "At least one raw .dng file must be present in the burst folder."
+    )
 
     for index, raw_path in enumerate(raw_path_list):
         with rawpy.imread(raw_path) as rawObject:
             if index != ref_id:
-                raw_comp.append(rawObject.raw_image.copy())  # copy otherwise image data is lost when the rawpy object is closed
+                raw_comp.append(
+                    rawObject.raw_image.copy()
+                )  # copy otherwise image data is lost when the rawpy object is closed
     raw_comp = np.array(raw_comp)
 
     raw = rawpy.imread(raw_path_list[ref_id])
     ref_raw = raw.raw_image.copy()
-
 
     #### Reading tags of the reference image
     xyz2cam = raw2rgb.get_xyz2cam_from_exif(raw_path_list[ref_id])
     camera_to_srgb = raw2rgb.get_camera_to_srgb_matrix(raw, xyz2cam)
 
     # reading exifs for white level, black level and CFA
-    with open(raw_path_list[ref_id], 'rb') as raw_file:
+    with open(raw_path_list[ref_id], "rb") as raw_file:
         tags = exifread.process_file(raw_file)
 
-    photometric_interpretation = tags.get('Image PhotometricInterpretation', None)
+    photometric_interpretation = tags.get("Image PhotometricInterpretation", None)
     if photometric_interpretation:
         photometric_interpretation = photometric_interpretation.values[0]
         if photometric_interpretation not in SUPPORTED:
-            warnings.warn('The input images have a photometric interpretation '\
-                             f'of type "{PHOTO_INTER[photometric_interpretation]}", but only {[PHOTO_INTER[i] for i in SUPPORTED]!s} are supprted.')
-            
+            warnings.warn(
+                "The input images have a photometric interpretation "
+                f'of type "{PHOTO_INTER[photometric_interpretation]}", but only {[PHOTO_INTER[i] for i in SUPPORTED]!s} are supprted.'
+            )
+
     else:
-        warnings.warn('PhotometricInterpretation could not be found in image tags. '\
-                     f'Please ensure that it is one of {[PHOTO_INTER[i] for i in SUPPORTED]!s}')
-            
+        warnings.warn(
+            "PhotometricInterpretation could not be found in image tags. "
+            f"Please ensure that it is one of {[PHOTO_INTER[i] for i in SUPPORTED]!s}"
+        )
 
     white_level = int(raw.white_level)  # there is only one white level
     # exifread method is inconsistent because camera manufacters can put
     # this under many different tags.
 
-    if raw.color_desc != b"RGBG": # This has nothing to do with the CFA, just the order of the color wb channels
+    if (
+        raw.color_desc != b"RGBG"
+    ):  # This has nothing to do with the CFA, just the order of the color wb channels
         raise NotImplementedError(f"Unexpected color_desc: {raw.color_desc!r}")
-    black_levels = np.asarray(raw.black_level_per_channel) # R, G1, B, G2
-    white_balance = np.asarray(raw.camera_whitebalance) # R G1, B, G2
+    black_levels = np.asarray(raw.black_level_per_channel)  # R, G1, B, G2
+    white_balance = np.asarray(raw.camera_whitebalance)  # R G1, B, G2
     assert len(white_balance) == 4, f"Unexpected camera_whitebalance: {white_balance!r}"
     if white_balance[-1] == 0:
-        warnings.warn(f"Camera white balance ends with 0: {white_balance!r}. Using the second green channel's value instead.")
+        warnings.warn(
+            f"Camera white balance ends with 0: {white_balance!r}. Using the second green channel's value instead."
+        )
         white_balance[-1] = white_balance[1]
 
     assert raw.raw_pattern is not None, "Could not read CFA"
-    CFA = raw.raw_pattern.copy() # copying to ensure contiguity of the array
-    CFA[CFA == 3] = 1 # Rawpy gives channel 3 to the second green channel. Setting both greens to 1
+    CFA = raw.raw_pattern.copy()  # copying to ensure contiguity of the array
+    CFA[CFA == 3] = (
+        1  # Rawpy gives channel 3 to the second green channel. Setting both greens to 1
+    )
     raw.close()
 
-    if 'EXIF ISOSpeedRatings' in tags:
-        iso = int(str(tags['EXIF ISOSpeedRatings']))
-    elif 'Image ISOSpeedRatings' in tags:
-        iso = int(str(tags['Image ISOSpeedRatings']))
+    if "EXIF ISOSpeedRatings" in tags:
+        iso = int(str(tags["EXIF ISOSpeedRatings"]))
+    elif "Image ISOSpeedRatings" in tags:
+        iso = int(str(tags["Image ISOSpeedRatings"]))
     else:
-        raise AttributeError('ISO value could not be found in both EXIF and Image type.')
+        raise AttributeError(
+            "ISO value could not be found in both EXIF and Image type."
+        )
 
     # Clipping ISO to 100 from below
     iso = max(100, iso)
@@ -184,8 +219,12 @@ def load_dng_burst(burst_path: str | Path) -> DNGStack:
 
     alpha, beta = noise_profile_from_tags(tags)
 
-    assert (type_ := type(ref_raw[0, 0])) == (y := type(raw_comp[0, 0, 0])), f'Reference and comp images should have the same data type, got {type_} and {y}.'
-    assert np.issubdtype(type_, np.integer), f'Input DNG images are not in integer format: is the input valid RAW data? Got {type_}.'
+    assert (type_ := type(ref_raw[0, 0])) == (y := type(raw_comp[0, 0, 0])), (
+        f"Reference and comp images should have the same data type, got {type_} and {y}."
+    )
+    assert np.issubdtype(type_, np.integer), (
+        f"Input DNG images are not in integer format: is the input valid RAW data? Got {type_}."
+    )
 
     # Flip to rggb
     ref_raw = cfa_to_rggb(ref_raw, CFA)
@@ -212,7 +251,7 @@ def load_dng_burst(burst_path: str | Path) -> DNGStack:
 
 
 def save_as_dng(np_img, ref_dng_path, outpath):
-    '''
+    """
     Saves a RGB numpy image as dng.
     The image is first saved as 16bits tiff, then the extension is swapped
     to .dng. The metadata are then overwritten using a reference dng, and
@@ -234,7 +273,7 @@ def save_as_dng(np_img, ref_dng_path, outpath):
     ----------
     np_img : numpy array
         RGB image
-    rawpy_ref : _rawpy.Rawpy 
+    rawpy_ref : _rawpy.Rawpy
         image containing some relevant tags
     outpath : Path
         output save path.
@@ -243,14 +282,18 @@ def save_as_dng(np_img, ref_dng_path, outpath):
     -------
     None.
 
-    '''
-    assert np_img.ndim == 3 and np_img.shape[-1] == 3, f"Got {np_img.shape}, expected HxWx3 RGB image."
+    """
+    assert np_img.ndim == 3 and np_img.shape[-1] == 3, (
+        f"Got {np_img.shape}, expected HxWx3 RGB image."
+    )
 
     np_int_img = np.copy(np_img)  # copying to avoid inplace-overwritting
 
     raw = rawpy.imread(ref_dng_path)
     white_balance = raw.camera_whitebalance
-    white_balance = [x/white_balance[1] for x in white_balance]  # Normalize to green channel
+    white_balance = [
+        x / white_balance[1] for x in white_balance
+    ]  # Normalize to green channel
 
     # Quantize to 16 bits using full range
     new_white_level = 2**16 - 1
@@ -264,7 +307,7 @@ def save_as_dng(np_img, ref_dng_path, outpath):
     #### Saving the image as 16 bits RGB tiff
     save_as_tiff(np_int_img, outpath)
 
-    tmp_path = outpath.parent / 'tmp.dng'
+    tmp_path = outpath.parent / "tmp.dng"
 
     # Deleting tmp.dng if it is already existing
     if os.path.exists(tmp_path):
@@ -281,7 +324,8 @@ def save_as_dng(np_img, ref_dng_path, outpath):
         "-BaselineExposure=0",
         "-SamplesPerPixel#=3",
         "-overwrite_original",
-        "-tagsfromfile", ref_dng_path,
+        "-tagsfromfile",
+        ref_dng_path,
         "-all:all>all:all",
         "-DNGVersion",
         "-DNGBackwardVersion",
@@ -301,8 +345,9 @@ def save_as_dng(np_img, ref_dng_path, outpath):
         "-IFD0:OpcodeList1<SubIFD:OpcodeList1",
         "-IFD0:OpcodeList2<SubIFD:OpcodeList2",
         "-IFD0:OpcodeList3<SubIFD:OpcodeList3",
-        "-o", tmp_path.as_posix(),
-        outpath.with_suffix('.tif').as_posix()
+        "-o",
+        tmp_path.as_posix(),
+        outpath.with_suffix(".tif").as_posix(),
     ]
 
     # Run the command safely
@@ -318,7 +363,8 @@ def save_as_dng(np_img, ref_dng_path, outpath):
         EXIFTOOL_PATH,
         "-n",
         "-overwrite_original",
-        "-tagsfromfile", ref_dng_path,
+        "-tagsfromfile",
+        ref_dng_path,
         f"-IFD0:AnalogBalance={white_balance[0]} {white_balance[1]} {white_balance[2]}",
         f"-AnalogBalance={white_balance[0]} {white_balance[1]} {white_balance[2]}",
         "-AsShotWhiteXY=",
@@ -362,12 +408,16 @@ def save_as_dng(np_img, ref_dng_path, outpath):
     ]
 
     # Use Popen to stream output in real-time
-    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as proc:
+    with subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    ) as proc:
         for line in proc.stdout:
             print(line, end="")  # print each line as it arrives
         proc.wait()  # wait for completion
         if proc.returncode != 0:
-            raise RuntimeError(f"DNG_validate failed with return code {proc.returncode}")
+            raise RuntimeError(
+                f"DNG_validate failed with return code {proc.returncode}"
+            )
 
     os.remove(tmp_path)
 
@@ -377,7 +427,9 @@ def save_as_tiff(int_im, outpath):
     # Imageio is the only module I could find to save 16 bits RGB tiffs without compression (cv2 does LZW).
     # It is vital to have uncompressed image, because validate_dng cannot work if the tiff is compressed.
     try:
-        with imageio.imopen(str(Path(outpath).with_suffix(".tif")), "w", bigtiff=False) as image_file:
+        with imageio.imopen(
+            str(Path(outpath).with_suffix(".tif")), "w", bigtiff=False
+        ) as image_file:
             image_file.write(int_im)
     except ValueError as error:
         raise RuntimeError(
