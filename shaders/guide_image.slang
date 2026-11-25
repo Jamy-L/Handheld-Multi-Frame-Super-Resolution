@@ -1,3 +1,5 @@
+#include "local_stats_warp_filter.slang"
+
 uniform float k_green_diff_impact;
 
 float3 RGBToYCoCg(float3 rgb)
@@ -18,6 +20,7 @@ void computeGuide(uint3 tid: SV_DispatchThreadID, Texture2D<float> sourceRaw, RW
     if (tid.x >= width || tid.y >= height)
         return;
 
+    int2 maxTexel = int2(width - 1, height - 1);
     int2 outTexel = int2(tid.xy);
     float3 avg_rgb = 0.;
     float3 m0 = float3(0.);
@@ -28,7 +31,7 @@ void computeGuide(uint3 tid: SV_DispatchThreadID, Texture2D<float> sourceRaw, RW
     {
         for (int x = -1; x <= 1; ++x)
         {
-            int2 quad = clamp(outTexel + int2(x, y), int2(0, 0), int2(width - 1, height - 1));
+            int2 quad = clamp(outTexel + int2(x, y), int2(0, 0), maxTexel);
             float r = sourceRaw.Load(int3(2 * quad.x, 2 * quad.y, 0));
             float g1 = sourceRaw.Load(int3(2 * quad.x + 1, 2 * quad.y, 0));
             float g2 = sourceRaw.Load(int3(2 * quad.x, 2 * quad.y + 1, 0));
@@ -61,4 +64,19 @@ void computeGuide(uint3 tid: SV_DispatchThreadID, Texture2D<float> sourceRaw, RW
     float3 reference_color = lerp(avg_rgb, greens, green_diff_impact);
 
     out[outTexel] = float4(reference_color, std);
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void blurLocalStats(uint3 tid: SV_DispatchThreadID, Texture2D<float4> stats, RWTexture2D<float4> out,
+                    SamplerState linearSampler, uniform LocalStatsWarpFilter local_stats_warp_filter)
+{
+    uint width, height;
+    out.GetDimensions(width, height);
+    if (tid.x >= width || tid.y >= height)
+        return;
+
+    float2 texelSize = 1.0 / float2(width, height);
+    float2 uv = (float2(tid.xy) + 0.5) * texelSize;
+    out[tid.xy] = warpLocalStats(uv, texelSize, stats, linearSampler, local_stats_warp_filter);
 }

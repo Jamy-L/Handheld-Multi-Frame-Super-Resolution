@@ -162,7 +162,10 @@ def main(
 
     if config.requires_noise_lut:
         noise_lut, noise_offset_uv, noise_scale_uv = load_noise_lut(
-            device, config.noise_model.lut_path, config.noise_model.alpha, config.noise_model.beta
+            device,
+            config.noise_model.lut_path,
+            config.noise_model.alpha,
+            config.noise_model.beta,
         )
     else:
         noise_lut, noise_offset_uv, noise_scale_uv = create_zero_noise_lut(device)
@@ -184,6 +187,8 @@ def main(
     #### Local stats estimation
     if config.robustness.enabled:
         ref_local_stats = init_robustness_(tx_ref_img, config)
+        if debug_writer is not None:
+            debug_writer.write_local_stats(ref_local_stats.to_numpy(), reference=True)
     else:
         ref_local_stats = None
 
@@ -415,15 +420,21 @@ def process(burst_path: Path | str, config: Config):
     try:
         backend = spy.DeviceType[config.backend]
     except KeyError:
-        raise ValueError(f"Unknown backend {config.backend!r}. Run --list-devices for choices.") from None
+        raise ValueError(
+            f"Unknown backend {config.backend!r}. Run --list-devices for choices."
+        ) from None
 
     adapter_luid = None
     if config.device is not None:
         if backend == spy.DeviceType.automatic:
-            raise ValueError("Select a backend with --backend when specifying --device.")
+            raise ValueError(
+                "Select a backend with --backend when specifying --device."
+            )
         adapters = spy.Device.enumerate_adapters(backend)
         if not 0 <= config.device < len(adapters):
-            raise ValueError(f"No device {config.device} on {backend.name}. Run --list-devices for choices.")
+            raise ValueError(
+                f"No device {config.device} on {backend.name}. Run --list-devices for choices."
+            )
         adapter_luid = adapters[config.device].luid
 
     # reading image stack
@@ -475,7 +486,9 @@ def process(burst_path: Path | str, config: Config):
     )
     with device:
         if verbose_1:
-            print(f"Backend: {device.info.type.name}, device: {device.info.adapter_name}")
+            print(
+                f"Backend: {device.info.type.name}, device: {device.info.adapter_name}"
+            )
         hr_output, debug_dict = main(
             ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE),
             raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE),

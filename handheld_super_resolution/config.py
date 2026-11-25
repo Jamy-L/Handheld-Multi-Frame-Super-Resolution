@@ -20,6 +20,12 @@ class KernelType(StrEnum):
     ISO = "iso"
 
 
+class LocalStatsWarpFilter(StrEnum):
+    BILINEAR = "bilinear"
+    BEZIER = "bezier"  # Cubic Bézier smoothing kernel.
+    BIQUADRATIC = "biquadratic"
+
+
 class GrayscaleMethod(Enum):
     """Methods for converting a raw image to grayscale."""
 
@@ -156,6 +162,10 @@ class RobustnessConfig:
         5.0  # Minimum local standard deviation in multiples of noise std for boosting.
     )
     R_boost: float = 6.0  # Extra rejection multiplier when both thresholds are met.
+
+    local_stats_warp_filter: Annotated[
+        LocalStatsWarpFilter, tyro.conf.EnumChoicesFromValues
+    ] = LocalStatsWarpFilter.BIQUADRATIC
 
 
 # Each curve clamps independently at its first and last SNR.

@@ -1,16 +1,15 @@
 """Stream pipeline diagnostics to disk without retaining full frame stacks."""
 
 import re
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Optional, Tuple, Union
 
 import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-
-RGBColor = Tuple[int, int, int]
+RGBColor = tuple[int, int, int]
 
 NAN_COLOR: RGBColor = (255, 0, 255)
 POS_INF_COLOR: RGBColor = (255, 0, 0)
@@ -22,7 +21,7 @@ class DebugWriter:
 
     _CATEGORY_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
-    def __init__(self, root: Union[str, Path] = "debug") -> None:
+    def __init__(self, root: str | Path = "debug") -> None:
         self.root = Path(root)
         self.run_dir = self._create_run_directory()
         self.frame_id = -1
@@ -54,7 +53,7 @@ class DebugWriter:
         self,
         category: str,
         values: NDArray,
-        value_range: Optional[Tuple[float, float]] = (0, 1),
+        value_range: tuple[float, float] | None = (0, 1),
         colormap: int = cv2.COLORMAP_VIRIDIS,
     ) -> Path:
         """Render a scalar field with a colormap and save it as RGB."""
@@ -71,18 +70,30 @@ class DebugWriter:
         self._paint_invalid(rgb, nan_mask, pos_inf_mask, neg_inf_mask)
         return self._write(category, rgb)
 
+    def write_local_stats(self, guide: NDArray, *, reference: bool = False) -> None:
+        prefix = "ref_" if reference else ""
+        # The shader stores (Y, Cg, Co, std) and sums the two green samples.
+        y, cg, co = guide[..., 0], guide[..., 1], guide[..., 2]
+        frame = np.stack((y - cg + co, y + cg, y - cg - co), axis=-1)
+        self.write_rgb(f"{prefix}rgb_guides", frame)
+        std = guide[..., 3]
+        upper = std[np.isfinite(std)].max(initial=0.0)
+        self.write_scalar(f"{prefix}guide_std", std, value_range=(0.0, upper or 1.0))
+
     def write_scalar_channels(
         self,
         category: str,
         values: NDArray,
-        channel_names: Tuple[str, ...],
-        value_range: Optional[Tuple[float, float]] = None,
+        channel_names: tuple[str, ...],
+        value_range: tuple[float, float] | None = None,
         colormap: int = cv2.COLORMAP_VIRIDIS,
-    ) -> Tuple[Path, ...]:
+    ) -> tuple[Path, ...]:
         """Save each channel separately using one shared color scale."""
         values = np.asarray(values)
         if values.ndim != 3:
-            raise ValueError("Channel debug data must have shape (height, width, channels)")
+            raise ValueError(
+                "Channel debug data must have shape (height, width, channels)"
+            )
         if values.shape[-1] != len(channel_names):
             raise ValueError("A name must be provided for every debug channel")
 
@@ -103,19 +114,24 @@ class DebugWriter:
         self,
         category: str,
         levels: Iterable[NDArray],
-    ) -> Tuple[Path, ...]:
+    ) -> tuple[Path, ...]:
         """Save fine-to-coarse grayscale pyramid levels in separate categories."""
         return tuple(
             self.write_rgb(f"{category}_level_{level_id}", level)
             for level_id, level in enumerate(levels)
         )
 
-    def write_precision_matrix(self, category: str, packed: NDArray) -> Tuple[Path, Path]:
+    def write_precision_matrix(
+        self, category: str, packed: NDArray
+    ) -> tuple[Path, Path]:
         """Visualize the largest precision eigenvalue and its unoriented axis."""
         components = packed[..., :3]
         invalid = self._invalid_masks(components)
-        xx, yy, xy = np.moveaxis(np.nan_to_num(components.astype(np.float64),
-                                               nan=0, posinf=0, neginf=0), -1, 0)
+        xx, yy, xy = np.moveaxis(
+            np.nan_to_num(components.astype(np.float64), nan=0, posinf=0, neginf=0),
+            -1,
+            0,
+        )
         # Analytic eigendecomposition of the symmetric 2x2 precision matrix.
         gap = np.hypot(xx - yy, 2 * xy)
         largest = (xx + yy + gap) / 2
@@ -164,7 +180,7 @@ class DebugWriter:
         return self._write(category, rgb)
 
     @staticmethod
-    def _invalid_masks(values: NDArray) -> Tuple[NDArray, NDArray, NDArray]:
+    def _invalid_masks(values: NDArray) -> tuple[NDArray, NDArray, NDArray]:
         nan_mask = np.isnan(values)
         pos_inf_mask = np.isposinf(values)
         neg_inf_mask = np.isneginf(values)
@@ -181,13 +197,15 @@ class DebugWriter:
     @staticmethod
     def _to_uint8(values: NDArray, lower: float, upper: float) -> NDArray:
         if not np.isfinite(lower) or not np.isfinite(upper) or upper <= lower:
-            raise ValueError("The debug value range must contain two finite increasing values")
+            raise ValueError(
+                "The debug value range must contain two finite increasing values"
+            )
         values = np.nan_to_num(values, nan=lower, posinf=upper, neginf=lower)
         normalized = np.clip((values - lower) / (upper - lower), 0, 1)
         return np.round(normalized * 255).astype(np.uint8)
 
     @staticmethod
-    def _finite_range(values: NDArray) -> Tuple[float, float]:
+    def _finite_range(values: NDArray) -> tuple[float, float]:
         finite_values = values[np.isfinite(values)]
         if finite_values.size == 0:
             return 0, 1

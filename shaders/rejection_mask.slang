@@ -1,3 +1,5 @@
+#include "local_stats_warp_filter.slang"
+
 uniform bool noise_correction;
 uniform float2 noise_offset_uv;
 uniform float2 noise_scale_uv;
@@ -7,9 +9,10 @@ uniform float R_boost;
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void computeRejectionCoeff(uint3 tid: SV_DispatchThreadID, Texture2D<float4> sourceLocalStats,
-                           Texture2D<float4> localStats, SamplerState statsSampler, Texture2D<float4> flow,
+                           Texture2D<float4> localStats, SamplerState linearSampler, Texture2D<float4> flow,
                            SamplerState flowSampler, uniform float2 flow_scale_uv, uniform float2 flow_offset_uv,
-                           Texture2D<float4> noise_lut, SamplerState noiseSampler, RWTexture2D<float> out)
+                           Texture2D<float4> noise_lut, SamplerState noiseSampler, RWTexture2D<float> out,
+                           uniform LocalStatsWarpFilter local_stats_warp_filter)
 {
     uint width, height;
     out.GetDimensions(width, height);
@@ -17,17 +20,17 @@ void computeRejectionCoeff(uint3 tid: SV_DispatchThreadID, Texture2D<float4> sou
         return;
 
     int2 outTexel = int2(tid.xy);
-    float2 uv = (outTexel + 0.5) / float2(width, height);
+    float2 texel_size = 1.0 / float2(width, height);
+    float2 uv = (outTexel + 0.5) * texel_size;
     float2 uv_flow = (uv - flow_offset_uv) * flow_scale_uv;
     float3 local_flow = flow.SampleLevel(flowSampler, uv_flow, 0.0).xyz; // z is local flow magnitude
     float2 uv_mov = uv + local_flow.xy;
 
-    // TODO:here implement a proper sampling (bicubic or biquadratic) using hardware bilinear.
-    // Apply the same filter to the warped image and ref
-    float4 refStats = sourceLocalStats.SampleLevel(statsSampler, uv, 0.0);
-    float4 movStats = localStats.SampleLevel(statsSampler, uv_mov, 0.0);
+    // refStats is pre-filtered
+    float4 refStats = sourceLocalStats.Load(int3(outTexel, 0));
+    float4 movStats = warpLocalStats(uv_mov, texel_size, localStats, linearSampler, local_stats_warp_filter);
 
-    float std = min(refStats.w, movStats.w);
+    float std = min(refStats.w, movStats.w); // Min std between both frames
     float3 color_distances = refStats.xyz - movStats.xyz;
     color_distances *= color_distances;
     float boost = 1.0;
@@ -35,9 +38,12 @@ void computeRejectionCoeff(uint3 tid: SV_DispatchThreadID, Texture2D<float4> sou
     {
         float2 noiseUV = (float2(refStats.x, 0.0) - noise_offset_uv) * noise_scale_uv;
         float4 noise = noise_lut.SampleLevel(noiseSampler, noiseUV, 0.0);
-        std = max(std, noise.w);
+        std = max(std, noise.w); // noise-induced std
         // Two independent guides contribute noise to their squared difference.
-        color_distances *= color_distances / max(color_distances + 2.0 * noise.xyz, 1e-30);
+        color_distances *= color_distances / max(color_distances + 2.0 * noise.xyz, 1e-30); // Wiener shrinkeage
+        // The 2.* is bcs the noiseParam is the avg diff between one noisy patch and the gt clean. So diff between 2
+        // noisy is the double
+        // If large local flow motion, and local std > k * noise std: apply bigger R_boost
         if (local_flow.z >= rejection_params.z && std >= rejection_params.w * noise.w)
             boost = R_boost;
     }

@@ -14,14 +14,22 @@ This script contains :
 import time
 from pathlib import Path
 
-import numpy as np
+from cv2 import line
 import slangpy as spy
 
-from .config import Config
+from .config import Config, LocalStatsWarpFilter
 from .debug_writer import DebugWriter
 from .utils import (
     timer,
 )
+
+
+# Matches LocalStatsWarpFilter in local_stats_warp_filter.slang.
+_LOCAL_STATS_WARP_FILTER_IDS = {
+    LocalStatsWarpFilter.BILINEAR: 0,
+    LocalStatsWarpFilter.BEZIER: 1,
+    LocalStatsWarpFilter.BIQUADRATIC: 2,
+}
 
 
 def init_robustness(ref_img: spy.Texture, config: Config) -> spy.Texture:
@@ -52,8 +60,40 @@ def init_robustness(ref_img: spy.Texture, config: Config) -> spy.Texture:
     )
 
     local_stats = compute_local_stats_(ref_img, config.robustness.k_green_diff_impact)
+    local_stats_warp_filter = config.robustness.local_stats_warp_filter
+    if local_stats_warp_filter == LocalStatsWarpFilter.BILINEAR:
+        return local_stats  # Warping with 0 flow yields identity with bilinear
 
-    return local_stats
+    return blur_local_stats(local_stats, local_stats_warp_filter)
+
+
+def blur_local_stats(
+    local_stats: spy.Texture, local_stats_warp_filter: LocalStatsWarpFilter
+) -> spy.Texture:
+    device = spy.current_device()
+    shader = Path(__file__).resolve().parents[1] / "shaders" / "guide_image.slang"
+    filtered = device.create_texture(
+        width=local_stats.width,
+        height=local_stats.height,
+        format=local_stats.format,
+        usage=spy.TextureUsage.unordered_access | spy.TextureUsage.shader_resource,
+    )
+    clamp_to_edge = spy.TextureAddressingMode.clamp_to_edge
+    linear_sampler = device.create_sampler(
+        min_filter=spy.TextureFilteringMode.linear,
+        mag_filter=spy.TextureFilteringMode.linear,
+        address_u=clamp_to_edge,
+        address_v=clamp_to_edge,
+    )
+    program = device.load_program(str(shader), ["blurLocalStats"])
+    device.create_compute_kernel(program).dispatch(
+        thread_count=[local_stats.width, local_stats.height, 1],
+        local_stats_warp_filter=_LOCAL_STATS_WARP_FILTER_IDS[local_stats_warp_filter],
+        linearSampler=linear_sampler,
+        stats=local_stats,
+        out=filtered,
+    )
+    return filtered
 
 
 def compute_robustness(
@@ -107,18 +147,18 @@ def compute_robustness(
     local_stats = compute_local_stats_(comp_img, config.robustness.k_green_diff_impact)
 
     if debug_writer is not None:
-        guide = local_stats.to_numpy()
-        # The shader stores (Y, Cg, Co, std) and sums the two green samples.
-        y, cg, co = guide[..., 0], guide[..., 1], guide[..., 2]
-        frame = np.stack((y - cg + co, y + cg, y - cg - co), axis=-1)
-        debug_writer.write_rgb("rgb_guides", frame)
-        std = guide[..., 3]
-        upper = std[np.isfinite(std)].max(initial=0.0)
-        debug_writer.write_scalar("guide_std", std, value_range=(0.0, upper or 1.0))
+        debug_writer.write_local_stats(local_stats.to_numpy())
 
     rejection_mask = compute_rejection_coeff_(
-        ref_local_stats, local_stats, flow, flow_offset_uv, flow_scale_uv,
-        noise_texture, noise_offset_uv, noise_scale_uv, config
+        ref_local_stats,
+        local_stats,
+        flow,
+        flow_offset_uv,
+        flow_scale_uv,
+        noise_texture,
+        noise_offset_uv,
+        noise_scale_uv,
+        config,
     )
 
     if debug_writer is not None:
@@ -154,7 +194,10 @@ def mask_dilation(rejection_mask: spy.Texture, config: Config) -> spy.Texture:
     return output
 
 
-def compute_local_stats(raw_img: spy.Texture, k_green_diff_impact: float) -> spy.Texture:
+def compute_local_stats(
+    raw_img: spy.Texture,
+    k_green_diff_impact: float,
+) -> spy.Texture:
     device = spy.current_device()
 
     output = device.create_texture(
@@ -201,7 +244,7 @@ def compute_rejection_coeff(
         address_u=clamp_to_edge,
         address_v=clamp_to_edge,
     )
-    stats_sampler = device.create_sampler(
+    linear_sampler = device.create_sampler(
         min_filter=spy.TextureFilteringMode.linear,
         mag_filter=spy.TextureFilteringMode.linear,
         address_u=clamp_to_edge,
@@ -224,16 +267,14 @@ def compute_rejection_coeff(
             ),
             "R_boost": config.robustness.R_boost,
         },
+        local_stats_warp_filter=_LOCAL_STATS_WARP_FILTER_IDS[
+            config.robustness.local_stats_warp_filter
+        ],
         sourceLocalStats=ref_local_stats,
         localStats=local_stats,
-        statsSampler=stats_sampler,
+        linearSampler=linear_sampler,
         noise_lut=noise_texture,
-        noiseSampler=device.create_sampler(
-            min_filter=spy.TextureFilteringMode.linear,
-            mag_filter=spy.TextureFilteringMode.linear,
-            address_u=clamp_to_edge,
-            address_v=clamp_to_edge,
-        ),
+        noiseSampler=linear_sampler,
         flow=flow,
         flowSampler=flow_sampler,
         flow_scale_uv=spy.float2(*flow_scale_uv),
