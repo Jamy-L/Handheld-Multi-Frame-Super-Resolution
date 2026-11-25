@@ -1,14 +1,12 @@
 [project]
 name = "handheld-super-resolution"
 version = "0.1.0"
-description = "Handheld multi-frame super-resolution (Wronski et al.) with Numba CUDA"
+description = "Handheld multi-frame super-resolution (Wronski et al.)"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
     "numpy<2.5",
-    "numba",
-    "numba-cuda[cu13]",
     "torch",
     "rawpy",
     "exifread",

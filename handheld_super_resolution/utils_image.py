@@ -1,14 +1,10 @@
 import numpy as np
-import torch as th
-from numba import cuda
-from numba.cuda.cudadrv.devicearray import DeviceNDArray
 from numpy.typing import NDArray
 from scipy.ndimage import convolve1d
 
 from .config import GrayscaleMethod
 from .utils import (
     DEFAULT_NUMPY_FLOAT_TYPE,
-    DEFAULT_TORCH_FLOAT_TYPE,
 )
 
 
@@ -82,15 +78,6 @@ def compute_grey_images(image: NDArray, method: GrayscaleMethod) -> NDArray[np.f
     # Demosaicing can overshoot the normalized sensor range; the native API
     # requires finite grayscale samples in [0, 1].
     return np.ascontiguousarray(np.clip(gray, 0, 1), dtype=np.float32)
-
-
-def average_bayer_quads(img: DeviceNDArray) -> DeviceNDArray:
-    """Average Bayer quads on the GPU for merging kernel estimation."""
-    image = th.as_tensor(img, dtype=DEFAULT_TORCH_FLOAT_TYPE, device="cuda")
-    gray = (
-        image[::2, ::2] + image[::2, 1::2] + image[1::2, ::2] + image[1::2, 1::2]
-    ) * 0.25
-    return cuda.as_cuda_array(gray)
 
 
 def demosaic_to_grey(img: NDArray) -> NDArray[np.float32]:

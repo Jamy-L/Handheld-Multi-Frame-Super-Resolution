@@ -9,9 +9,7 @@ import time
 import numpy as np
 import torch as th
 import torch.fft
-from numba import cuda, float32
 
-DEFAULT_CUDA_FLOAT_TYPE = float32
 DEFAULT_NUMPY_FLOAT_TYPE = np.float32
 
 DEFAULT_TORCH_FLOAT_TYPE = th.float32
@@ -39,14 +37,11 @@ def getTime(currentTime, labelName, printTime=True, spaceSize=50):
 
 def timer(func, enabled, start_s=None, end_s=None, spaceSize=50):
     def wrapper(*args, **kwargs):
-        cuda.synchronize()
         t1 = time.perf_counter()
         if start_s is not None:
             print(start_s)
 
         out = func(*args, **kwargs)
-
-        cuda.synchronize()
 
         if end_s is not None:
             print(

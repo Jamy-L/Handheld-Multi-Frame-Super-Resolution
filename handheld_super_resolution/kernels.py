@@ -12,7 +12,6 @@ import time
 from pathlib import Path
 
 import slangpy as spy
-from numba import cuda
 
 from .config import Config, KernelType
 from .utils import (
@@ -23,7 +22,13 @@ SEL_HARD_THRESHOLD = 0
 SEL_LINEAR = 1
 
 
-def estimate_precision_matrices(img: spy.Texture, noise_lut: spy.Texture, noise_offset_uv: tuple[float, float], noise_scale_uv: tuple[float, float], config: Config):
+def estimate_precision_matrices(
+    img: spy.Texture,
+    noise_lut: spy.Texture,
+    noise_offset_uv: tuple[float, float],
+    noise_scale_uv: tuple[float, float],
+    config: Config,
+):
     """
     Implementation of Alg. 5: ComputeKernelCovariance
     Returns the kernels covariance matrices for the frame J_n, sampled at the
@@ -54,11 +59,7 @@ def estimate_precision_matrices(img: spy.Texture, noise_lut: spy.Texture, noise_
     k_stretch = float(config.merging.kernel.k_stretch)
     k_shrink = float(config.merging.kernel.k_shrink)
 
-    alpha = config.noise_model.alpha
-    beta = config.noise_model.beta
-
     if verbose_3:
-        cuda.synchronize()
         t1 = time.perf_counter()
 
     device = spy.current_device()
@@ -105,7 +106,6 @@ def estimate_precision_matrices(img: spy.Texture, noise_lut: spy.Texture, noise_
     )
 
     if verbose_3:
-        cuda.synchronize()
         t1 = getTime(t1, "- Covariances estimated")
 
     return precision_matrices

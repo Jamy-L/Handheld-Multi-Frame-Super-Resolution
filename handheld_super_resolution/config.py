@@ -163,6 +163,7 @@ class RobustnessConfig:
     )
     R_boost: float = 6.0  # Extra rejection multiplier when both thresholds are met.
 
+    # Filter to use when warping the local image statistics
     local_stats_warp_filter: Annotated[
         LocalStatsWarpFilter, tyro.conf.EnumChoicesFromValues
     ] = LocalStatsWarpFilter.BIQUADRATIC
