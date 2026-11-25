@@ -14,7 +14,6 @@ This script contains :
 import time
 from pathlib import Path
 
-from cv2 import line
 import slangpy as spy
 
 from .config import Config, LocalStatsWarpFilter
@@ -22,7 +21,6 @@ from .debug_writer import DebugWriter
 from .utils import (
     timer,
 )
-
 
 # Matches LocalStatsWarpFilter in local_stats_warp_filter.slang.
 _LOCAL_STATS_WARP_FILTER_IDS = {
