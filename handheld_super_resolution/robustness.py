@@ -11,16 +11,12 @@ This script contains :
 @author: jamyl
 """
 
-import time
 from pathlib import Path
 
 import slangpy as spy
 
 from .config import Config, LocalStatsWarpFilter
 from .debug_writer import DebugWriter
-from .utils import (
-    timer,
-)
 
 # Matches LocalStatsWarpFilter in local_stats_warp_filter.slang.
 _LOCAL_STATS_WARP_FILTER_IDS = {
@@ -51,13 +47,8 @@ def init_robustness(ref_img: spy.Texture, config: Config) -> spy.Texture:
         local standard deviations of the reference image.
 
     """
-    verbose_3 = config.verbose >= 3
 
-    compute_local_stats_ = timer(
-        compute_local_stats, verbose_3, end_s=" - Local stats estimated"
-    )
-
-    local_stats = compute_local_stats_(ref_img, config.robustness.k_green_diff_impact)
+    local_stats = compute_local_stats(ref_img, config.robustness.k_green_diff_impact)
     local_stats_warp_filter = config.robustness.local_stats_warp_filter
     if local_stats_warp_filter == LocalStatsWarpFilter.BILINEAR:
         return local_stats  # Warping with 0 flow yields identity with bilinear
@@ -132,22 +123,14 @@ def compute_robustness(
         Locally minimized Robustness map, sampled at the center of
         every bayer quad
     """
-    current_time, verbose_3 = time.perf_counter(), config.verbose >= 3
-
-    compute_local_stats_ = timer(
-        compute_local_stats, verbose_3, end_s=" - Local stats estimated"
-    )
-    compute_rejection_coeff_ = timer(
-        compute_rejection_coeff, verbose_3, end_s=" - Rejection coeffs evaluated"
-    )
 
     # Computing guide image
-    local_stats = compute_local_stats_(comp_img, config.robustness.k_green_diff_impact)
+    local_stats = compute_local_stats(comp_img, config.robustness.k_green_diff_impact)
 
     if debug_writer is not None:
         debug_writer.write_local_stats(local_stats.to_numpy())
 
-    rejection_mask = compute_rejection_coeff_(
+    rejection_mask = compute_rejection_coeff(
         ref_local_stats,
         local_stats,
         flow,

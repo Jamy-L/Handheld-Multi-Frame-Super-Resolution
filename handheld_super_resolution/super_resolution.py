@@ -14,15 +14,15 @@ from .debug_writer import NAN_COLOR, DebugWriter
 from .kernels import estimate_precision_matrices
 from .merge import merge
 from .noise_lut import create_zero_noise_lut, load_noise_lut
+from .noise_profile import expand_noise_profile_to_rgbg
 from .robustness import compute_robustness, init_robustness
 from .utils import (
     DEFAULT_NUMPY_FLOAT_TYPE,
     FINAL_TILE_SIZE,
     FINAL_TILE_STRIDE,
     getTime,
-    timer,
 )
-from .utils_dng import expand_noise_profile_to_rgbg, load_dng_burst
+from .utils_dng import load_dng_burst
 from .utils_image import (
     apply_orientation,
     compute_grey_images,
@@ -69,50 +69,10 @@ def main(
 
     """
 
-    grey_method = config.alignment.grey_method
-
     ### verbose and timing related stuff
     verbose = config.verbose >= 1
-    verbose_2 = config.verbose >= 2
-    verbose_3 = config.verbose >= 3
     t1 = 0.0
     im_time = 0.0
-
-    init_robustness_ = timer(
-        init_robustness,
-        verbose_2,
-        "\nEstimating ref image local stats",
-        "Local stats estimated (Total)",
-    )
-    compute_grey_images_ = timer(
-        compute_grey_images,
-        verbose_3,
-        end_s=f"- Grey images estimated by {grey_method.value}",
-    )
-    compute_robustness_ = timer(
-        compute_robustness,
-        verbose_2,
-        "\nEstimating robustness",
-        "Robustness estimated (Total)",
-    )
-    estimate_precision_matrices_ = timer(
-        estimate_precision_matrices,
-        verbose_2,
-        "\nEstimating kernels",
-        "Kernels estimated (Total)",
-    )
-    merge_ = timer(
-        merge, verbose_2, "\nAccumulating Image", "Image accumulated (Total)"
-    )
-    init_alignment_ = timer(
-        alignment.build_reference_pyramid,
-        verbose_2,
-        "\nInitializing alignment",
-        "Alignment initialized (Total)",
-    )
-    align_ = timer(
-        alignment.align, verbose_2, "\nBeginning alignment", "Image aligned (Total)"
-    )
 
     debug_dict = {}
     debug_writer = DebugWriter() if config.debug else None
@@ -161,6 +121,7 @@ def main(
     )
 
     if config.requires_noise_lut:
+        assert config.noise_model.lut_path is not None
         noise_lut, noise_offset_uv, noise_scale_uv = load_noise_lut(
             device,
             config.noise_model.lut_path,
@@ -175,9 +136,9 @@ def main(
         t1 = time.perf_counter()
 
     #### alignment reference (NumPy gray input)
-    ref_grey = compute_grey_images_(ref_img, grey_method)
+    ref_grey = compute_grey_images(ref_img, config.alignment.grey_method)
     options = alignment_options(config)
-    ref_pyramid = init_alignment_(ref_grey, **options)
+    ref_pyramid = alignment.build_reference_pyramid(ref_grey, **options)
     if debug_writer is not None:
         debug_writer.write_grayscale_pyramid(
             "alignment_reference_grey_pyramid",
@@ -186,7 +147,7 @@ def main(
 
     #### Local stats estimation
     if config.robustness.enabled:
-        ref_local_stats = init_robustness_(tx_ref_img, config)
+        ref_local_stats = init_robustness(tx_ref_img, config)
         if debug_writer is not None:
             debug_writer.write_local_stats(ref_local_stats.to_numpy(), reference=True)
     else:
@@ -195,39 +156,15 @@ def main(
     accumulated_r = None
     if config.robustness.save_mask and config.robustness.enabled:
         assert ref_local_stats
+        # TODO: Compute Accumulated robustness
         # accumulated_r = cuda.to_device(
         #     np.zeros((ref_local_stats.height, ref_local_stats.width))
         # )
 
-    native_imshape_y, native_imshape_x = ref_img.shape
-    output_size = (
-        round(config.scale * native_imshape_y),
-        round(config.scale * native_imshape_x),
-    )
-
-    num = device.create_texture(
-        type=spy.TextureType.texture_2d,
-        width=output_size[1],
-        height=output_size[0],
-        format=spy.Format.rgba32_float,
-        mip_count=1,
-        usage=(spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access),
-        data=np.zeros((*output_size, 4), dtype=DEFAULT_NUMPY_FLOAT_TYPE),
-        label="num",
-    )
-    den = device.create_texture(
-        type=spy.TextureType.texture_2d,
-        width=output_size[1],
-        height=output_size[0],
-        format=spy.Format.rgba32_float,
-        mip_count=1,
-        usage=(spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access),
-        data=np.zeros((*output_size, 4), dtype=DEFAULT_NUMPY_FLOAT_TYPE),
-        label="den",
-    )
+    num, den = init_out_textures(ref_img.shape, config.scale)
 
     #### Ref covariance estimation
-    precision_matrices = estimate_precision_matrices_(
+    precision_matrices = estimate_precision_matrices(
         tx_ref_img, noise_lut, noise_offset_uv, noise_scale_uv, config
     )
     if debug_writer is not None:
@@ -236,38 +173,8 @@ def main(
         )
 
     ##### Merge ref
-    flow_height = (ref_grey.shape[0] - FINAL_TILE_SIZE) // FINAL_TILE_STRIDE + 1
-    flow_width = (ref_grey.shape[1] - FINAL_TILE_SIZE) // FINAL_TILE_STRIDE + 1
-    ### The optical_flow is hardcoded on a peculiar layout: FINAL_TILE_SIZE, with a stride of FINAL_TILE_STRIDE.
-    # We will ship the flow in a texture, which assumes that d separates 2 vertices, and d/2 separates the first vertex from the edge.
-    # We must map the image uv to the flow uv.
-    # We crop the extremities of the flow tiles, to make it fit a regular texture, and we use a clamp_to_edge sampler later.
-    # The resulting flow texture will cover this many grey pixels
-    flow_texture_width_in_gray_pixel = FINAL_TILE_STRIDE * flow_width
-    flow_texture_height_in_gray_pixel = FINAL_TILE_STRIDE * flow_height
-    flow_texture_scale_u = ref_grey.shape[1] / flow_texture_width_in_gray_pixel
-    flow_texture_scale_v = ref_grey.shape[0] / flow_texture_height_in_gray_pixel
-
-    # The first tile center is at half the tile size. Point sampling places
-    # that center half a stride from the flow texture's left/top edge.
-    flow_grid_edge = 0.5 * (FINAL_TILE_SIZE - FINAL_TILE_STRIDE)
-    flow_texture_offset_u = flow_grid_edge / ref_grey.shape[1]
-    flow_texture_offset_v = flow_grid_edge / ref_grey.shape[0]
-    # a location uv on an image is (uv - offset) * scale on the flow's uv
-    flow_texture_scale_uv = (flow_texture_scale_u, flow_texture_scale_v)
-    flow_texture_offset_uv = (flow_texture_offset_u, flow_texture_offset_v)
-
-    tx_flow = device.create_texture(
-        type=spy.TextureType.texture_2d,
-        width=flow_width,
-        height=flow_height,
-        format=spy.Format.rgba32_float,
-        mip_count=1,
-        usage=(spy.TextureUsage.shader_resource | spy.TextureUsage.copy_destination),
-        data=np.zeros(
-            (flow_height, flow_width, 4), dtype=DEFAULT_NUMPY_FLOAT_TYPE
-        ),  # Init with 0 for ref
-        label="flow",
+    tx_flow, flow_texture_offset_uv, flow_texture_scale_uv = create_flow_texture(
+        ref_grey.shape
     )
     rejection_mask = device.create_texture(
         type=spy.TextureType.texture_2d,
@@ -281,7 +188,7 @@ def main(
         ),  # Init with 1 for ref
         label="rejectionMask",
     )
-    merge_(
+    merge(
         tx_ref_img,
         tx_flow,
         flow_texture_offset_uv,
@@ -304,14 +211,16 @@ def main(
             im_time = time.perf_counter()
 
         #### CPU alignment (NumPy in, NumPy out)
-        moving_grey = compute_grey_images_(comp_imgs[im_id], grey_method)
+        moving_grey = compute_grey_images(
+            comp_imgs[im_id], config.alignment.grey_method
+        )
         moving_pyramid = alignment.build_moving_pyramid(moving_grey, **options)
         if debug_writer is not None:
             debug_writer.write_grayscale_pyramid(
                 "alignment_moving_grey_pyramid",
                 (level.image for level in moving_pyramid.levels),
             )
-        flow = align_(ref_pyramid, moving_pyramid)
+        flow = alignment.align(ref_pyramid, moving_pyramid)
         if debug_writer is not None:
             debug_writer.write_flow("optical_flow", flow)
 
@@ -321,7 +230,7 @@ def main(
         #### Robustness
         if config.robustness.enabled:
             assert ref_local_stats is not None
-            rejection_mask = compute_robustness_(
+            rejection_mask = compute_robustness(
                 tx_mov_img,
                 ref_local_stats,
                 tx_flow,
@@ -339,12 +248,12 @@ def main(
             pass
 
         if accumulated_r is not None:
-            # TODO port this
+            # TODO: port this
             # add(accumulated_r, robustness)
             pass
 
         #### Kernel estimation
-        precision_matrices = estimate_precision_matrices_(
+        precision_matrices = estimate_precision_matrices(
             tx_mov_img, noise_lut, noise_offset_uv, noise_scale_uv, config
         )
 
@@ -354,7 +263,7 @@ def main(
             )
 
         #### Merging
-        merge_(
+        merge(
             tx_mov_img,
             tx_flow,
             flow_texture_offset_uv,
@@ -386,6 +295,8 @@ def main(
         )
 
     if config.robustness.save_mask and config.robustness.enabled and accumulated_r:
+        raise NotImplementedError
+        # TODO: Port this
         debug_dict["accumulated robustness"] = accumulated_r.copy_to_host()
 
     return out, debug_dict
@@ -455,9 +366,6 @@ def process(burst_path: Path | str, config: Config):
         # Extract alpha and beta from the DNG tags.
         config.noise_model.alpha = dng_stack.alpha
         config.noise_model.beta = dng_stack.beta
-
-    if verbose_2:
-        currentTime = getTime(currentTime, " -- Read raw files")
 
     #### Estimating ref image SNR
     if config.force_snr is None:
@@ -559,3 +467,74 @@ def prepare_flow(
     data[..., :2] = filtered_flow
     data[..., 2] = np.hypot(spread[..., 0], spread[..., 1])
     texture.copy_from_numpy(data)
+
+
+def init_out_textures(input_imsape: tuple[float, float], scale: float):
+    device = spy.current_device()
+    native_imshape_y, native_imshape_x = input_imsape
+    output_size = (
+        round(scale * native_imshape_y),
+        round(scale * native_imshape_x),
+    )
+
+    num = device.create_texture(
+        type=spy.TextureType.texture_2d,
+        width=output_size[1],
+        height=output_size[0],
+        format=spy.Format.rgba32_float,
+        mip_count=1,
+        usage=(spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access),
+        data=np.zeros((*output_size, 4), dtype=DEFAULT_NUMPY_FLOAT_TYPE),
+        label="num",
+    )
+    den = device.create_texture(
+        type=spy.TextureType.texture_2d,
+        width=output_size[1],
+        height=output_size[0],
+        format=spy.Format.rgba32_float,
+        mip_count=1,
+        usage=(spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access),
+        data=np.zeros((*output_size, 4), dtype=DEFAULT_NUMPY_FLOAT_TYPE),
+        label="den",
+    )
+    return num, den
+
+
+def create_flow_texture(imshape: tuple[int, int]):
+    height_px, width_px = imshape
+    device = spy.current_device()
+
+    flow_height = (height_px - FINAL_TILE_SIZE) // FINAL_TILE_STRIDE + 1
+    flow_width = (width_px - FINAL_TILE_SIZE) // FINAL_TILE_STRIDE + 1
+    ### The optical_flow is hardcoded on a peculiar layout: FINAL_TILE_SIZE, with a stride of FINAL_TILE_STRIDE.
+    # We will ship the flow in a texture, which assumes that d separates 2 vertices, and d/2 separates the first vertex from the edge.
+    # We must map the image uv to the flow uv.
+    # We crop the extremities of the flow tiles, to make it fit a regular texture, and we use a clamp_to_edge sampler later.
+    # The resulting flow texture will cover this many grey pixels
+    flow_texture_width_in_gray_pixel = FINAL_TILE_STRIDE * flow_width
+    flow_texture_height_in_gray_pixel = FINAL_TILE_STRIDE * flow_height
+    flow_texture_scale_u = width_px / flow_texture_width_in_gray_pixel
+    flow_texture_scale_v = height_px / flow_texture_height_in_gray_pixel
+
+    # The first tile center is at half the tile size. Point sampling places
+    # that center half a stride from the flow texture's left/top edge.
+    flow_grid_edge = 0.5 * (FINAL_TILE_SIZE - FINAL_TILE_STRIDE)
+    flow_texture_offset_u = flow_grid_edge / width_px
+    flow_texture_offset_v = flow_grid_edge / height_px
+    # a location uv on an image is (uv - offset) * scale on the flow's uv
+    flow_texture_scale_uv = (flow_texture_scale_u, flow_texture_scale_v)
+    flow_texture_offset_uv = (flow_texture_offset_u, flow_texture_offset_v)
+
+    tx_flow = device.create_texture(
+        type=spy.TextureType.texture_2d,
+        width=flow_width,
+        height=flow_height,
+        format=spy.Format.rgba32_float,
+        mip_count=1,
+        usage=(spy.TextureUsage.shader_resource | spy.TextureUsage.copy_destination),
+        data=np.zeros(
+            (flow_height, flow_width, 4), dtype=DEFAULT_NUMPY_FLOAT_TYPE
+        ),  # Init with 0 for ref
+        label="flow",
+    )
+    return tx_flow, flow_texture_offset_uv, flow_texture_scale_uv

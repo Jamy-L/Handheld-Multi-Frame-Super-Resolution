@@ -1,7 +1,7 @@
 """
 Created on Mon Aug  1 18:38:07 2022
 
-This script contains : 
+This script contains :
     - The implementation of Alg. 4, the conventionnal accumulation
     - The implementation of Alg. 11, where the reference image is merged
 
@@ -9,13 +9,21 @@ This script contains :
 @author: jamyl
 """
 
-
 from pathlib import Path
 
 import slangpy as spy
 
-def merge(comp_img: spy.Texture, alignments: spy.Texture, flow_offset_uv: tuple[float, float], flow_scale_uv: tuple[float, float], precision_matrices: spy.Texture, r: spy.Texture,
-          num: spy.Texture, den: spy.Texture):
+
+def merge(
+    comp_img: spy.Texture,
+    alignments: spy.Texture,
+    flow_offset_uv: tuple[float, float],
+    flow_scale_uv: tuple[float, float],
+    precision_matrices: spy.Texture,
+    r: spy.Texture,
+    num: spy.Texture,
+    den: spy.Texture,
+):
     """
     Implementation of Alg. 4: Accumulation
     Accumulates comp_img (J_n, n>1) into num and den, based on the alignment

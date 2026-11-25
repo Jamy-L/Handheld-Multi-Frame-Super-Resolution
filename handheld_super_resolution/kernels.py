@@ -8,15 +8,11 @@ where the merge kernels are estimated
 @author: jamyl
 """
 
-import time
 from pathlib import Path
 
 import slangpy as spy
 
 from .config import Config, KernelType
-from .utils import (
-    getTime,
-)
 
 SEL_HARD_THRESHOLD = 0
 SEL_LINEAR = 1
@@ -49,8 +45,6 @@ def estimate_precision_matrices(
         Covariance matrices Omega_n, sampled at the center of each bayer quad.
 
     """
-    verbose_3 = config.verbose >= 3
-    t1 = 0.0
 
     sigma_detail = float(config.merging.kernel.sigma_detail)
     k_denoise = float(config.merging.kernel.k_denoise)
@@ -58,9 +52,6 @@ def estimate_precision_matrices(
     D_tr = float(config.merging.kernel.D_tr)
     k_stretch = float(config.merging.kernel.k_stretch)
     k_shrink = float(config.merging.kernel.k_shrink)
-
-    if verbose_3:
-        t1 = time.perf_counter()
 
     device = spy.current_device()
 
@@ -104,8 +95,5 @@ def estimate_precision_matrices(
         ),
         out=precision_matrices,
     )
-
-    if verbose_3:
-        t1 = getTime(t1, "- Covariances estimated")
 
     return precision_matrices
