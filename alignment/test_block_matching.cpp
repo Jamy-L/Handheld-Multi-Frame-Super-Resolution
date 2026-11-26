@@ -1,4 +1,4 @@
-#include "kernels.h"
+#include "routines.h"
 #include "block_matching_variants.h"
 #include <cmath>
 #include <algorithm>
@@ -60,7 +60,7 @@ void check(int tile, int radius, Norm norm) {
       initial.dy.fill(-0.6f);
     }
     Flow expected = expected_flow(reference, moving, initial, tile, radius, norm);
-    Flow actual = kernels::block_matching(reference, moving, initial, tile, radius, norm);
+    Flow actual = routines::block_matching(reference, moving, initial, tile, radius, norm);
     for (int ty = 0; ty < initial.tiles_y(); ++ty)
       for (int tx = 0; tx < initial.tiles_x(); ++tx) {
         if (actual.dx(tx, ty) != expected.dx(tx, ty) || actual.dy(tx, ty) != expected.dy(tx, ty))
@@ -75,12 +75,12 @@ void check(int tile, int radius, Norm norm) {
 
 int main() {
   try {
-    for (const auto &variant : kernels::detail::block_matching_variants)
+    for (const auto &variant : routines::detail::block_matching_variants)
       check(variant.tile_size, variant.search_radius, variant.norm);
     // An invalid norm cannot match any compiled variant.
     bool rejected = false;
     try {
-      kernels::block_matching(Image(16, 16), Image(16, 16), Flow(1, 1, 16, 16),
+      routines::block_matching(Image(16, 16), Image(16, 16), Flow(1, 1, 16, 16),
                               16, 1, static_cast<Norm>(99));
     } catch (const std::invalid_argument &) { rejected = true; }
     if (!rejected) throw std::runtime_error("unsupported variant accepted");

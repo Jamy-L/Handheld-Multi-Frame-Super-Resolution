@@ -15,14 +15,14 @@ SNRBasedFloat = float | Literal["SNR_based"]
 TileSize = int | Literal["SNR_based"]
 
 
-class KernelType(StrEnum):
+class CovarianceType(StrEnum):
     STEERABLE = "steerable"
     ISO = "iso"
 
 
 class LocalStatsWarpFilter(StrEnum):
     BILINEAR = "bilinear"
-    BEZIER = "bezier"  # Cubic Bézier smoothing kernel.
+    BEZIER = "bezier"  # Cubic Bézier smoothing filter.
     BIQUADRATIC = "biquadratic"
 
 
@@ -170,7 +170,7 @@ class RobustnessConfig:
 
 
 # Each curve clamps independently at its first and last SNR.
-_KERNEL_SNR_KNOTS = {
+_COVARIANCE_SNR_KNOTS = {
     "sigma_detail": ((8, 0.33), (16, 0.25)),
     "k_denoise": ((6, 5.0), (12, 4.0), (30, 3.0)),
     "D_th": ((1, 0.01), (4, 0.002), (14, 0.001), (30, 0.001)),
@@ -181,9 +181,9 @@ _KERNEL_SNR_KNOTS = {
 
 
 @dataclass
-class KernelConfig:
+class CovarianceConfig:
     enable_green_diff: bool = (
-        True  # Use Bayer green disagreement as a floor on steerable kernel strength.
+        True  # Use Bayer green disagreement as a floor on steerable covariance strength.
     )
     noise_correction: bool = True
     sigma_detail: SNRBasedFloat = SNR_BASED  # Smallest sigma
@@ -194,7 +194,7 @@ class KernelConfig:
     D_tr: SNRBasedFloat = SNR_BASED
 
     def resolve_snr(self, snr: float) -> None:
-        for name, knots in _KERNEL_SNR_KNOTS.items():
+        for name, knots in _COVARIANCE_SNR_KNOTS.items():
             if getattr(self, name) == SNR_BASED:
                 signals, values = zip(*knots)
                 setattr(self, name, float(np.interp(snr, signals, values)))
@@ -202,10 +202,10 @@ class KernelConfig:
 
 @dataclass
 class MergingConfig:
-    kernel_type: Annotated[KernelType, tyro.conf.EnumChoicesFromValues] = (
-        KernelType.STEERABLE
+    covariance_type: Annotated[CovarianceType, tyro.conf.EnumChoicesFromValues] = (
+        CovarianceType.STEERABLE
     )  # isotropic mode uses sigma_detail
-    kernel: KernelConfig = field(default_factory=KernelConfig)
+    covariance: CovarianceConfig = field(default_factory=CovarianceConfig)
 
 
 @dataclass
@@ -248,7 +248,7 @@ class Config:
 
     @property
     def requires_noise_lut(self) -> bool:
-        return self.robustness.noise_correction or self.merging.kernel.noise_correction
+        return self.robustness.noise_correction or self.merging.covariance.noise_correction
 
     def dump(self) -> str:
         """Return a readable snapshot of the complete runtime configuration."""
@@ -272,7 +272,7 @@ class Config:
                 "CPU backend is not supported"
             )  # CPU backend doesnt support textures and samplers
 
-        self.merging.kernel_type = KernelType(self.merging.kernel_type)
+        self.merging.covariance_type = CovarianceType(self.merging.covariance_type)
 
     def validate_alignment_shape(self, imshape: tuple[int, int]) -> None:
         """Check that resolved alignment tiles fit each pyramid level."""
@@ -306,4 +306,4 @@ class Config:
 
     def resolve_snr(self, snr: float) -> None:
         self.alignment.resolve_snr(snr)
-        self.merging.kernel.resolve_snr(snr)
+        self.merging.covariance.resolve_snr(snr)

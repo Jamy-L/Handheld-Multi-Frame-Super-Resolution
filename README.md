@@ -70,7 +70,7 @@ handheld --impath your_burst --outpath output.png --scale 2
 
 Run `uv run handheld --help` or `handheld --help` to see all the options. The `--debug` flag will dump interesting intermediate results.
 
-When either robustness or kernel noise correction is enabled, you must provide the matching LUT with
+When either robustness or covariance noise correction is enabled, you must provide the matching LUT with
 `--noise-model.lut-path data/your_camera_noise.npz` (see below).
 To obtain the bursts used in the publication, please download the latest release of the repo. It contains the code and two raw bursts of respectively 13 images from [[Bhat et al., ICCV21]](https://arxiv.org/abs/2108.08286) and 20 images from [[Lecouat et al., SIGGRAPH22]](https://arxiv.org/abs/2207.14671). Otherwise specify the path to any burst of raw *.dng* images.
 
@@ -170,7 +170,7 @@ handheld \
   --noise-model.lut-path data/noise.npz
 ```
 
-The loader rejects LUTs made for a different transform or a different DNG noise profile. To run without the correction, pass `--robustness.no-noise-correction --merging.kernel.no-noise-correction`. In this mode you may omit the LUT path.
+The loader rejects LUTs made for a different transform or a different DNG noise profile. To run without the correction, pass `--robustness.no-noise-correction --merging.covariance.no-noise-correction`. In this mode you may omit the LUT path.
 
 ## About the noise profile
 

@@ -1,15 +1,15 @@
 #pragma once
 #include "alignment.h"
 @transfer_headers@
-namespace alignment::kernels::detail {
-using FlowTransferKernel = int (*)(halide_buffer_t *, halide_buffer_t *,
+namespace alignment::routines::detail {
+using FlowTransferRoutine = int (*)(halide_buffer_t *, halide_buffer_t *,
                                   halide_buffer_t *, halide_buffer_t *,
                                   int32_t, float, float, float, float,
                                   halide_buffer_t *, halide_buffer_t *);
 struct FlowTransferVariant {
     int tile_size;
-    FlowTransferKernel kernel;
+    FlowTransferRoutine routine;
 };
 inline const FlowTransferVariant flow_transfer_variants[] = {
 @transfer_entries@};
-}  // namespace alignment::kernels::detail
+}  // namespace alignment::routines::detail

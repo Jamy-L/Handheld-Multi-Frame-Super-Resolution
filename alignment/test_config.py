@@ -1,11 +1,11 @@
-"""Alignment configuration checks without CUDA or alignment kernels."""
+"""Alignment configuration checks without CUDA or alignment routines."""
 
 import unittest
 
 from handheld_super_resolution.config import Config, GrayscaleMethod
 
 
-class KernelConfigTests(unittest.TestCase):
+class CovarianceConfigTests(unittest.TestCase):
     def test_snr_curves(self):
         for snr, expected in (
             (-1, (0.33, 5, 0.01, 0.02)),
@@ -17,19 +17,19 @@ class KernelConfigTests(unittest.TestCase):
             with self.subTest(snr=snr):
                 config = Config()
                 config.resolve_snr(snr)
-                kernel = config.merging.kernel
-                actual = (kernel.sigma_detail, kernel.k_denoise, kernel.D_th, kernel.D_tr)
+                covariance = config.merging.covariance
+                actual = (covariance.sigma_detail, covariance.k_denoise, covariance.D_th, covariance.D_tr)
                 for value, reference in zip(actual, expected):
                     self.assertAlmostEqual(value, reference)
-                self.assertEqual((kernel.k_stretch, kernel.k_shrink), (4, 2.2))
+                self.assertEqual((covariance.k_stretch, covariance.k_shrink), (4, 2.2))
 
-    def test_explicit_kernel_overrides(self):
-        kernel = Config().merging.kernel
-        kernel.sigma_detail = 0.42
-        kernel.k_stretch = 7
-        kernel.resolve_snr(12)
-        self.assertEqual((kernel.sigma_detail, kernel.k_stretch), (0.42, 7))
-        self.assertEqual(kernel.k_denoise, 4)
+    def test_explicit_covariance_overrides(self):
+        covariance = Config().merging.covariance
+        covariance.sigma_detail = 0.42
+        covariance.k_stretch = 7
+        covariance.resolve_snr(12)
+        self.assertEqual((covariance.sigma_detail, covariance.k_stretch), (0.42, 7))
+        self.assertEqual(covariance.k_denoise, 4)
 
 
 class AlignmentConfigTests(unittest.TestCase):

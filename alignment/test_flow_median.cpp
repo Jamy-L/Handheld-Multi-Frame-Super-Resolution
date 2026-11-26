@@ -1,4 +1,4 @@
-#include "kernels.h"
+#include "routines.h"
 #include <algorithm>
 #include <array>
 #include <iostream>
@@ -27,7 +27,7 @@ int main() {
           input.dy(x, y) = (int(random() % 2001) - 1000) * 0.0625f;
         }
       auto before_x = input.dx.copy(), before_y = input.dy.copy();
-      Flow result = kernels::median_filter(input);
+      Flow result = routines::median_filter(input);
       if (result.tiles_x() != shape.first || result.tiles_y() != shape.second ||
           result.tile_size != 16 || result.stride != 8)
         throw std::runtime_error("median changed grid metadata");
@@ -43,7 +43,7 @@ int main() {
     Flow input(5, 5, 16, 8);
     input.dx.fill(0.375f); input.dy.fill(-0.625f);
     input.dx(2, 2) = 100; input.dy(2, 2) = -100;
-    auto result = kernels::median_filter(input);
+    auto result = routines::median_filter(input);
     for (int y = 0; y < 5; ++y)
       for (int x = 0; x < 5; ++x)
         if (result.dx(x, y) != 0.375f || result.dy(x, y) != -0.625f)

@@ -1,4 +1,4 @@
-#include "kernels.h"
+#include "routines.h"
 #include "gradient_variants.h"
 #include <algorithm>
 #include <cmath>
@@ -13,7 +13,7 @@ void check(int tile) {
     for (int y = 0; y < height; ++y)
       for (int x = 0; x < width; ++x)
         image(x, y) = float((x * 17 + y * 13) % 113) / 112.0f;
-    auto outputs = alignment::kernels::precompute_reference(image, tile);
+    auto outputs = alignment::routines::precompute_reference(image, tile);
     if (outputs.size() != 5) throw std::runtime_error("expected five gradient outputs");
     const Image &gx = outputs[0], &gy = outputs[1];
     const Image &sum_gxx = outputs[2], &sum_gxy = outputs[3], &sum_gyy = outputs[4];
@@ -63,19 +63,19 @@ void check(int tile) {
 
 int main() {
   try {
-    for (const auto &variant : alignment::kernels::detail::gradient_variants) {
+    for (const auto &variant : alignment::routines::detail::gradient_variants) {
       const int tile = variant.tile_size;
       check(tile);
       for (auto shape : {std::pair{tile - 1, tile}, {tile, tile - 1}, {1, 1}}) {
         bool rejected = false;
-        try { alignment::kernels::precompute_reference(Image(shape.first, shape.second), tile); }
+        try { alignment::routines::precompute_reference(Image(shape.first, shape.second), tile); }
         catch (const std::invalid_argument &) { rejected = true; }
         if (!rejected) throw std::runtime_error("image without a complete tile accepted");
       }
     }
     for (int tile : {0, -1}) {
       bool rejected = false;
-      try { alignment::kernels::precompute_reference(Image(16, 16), tile); }
+      try { alignment::routines::precompute_reference(Image(16, 16), tile); }
       catch (const std::invalid_argument &) { rejected = true; }
       if (!rejected) throw std::runtime_error("unsupported tile size accepted");
     }

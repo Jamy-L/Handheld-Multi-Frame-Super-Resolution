@@ -64,10 +64,10 @@ def compute_grey_images(image: NDArray, method: GrayscaleMethod) -> NDArray[np.f
         gray = (
             image[::2, ::2] + image[::2, 1::2] + image[1::2, ::2] + image[1::2, 1::2]
         ) * 0.25
-        kernel = np.array([0.25, 0.5, 0.25], dtype=np.float32)
+        weights = np.array([0.25, 0.5, 0.25], dtype=np.float32)
         gray = convolve1d(
-            convolve1d(gray, kernel, axis=0, mode="nearest"),
-            kernel,
+            convolve1d(gray, weights, axis=0, mode="nearest"),
+            weights,
             axis=1,
             mode="nearest",
         )

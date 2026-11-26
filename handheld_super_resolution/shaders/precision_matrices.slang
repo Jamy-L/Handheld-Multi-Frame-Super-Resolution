@@ -3,8 +3,8 @@ uniform bool enable_green_diff;
 uniform bool noise_correction;
 uniform float2 noise_offset_uv;
 uniform float2 noise_scale_uv;
-uniform float4 covariance_parameters1;
-uniform float4 covariance_parameters2;
+uniform float4 precision_parameters1;
+uniform float4 precision_parameters2;
 
 float3 rotateStructTensor(float3 T)
 {
@@ -53,13 +53,13 @@ void analyzeStructTensor(float3 tensor, float var_noise, out float2 e1, out floa
 float3 buildPrecisionMatrix(float strength, float coherence, float2 e1, float2 e2, float green_diff)
 {
     strength = max(strength, green_diff);
-    float inv_sigma_shrink = covariance_parameters1.x;
-    float inv_sigma_stretch = covariance_parameters1.y;
-    float inv_sigma_base = covariance_parameters1.w;
-    float inv_sigma_blurr = covariance_parameters2.x;
+    float inv_sigma_shrink = precision_parameters1.x;
+    float inv_sigma_stretch = precision_parameters1.y;
+    float inv_sigma_base = precision_parameters1.w;
+    float inv_sigma_blurr = precision_parameters2.x;
 
-    float gradient_clip = covariance_parameters1.z;
-    float gradient_transition = covariance_parameters2.y;
+    float gradient_clip = precision_parameters1.z;
+    float gradient_transition = precision_parameters2.y;
 
     float t_blurr = clamp(1. - gradient_transition * (strength - gradient_clip), 0., 1.);
 
@@ -77,7 +77,7 @@ float3 buildPrecisionMatrix(float strength, float coherence, float2 e1, float2 e
 }
 [shader("compute")]
 [numthreads(8, 8, 1)]
-void computeCovariance(uint3 tid: SV_DispatchThreadID, Texture2D<float> sourceRaw, Texture2D<float4> noise_lut,
+void computePrecisionMatrices(uint3 tid: SV_DispatchThreadID, Texture2D<float> sourceRaw, Texture2D<float4> noise_lut,
                        SamplerState noiseSampler, RWTexture2D<float4> out)
 {
     uint width, height;
@@ -88,7 +88,7 @@ void computeCovariance(uint3 tid: SV_DispatchThreadID, Texture2D<float> sourceRa
     int2 outTexel = int2(tid.xy);
     if (is_isotropic)
     {
-        float invSigma = covariance_parameters1.w;
+        float invSigma = precision_parameters1.w;
         float precision = invSigma * invSigma;
         out[outTexel] = float4(precision, precision, 0.0, 0.0);
         return;

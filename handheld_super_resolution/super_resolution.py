@@ -11,10 +11,10 @@ from scipy.ndimage import maximum_filter, median_filter, minimum_filter
 from . import alignment, raw2rgb
 from .config import Config
 from .debug_writer import NAN_COLOR, DebugWriter
-from .kernels import estimate_precision_matrices
 from .merge import merge
 from .noise_lut import create_zero_noise_lut, load_noise_lut
 from .noise_profile import expand_noise_profile_to_rgbg
+from .precision_matrices import estimate_precision_matrices
 from .robustness import compute_robustness, init_robustness
 from .utils import (
     DEFAULT_NUMPY_FLOAT_TYPE,
@@ -252,7 +252,7 @@ def main(
             # add(accumulated_r, robustness)
             pass
 
-        #### Kernel estimation
+        #### Precision matrix estimation
         precision_matrices = estimate_precision_matrices(
             tx_mov_img, noise_lut, noise_offset_uv, noise_scale_uv, config
         )

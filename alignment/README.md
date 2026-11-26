@@ -16,7 +16,7 @@ ctest --test-dir build/alignment --output-on-failure
 ```
 
 The build writes the extension into `handheld_super_resolution/`. Rebuild after
-changing alignment sources or switching Python versions. Local builds default to `-DALIGNMENT_HALIDE_TARGET=host`, which tunes kernels
+changing alignment sources or switching Python versions. Local builds default to `-DALIGNMENT_HALIDE_TARGET=host`, which tunes routines
 for the build machine. For a portable wheel, add `-DALIGNMENT_HALIDE_TARGET=cmake`
 to the configure command to use the target architecture's baseline. Rebuild after
 switching targets. CMake remembers the setting in the build directory.
@@ -50,9 +50,9 @@ stride 8, regardless of the matching tile sizes. The first tile center is
 Pyramid properties such as `level.image` and `level.gx` return NumPy copies;
 editing them does not change the alignment pyramid.
 
-## Adding kernel variants
+## Adding routine variants
 
-Kernels are compiled ahead of time. Unsupported parameter combinations raise
+Routines are compiled ahead of time. Unsupported parameter combinations raise
 `ValueError`; there is no JIT fallback. Edit these lists in `CMakeLists.txt` and
 rebuild when adding supported configurations:
 
