@@ -1,4 +1,4 @@
-"""Alignment configuration checks without CUDA or native kernels."""
+"""Alignment configuration checks without CUDA or alignment kernels."""
 
 import unittest
 
