@@ -1,4 +1,4 @@
-#include "kernels.h"
+#include "routines.h"
 #include "ica_variants.h"
 #include <utility>
 #include "alignment_flow_median.h"
@@ -9,7 +9,7 @@
 #include <cmath>
 #include <string>
 
-namespace alignment::kernels {
+namespace alignment::routines {
 Image downsample(const Image &image, int scale_factor) {
   if (scale_factor <= 0 || (scale_factor & (scale_factor - 1)) != 0)
     throw std::invalid_argument("scale_factor must be a positive power of 2");
@@ -19,13 +19,13 @@ Image downsample(const Image &image, int scale_factor) {
         "downsample expects a nonempty zero-based 2D image");
   if (scale_factor == 1)
     return image.copy();
-  detail::DownsampleKernel kernel = nullptr;
+  detail::DownsampleRoutine routine = nullptr;
   for (const auto &variant : detail::downsample_variants)
     if (variant.scale_factor == scale_factor) {
-      kernel = variant.kernel;
+      routine = variant.routine;
       break;
     }
-  if (!kernel)
+  if (!routine)
     throw std::invalid_argument("unsupported downsample scale (not compiled): " + std::to_string(scale_factor));
   const int width =
       image.width() / scale_factor + (image.width() % scale_factor != 0);
@@ -34,20 +34,20 @@ Image downsample(const Image &image, int scale_factor) {
   Image output(width, height);
   // Halide's ABI takes mutable buffer descriptors even for read-only inputs.
   Image input = image;
-  const int status = kernel(input.raw_buffer(), output.raw_buffer());
+  const int status = routine(input.raw_buffer(), output.raw_buffer());
   if (status != 0)
     throw std::runtime_error("Halide downsample failed with status " +
                              std::to_string(status));
   return output;
 }
 std::vector<Image> precompute_reference(const Image &image, int tile_size) {
-  detail::GradientKernel kernel = nullptr;
+  detail::GradientRoutine routine = nullptr;
   for (const auto &variant : detail::gradient_variants)
     if (variant.tile_size == tile_size) {
-      kernel = variant.kernel;
+      routine = variant.routine;
       break;
     }
-  if (!kernel)
+  if (!routine)
     throw std::invalid_argument("unsupported gradient tile size (not compiled): " + std::to_string(tile_size));
   if (image.dimensions() != 2 || image.width() <= 0 || image.height() <= 0 ||
       image.dim(0).min() != 0 || image.dim(1).min() != 0)
@@ -62,7 +62,7 @@ std::vector<Image> precompute_reference(const Image &image, int tile_size) {
   Image sum_gxx(tiles_x, tiles_y), sum_gxy(tiles_x, tiles_y),
       sum_gyy(tiles_x, tiles_y);
   Image input = image;
-  const int status = kernel(input.raw_buffer(), gx.raw_buffer(), gy.raw_buffer(),
+  const int status = routine(input.raw_buffer(), gx.raw_buffer(), gy.raw_buffer(),
                             sum_gxx.raw_buffer(), sum_gxy.raw_buffer(), sum_gyy.raw_buffer());
   if (status != 0)
     throw std::runtime_error("Halide gradients failed with status " +
@@ -99,7 +99,7 @@ Flow block_matching(const Image &reference, const Image &moving,
   Flow output(cols, rows, tile_size, tile_size);
   Image ref = reference, mov = moving;
   auto initial_dx = initial_flow.dx, initial_dy = initial_flow.dy;
-  const int status = selected->kernel(ref.raw_buffer(), mov.raw_buffer(),
+  const int status = selected->routine(ref.raw_buffer(), mov.raw_buffer(),
                                        initial_dx.raw_buffer(), initial_dy.raw_buffer(),
                                        output.dx.raw_buffer(), output.dy.raw_buffer());
   if (status != 0)
@@ -111,10 +111,10 @@ Flow ica(const PyramidLevel &reference, const Image &moving,
          const Flow &initial_flow, int iterations) {
   if (iterations < 0) throw std::invalid_argument("ICA iterations must be nonnegative");
   const int tile = initial_flow.tile_size;
-  detail::ICAKernel kernel = nullptr;
+  detail::ICARoutine routine = nullptr;
   for (const auto &variant : detail::ica_variants)
-    if (variant.tile_size == tile) { kernel = variant.kernel; break; }
-  if (!kernel) throw std::invalid_argument("ICA tile size not compiled: " + std::to_string(tile));
+    if (variant.tile_size == tile) { routine = variant.routine; break; }
+  if (!routine) throw std::invalid_argument("ICA tile size not compiled: " + std::to_string(tile));
   const auto &image = reference.image;
   if (image.dimensions() != 2 || moving.dimensions() != 2 ||
       image.width() < tile || image.height() < tile ||
@@ -146,7 +146,7 @@ Flow ica(const PyramidLevel &reference, const Image &moving,
   auto gx = reference.precomputed[0], gy = reference.precomputed[1];
   auto hxx = reference.precomputed[2], hxy = reference.precomputed[3], hyy = reference.precomputed[4];
   for (int iteration = 0; iteration < iterations; ++iteration) {
-    const int status = kernel(ref.raw_buffer(), mov.raw_buffer(), gx.raw_buffer(), gy.raw_buffer(),
+    const int status = routine(ref.raw_buffer(), mov.raw_buffer(), gx.raw_buffer(), gy.raw_buffer(),
                               hxx.raw_buffer(), hxy.raw_buffer(), hyy.raw_buffer(),
                               result.dx.raw_buffer(), result.dy.raw_buffer(),
                               scratch.dx.raw_buffer(), scratch.dy.raw_buffer());
@@ -160,13 +160,13 @@ Flow ica(const PyramidLevel &reference, const Image &moving,
 Flow transfer_flow(const Flow &source, const Image &reference, const Image &moving,
                    int target_tile_size, int target_stride, float grid_scale_ratio,
                    float flow_scale, float offset_x_px, float offset_y_px) {
-  detail::FlowTransferKernel kernel = nullptr;
+  detail::FlowTransferRoutine routine = nullptr;
   for (const auto &variant : detail::flow_transfer_variants)
     if (variant.tile_size == target_tile_size) {
-      kernel = variant.kernel;
+      routine = variant.routine;
       break;
     }
-  if (!kernel)
+  if (!routine)
     throw std::invalid_argument("flow transfer tile size not compiled: " + std::to_string(target_tile_size));
   if (target_stride <= 0 || source.stride <= 0 || source.tile_size <= 0 ||
       !std::isfinite(grid_scale_ratio) || grid_scale_ratio < 1 ||
@@ -191,7 +191,7 @@ Flow transfer_flow(const Flow &source, const Image &reference, const Image &movi
   Flow output(cols, rows, target_tile_size, target_stride);
   auto source_dx = source.dx, source_dy = source.dy;
   Image ref = reference, mov = moving;
-  const int status = kernel(source_dx.raw_buffer(), source_dy.raw_buffer(),
+  const int status = routine(source_dx.raw_buffer(), source_dy.raw_buffer(),
                             ref.raw_buffer(), mov.raw_buffer(), target_stride,
                             grid_scale_ratio, flow_scale, offset_x_px, offset_y_px,
                             output.dx.raw_buffer(), output.dy.raw_buffer());
@@ -214,4 +214,4 @@ Flow median_filter(const Flow &source) {
     throw std::runtime_error("Halide flow median failed with status " + std::to_string(status));
   return output;
 }
-} // namespace alignment::kernels
+} // namespace alignment::routines

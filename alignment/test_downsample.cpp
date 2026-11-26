@@ -1,4 +1,4 @@
-#include "kernels.h"
+#include "routines.h"
 #include "downsample_variants.h"
 #include <vector>
 #include <algorithm>
@@ -31,7 +31,7 @@ Image reference_downsample(Image image, int scale) {
 int main() {
     try {
         std::vector<int> scales{1};
-        for (const auto &variant : alignment::kernels::detail::downsample_variants)
+        for (const auto &variant : alignment::routines::detail::downsample_variants)
             scales.push_back(variant.scale_factor);
         // Odd/even dimensions, tiny images, borders, ramps, and impulses.
         for (const auto shape : {std::pair{1, 1}, {1, 9}, {10, 1}, {3, 5}, {32, 24}, {65, 49}}) {
@@ -44,7 +44,7 @@ int main() {
                 const Image before = image.copy();
                 for (int scale : scales) {
                     Image expected = reference_downsample(image, scale);
-                    Image actual = alignment::kernels::downsample(image, scale);
+                    Image actual = alignment::routines::downsample(image, scale);
                     if (actual.width() != expected.width() || actual.height() != expected.height())
                         throw std::runtime_error("incorrect output dimensions");
                     for (int y = 0; y < actual.height(); ++y)
@@ -59,7 +59,7 @@ int main() {
                 }
                 for (int invalid : {-2, 0, 3, 6}) {
                     bool rejected = false;
-                    try { alignment::kernels::downsample(image, invalid); }
+                    try { alignment::routines::downsample(image, invalid); }
                     catch (const std::invalid_argument &) { rejected = true; }
                     if (!rejected) throw std::runtime_error("invalid scale was accepted");
                 }

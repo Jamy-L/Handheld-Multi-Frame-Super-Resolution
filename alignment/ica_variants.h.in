@@ -1,16 +1,16 @@
 #pragma once
 #include "alignment.h"
 @ica_headers@
-namespace alignment::kernels::detail {
-using ICAKernel = int (*)(halide_buffer_t *, halide_buffer_t *,
+namespace alignment::routines::detail {
+using ICARoutine = int (*)(halide_buffer_t *, halide_buffer_t *,
                          halide_buffer_t *, halide_buffer_t *,
                          halide_buffer_t *, halide_buffer_t *, halide_buffer_t *,
                          halide_buffer_t *, halide_buffer_t *,
                          halide_buffer_t *, halide_buffer_t *);
 struct ICAVariant {
     int tile_size;
-    ICAKernel kernel;
+    ICARoutine routine;
 };
 inline const ICAVariant ica_variants[] = {
 @ica_entries@};
-}  // namespace alignment::kernels::detail
+}  // namespace alignment::routines::detail

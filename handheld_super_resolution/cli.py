@@ -2,6 +2,7 @@
 
 import glob
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated
@@ -16,7 +17,7 @@ from .config import Config
 
 @dataclass
 class CliConfig:
-    """Run handheld multi-frame super-resolution on a DNG burst."""
+    """Run handheld multi-frame super-resolution on a DNG burst. Run with --list-devices alone to list adapters."""
 
     impath: Path
     """Directory containing the input burst."""
@@ -35,12 +36,30 @@ def _save_image(path, rgb_8bit_data):
     return cv2.imwrite(str(path), cv2.cvtColor(rgb_8bit_data, cv2.COLOR_RGB2BGR))
 
 
+def _list_devices() -> None:
+    import slangpy as spy
+
+    for backend in spy.DeviceType:
+        if backend == spy.DeviceType.automatic:
+            continue
+        try:
+            adapters = spy.Device.enumerate_adapters(backend)
+        except RuntimeError as exc:
+            print(f"{backend.name}: {exc}")
+            continue
+        print(f"{backend.name}:" if adapters else f"{backend.name}: no adapters")
+        for index, adapter in enumerate(adapters):
+            print(f"  {index}  {adapter.name}")
+
+
 def main(args=None):
+    args = sys.argv[1:] if args is None else list(args)
+    if args == ["--list-devices"]:
+        _list_devices()
+        return
+
     options = parse_args(args)
     config = options.config
-
-    if (config.noise_model.alpha is None) != (config.noise_model.beta is None):
-        raise ValueError("Both noise_model.alpha and noise_model.beta must be provided together")
 
     if options.outpath.suffix == ".dng":
         config.postprocessing.enabled = False

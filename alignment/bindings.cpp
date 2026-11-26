@@ -58,7 +58,7 @@ py::array_t<float> align(const alignment::Pyramid &reference,
     return output;
 }
 
-// Inspection returns independent NumPy copies; native pyramid buffers stay owned by C++.
+// Inspection returns independent NumPy copies; pyramid buffers stay owned by C++.
 py::array_t<float> image_array(const alignment::Image &image) {
     py::array_t<float> result({image.height(), image.width()});
     auto out = result.mutable_unchecked<2>();
@@ -69,8 +69,8 @@ py::array_t<float> image_array(const alignment::Image &image) {
 }
 
 PYBIND11_MODULE(alignment, module) {
-    module.doc() = "C++ alignment orchestration with dedicated Halide kernel hooks";
-    py::register_exception<alignment::KernelNotImplemented>(module, "KernelNotImplemented", PyExc_NotImplementedError);
+    module.doc() = "C++ alignment orchestration with dedicated Halide routine hooks";
+    py::register_exception<alignment::RoutineNotImplemented>(module, "RoutineNotImplemented", PyExc_NotImplementedError);
     py::class_<alignment::PyramidLevel> level(module, "PyramidLevel");
     level.def_property_readonly("image", [](const alignment::PyramidLevel &p) {
         return image_array(p.image);

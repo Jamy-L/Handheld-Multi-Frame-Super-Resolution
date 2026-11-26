@@ -1,26 +1,56 @@
-"""Alignment configuration checks without CUDA or native kernels."""
+"""Alignment configuration checks without CUDA or alignment routines."""
 
 import unittest
 
 from handheld_super_resolution.config import Config, GrayscaleMethod
-from handheld_super_resolution.params import sanitize_config, update_snr_config
+
+
+class CovarianceConfigTests(unittest.TestCase):
+    def test_snr_curves(self):
+        for snr, expected in (
+            (-1, (0.33, 5, 0.01, 0.02)),
+            (3, (0.33, 5, 0.01 - 0.008 * 2 / 3, 0.015)),
+            (12, (0.29, 4, 0.0012, 0.009)),
+            (21, (0.25, 3.5, 0.001, 0.0075)),
+            (40, (0.25, 3, 0.001, 0.006)),
+        ):
+            with self.subTest(snr=snr):
+                config = Config()
+                config.resolve_snr(snr)
+                covariance = config.merging.covariance
+                actual = (covariance.sigma_detail, covariance.k_denoise, covariance.D_th, covariance.D_tr)
+                for value, reference in zip(actual, expected):
+                    self.assertAlmostEqual(value, reference)
+                self.assertEqual((covariance.k_stretch, covariance.k_shrink), (4, 2.2))
+
+    def test_explicit_covariance_overrides(self):
+        covariance = Config().merging.covariance
+        covariance.sigma_detail = 0.42
+        covariance.k_stretch = 7
+        covariance.resolve_snr(12)
+        self.assertEqual((covariance.sigma_detail, covariance.k_stretch), (0.42, 7))
+        self.assertEqual(covariance.k_denoise, 4)
 
 
 class AlignmentConfigTests(unittest.TestCase):
     def test_snr_selected_tiles(self):
-        for snr, expected in ((10, [64, 64, 16, 8, 8]),
-                              (18, [32, 32, 16, 8, 8]),
-                              (26, [16, 16, 16, 8, 8])):
-            with self.subTest(snr=snr):
+        for linear_snr, expected in (
+            (0.49, [32, 32, 16, 8, 8]),
+            (0.5, [64, 64, 16, 8, 8]),
+            (2.69, [64, 64, 16, 8, 8]),
+            (2.7, [16, 16, 16, 8, 8]),
+            (10, [16, 16, 16, 8, 8]),
+        ):
+            with self.subTest(linear_snr=linear_snr):
                 config = Config()
-                update_snr_config(config, snr)
+                config.resolve_snr(linear_snr)
                 self.assertEqual(config.alignment.tile_sizes, expected)
 
     def test_fractional_cap_is_rejected(self):
         config = Config()
         config.alignment.search_radii = [1, 4, 4, 4, 4]
         with self.assertRaisesRegex(ValueError, "level 2.*powers of two"):
-            update_snr_config(config, 18)
+            config.resolve_snr(18)
 
     def test_cumulative_fractional_cap_is_rejected(self):
         config = Config()
@@ -28,12 +58,12 @@ class AlignmentConfigTests(unittest.TestCase):
         config.alignment.search_radii = [1, 0, 2, 0]
         config.alignment.block_matching.metrics = ["L2"] * 4
         with self.assertRaisesRegex(ValueError, "level 3.*powers of two"):
-            update_snr_config(config, 10)
+            config.resolve_snr(1)
 
     def test_clamped_caps_are_allowed(self):
         config = Config()
         config.alignment.search_radii = [1, 15, 4, 4, 4]
-        update_snr_config(config, 10)
+        config.resolve_snr(1)
         self.assertEqual(config.alignment.tile_sizes, [64, 64, 8, 8, 8])
 
     def test_invalid_level_settings(self):
@@ -45,30 +75,30 @@ class AlignmentConfigTests(unittest.TestCase):
                 config = Config()
                 setattr(config.alignment, name, value)
                 with self.assertRaises(ValueError):
-                    update_snr_config(config, 18)
+                    config.resolve_snr(18)
 
     def test_finest_level_uses_actual_grayscale_dimensions(self):
         config = Config()
         config.alignment.factors = []
         config.alignment.search_radii = [1]
         config.alignment.block_matching.metrics = ["L2"]
-        update_snr_config(config, 10)
+        config.resolve_snr(1)
         with self.assertRaisesRegex(ValueError, "level 0"):
-            sanitize_config(config, (64, 64))
-        sanitize_config(config, (128, 128))
+            config.validate_alignment_shape((64, 64))
+        config.validate_alignment_shape((128, 128))
         config.alignment.grey_method = GrayscaleMethod.DEMOSAICING
-        sanitize_config(config, (64, 64))
+        config.validate_alignment_shape((64, 64))
 
     def test_pyramid_uses_ceil_downsampling(self):
-        config = Config(mode="grey")
+        config = Config()
         config.alignment.tile_size = 8
         config.alignment.factors = [2]
         config.alignment.search_radii = [1, 1]
         config.alignment.block_matching.metrics = ["L2", "L2"]
-        update_snr_config(config, 26)
-        sanitize_config(config, (15, 15))
+        config.resolve_snr(26)
+        config.validate_alignment_shape((30, 30))
         with self.assertRaisesRegex(ValueError, "level 1"):
-            sanitize_config(config, (14, 14))
+            config.validate_alignment_shape((28, 28))
 
 
 if __name__ == "__main__":

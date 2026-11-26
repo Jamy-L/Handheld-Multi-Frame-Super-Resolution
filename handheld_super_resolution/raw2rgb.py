@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import random
-import math
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import exifread
 import numpy as np
-from skimage import img_as_float32, filters
+from skimage import filters, img_as_float32
 
 from .config import Config
 from .utils_image import apply_orientation
@@ -31,10 +29,10 @@ SRGB_TO_XYZ = np.array(
 # Picking the illuminant nearest D65 reproduces that choice while avoiding the
 # very common ColorMatrix1-is-always-daylight assumption.
 _ILLUMINANT_CCT = {
-    1: 5500,   # Daylight
-    3: 2850,   # Tungsten
-    4: 5500,   # Flash (nominal)
-    9: 5500,   # Fine weather
+    1: 5500,  # Daylight
+    3: 2850,  # Tungsten
+    4: 5500,  # Flash (nominal)
+    9: 5500,  # Fine weather
     10: 6500,  # Cloudy
     11: 7500,  # Shade
     17: 2856,  # Standard light A
@@ -80,7 +78,9 @@ def get_xyz2cam_from_exif(impath: str | Path) -> np.ndarray:
     ):
         if matrix_tag not in tags:
             continue
-        illuminant = _tag_scalar(tags[illuminant_tag]) if illuminant_tag in tags else None
+        illuminant = (
+            _tag_scalar(tags[illuminant_tag]) if illuminant_tag in tags else None
+        )
         cct = _ILLUMINANT_CCT.get(illuminant)
         distance_from_d65 = abs(cct - 6504) if cct is not None else float("inf")
         candidates.append((distance_from_d65, _tag_matrix(tags[matrix_tag])))
@@ -174,6 +174,7 @@ def linear_to_srgb(image: np.ndarray) -> np.ndarray:
         1.055 * np.power(image, 1.0 / 2.4) - 0.055,
     )
 
+
 def raw_to_rgb(raw, xyz2cam=None):
     return img_as_float32(raw.postprocess(use_camera_wb=True))
 
@@ -191,7 +192,9 @@ def postprocess(cam_rgb: np.ndarray, dng_stack: DNGStack, config: Config):
 
     rgb = np.asarray(cam_rgb, dtype=np.float32)
     if rgb.ndim != 3 or rgb.shape[-1] != 3:
-        raise ValueError(f"Expected normalized camera RGB with shape HxWx3, got {rgb.shape}")
+        raise ValueError(
+            f"Expected normalized camera RGB with shape HxWx3, got {rgb.shape}"
+        )
     if not np.isfinite(rgb).all():
         raise ValueError("Camera RGB contains NaN or infinite values")
 
@@ -204,7 +207,9 @@ def postprocess(cam_rgb: np.ndarray, dng_stack: DNGStack, config: Config):
         if white_balance.shape != (3,) or not np.isfinite(white_balance).all():
             raise ValueError(f"Invalid camera white balance: {white_balance!r}")
         if white_balance[1] <= 0:
-            raise ValueError(f"Green white-balance gain must be positive: {white_balance!r}")
+            raise ValueError(
+                f"Green white-balance gain must be positive: {white_balance!r}"
+            )
         white_balance = white_balance / white_balance[1]
         rgb = rgb * white_balance.reshape(1, 1, 3)
 
@@ -232,12 +237,14 @@ def postprocess(cam_rgb: np.ndarray, dng_stack: DNGStack, config: Config):
 
     # Applying image orientation
     if config.postprocessing.orientate_image:
-        if 'Image Orientation' in dng_stack.tags.keys():
-            ori = dng_stack.tags['Image Orientation'].values[0]
+        if "Image Orientation" in dng_stack.tags:
+            ori = dng_stack.tags["Image Orientation"].values[0]
         else:
             ori = 1
-            warnings.warn('The Image Orientation EXIF tag could not be found. \
-                        The image may be mirrored or misoriented.')
+            warnings.warn(
+                "The Image Orientation EXIF tag could not be found. \
+                        The image may be mirrored or misoriented."
+            )
 
         rgb = apply_orientation(rgb, ori)
 

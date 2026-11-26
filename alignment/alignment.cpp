@@ -1,5 +1,5 @@
 #include "alignment.h"
-#include "kernels.h"
+#include "routines.h"
 #include <utility>
 
 namespace alignment {
@@ -37,10 +37,10 @@ Pyramid build_pyramid(const Image &image, const std::vector<int> &scale_factors,
   Image current = image.copy();
   for (size_t i = 0; i < levels; ++i) {
     if (i > 0)
-      current = kernels::downsample(current, scale_factors[i - 1]);
+      current = routines::downsample(current, scale_factors[i - 1]);
     PyramidLevel level{current, {}};
     if constexpr (IsReference)
-      level.precomputed = kernels::precompute_reference(current, tile_sizes[i]);
+      level.precomputed = routines::precompute_reference(current, tile_sizes[i]);
     pyramid.levels.push_back(std::move(level));
   }
   return pyramid;
@@ -98,11 +98,11 @@ Flow align(const Pyramid &reference, const Pyramid &moving) {
     const auto &ref = reference.levels[level];
     const auto &mov = moving.levels[level];
     const int current_tile_size = reference.tile_sizes[level];
-    flow = kernels::block_matching(ref.image, mov.image, flow, current_tile_size,
+    flow = routines::block_matching(ref.image, mov.image, flow, current_tile_size,
                                    reference.search_radii[level], reference.norm[level]);
 
     if (reference.ica_iterations > 0)
-      flow = kernels::ica(ref, mov.image, flow, reference.ica_iterations);
+      flow = routines::ica(ref, mov.image, flow, reference.ica_iterations);
 
     if (level == 0) break;
     const size_t target = level - 1;
@@ -115,7 +115,7 @@ Flow align(const Pyramid &reference, const Pyramid &moving) {
     const float source_center_px = flow.tile_size * pixel_scale / 2.0f;
     const float target_center_px = target_tile_size / 2.0f;
     const float offset_px = source_center_px - target_center_px;
-    flow = kernels::transfer_flow(flow, reference.levels[target].image,
+    flow = routines::transfer_flow(flow, reference.levels[target].image,
                                   moving.levels[target].image,
                                   target_tile_size, target_stride,
                                   grid_scale_ratio, pixel_scale, offset_px, offset_px);
@@ -125,9 +125,9 @@ Flow align(const Pyramid &reference, const Pyramid &moving) {
   constexpr int output_stride = output_tile_size / 2;
   const float grid_scale_ratio = static_cast<float>(flow.stride) / output_stride;
   const float offset_px = flow.tile_size / 2.0f - output_tile_size / 2.0f;
-  flow = kernels::transfer_flow(flow, reference.levels[0].image, moving.levels[0].image,
+  flow = routines::transfer_flow(flow, reference.levels[0].image, moving.levels[0].image,
                                 output_tile_size, output_stride,
                                 grid_scale_ratio, 1.0f, offset_px, offset_px);
-  return kernels::median_filter(flow);
+  return routines::median_filter(flow);
 }
 } // namespace alignment

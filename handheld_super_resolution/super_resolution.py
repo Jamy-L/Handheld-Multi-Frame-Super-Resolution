@@ -1,21 +1,28 @@
 import time
 import warnings
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
-from numba import cuda
+import slangpy as spy
 from numpy.typing import NDArray
+from scipy.ndimage import maximum_filter, median_filter, minimum_filter
 
 from . import alignment, raw2rgb
 from .config import Config
 from .debug_writer import NAN_COLOR, DebugWriter
-from .kernels import estimate_kernels
 from .merge import merge
-from .noise_lut import load_noise_lut
-from .params import runtime_config, sanitize_config, update_snr_config
+from .noise_lut import create_zero_noise_lut, load_noise_lut
+from .noise_profile import expand_noise_profile_to_rgbg
+from .precision_matrices import estimate_precision_matrices
 from .robustness import compute_robustness, init_robustness
-from .utils import DEFAULT_NUMPY_FLOAT_TYPE, add, divide, getTime, timer, FINAL_TILE_SIZE, FINAL_TILE_STRIDE
-from .utils_dng import expand_noise_profile_to_rgbg, load_dng_burst
+from .utils import (
+    DEFAULT_NUMPY_FLOAT_TYPE,
+    FINAL_TILE_SIZE,
+    FINAL_TILE_STRIDE,
+    getTime,
+)
+from .utils_dng import load_dng_burst
 from .utils_image import (
     apply_orientation,
     compute_grey_images,
@@ -25,7 +32,7 @@ from .utils_image import (
 
 
 def alignment_options(config: Config) -> dict:
-    """Translate fine-to-coarse pipeline settings to the native API."""
+    """Translate fine-to-coarse pipeline settings to the alignment API."""
     return {
         "scale_factors": config.alignment.factors,
         "tile_sizes": config.alignment.tile_sizes,
@@ -35,7 +42,9 @@ def alignment_options(config: Config) -> dict:
     }
 
 
-def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: Config) -> tuple[NDArray, dict[str, NDArray]]:
+def main(
+    ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: Config
+) -> tuple[NDArray, dict[str, NDArray]]:
     """
     This is the implementation of Alg. 1: HandheldBurstSuperResolution.
     Some part of Alg. 2: Registration are also integrated for optimisation.
@@ -46,7 +55,7 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
         Reference frame J_1
     comp_imgs : Array[N-1, imshape_y, imshape_x]
         Remaining frames of the burst J_2, ..., J_N
-        
+
     config : Config
         parameters.
 
@@ -59,169 +68,238 @@ def main(ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: C
         diagnostics are streamed to disk when debugging is enabled.
 
     """
-    
-    grey_method = config.alignment.grey_method
-    
+
     ### verbose and timing related stuff
     verbose = config.verbose >= 1
-    verbose_2 = config.verbose >= 2
-    verbose_3 = config.verbose >= 3
-    t1 = 0.
-    im_time = 0.
+    t1 = 0.0
+    im_time = 0.0
 
-    init_robustness_ = timer(init_robustness, verbose_2, "\nEstimating ref image local stats", 'Local stats estimated (Total)')
-    compute_grey_images_ = timer(compute_grey_images, verbose_3, end_s=f"- Grey images estimated by {grey_method.value}")
-    compute_robustness_ = timer(compute_robustness, verbose_2, '\nEstimating robustness', 'Robustness estimated (Total)')
-    estimate_kernels_ = timer(estimate_kernels, verbose_2, '\nEstimating kernels', 'Kernels estimated (Total)')
-    merge_ = timer(merge, verbose_2, '\nAccumulating Image', 'Image accumulated (Total)')
-    divide_ = timer(divide, verbose_2, end_s='\n------------------------\nImage normalized (Total)')
-    init_alignment_ = timer(alignment.build_reference_pyramid, verbose_2, '\nInitializing alignment', 'Alignment initialized (Total)')
-    align_ = timer(alignment.align, verbose_2, '\nBeginning alignment', 'Image aligned (Total)')
-
-    bayer_mode = config.mode=='bayer'
     debug_dict = {}
     debug_writer = DebugWriter() if config.debug else None
     if debug_writer is not None:
         # The fixed reference pyramid shares frame 0 with the first comparison.
         debug_writer.next_frame()
 
-    if config.robustness.enabled and config.robustness.noise_correction:
-        curve_size = len(config.noise_model.sigma_sq_curve)
-        if curve_size < 2 or len(config.noise_model.d_sq_curve) != curve_size:
-            raise ValueError(
-                "noise-correction curves were not initialized; call process() with a "
-                "validated noise_model.lut_path"
-            )
-
     #### Moving to GPU
-    cuda_ref_img = cuda.to_device(ref_img)
+    device = spy.current_device()
+    tx_ref_img = device.create_texture(
+        type=spy.TextureType.texture_2d,
+        width=ref_img.shape[1],
+        height=ref_img.shape[0],
+        format=spy.Format.r32_float,
+        mip_count=1,
+        usage=(spy.TextureUsage.shader_resource),
+        sampler=device.create_sampler(
+            min_filter=spy.TextureFilteringMode.point,
+            mag_filter=spy.TextureFilteringMode.point,
+            mip_filter=spy.TextureFilteringMode.point,
+            address_u=spy.TextureAddressingMode.clamp_to_edge,
+            address_v=spy.TextureAddressingMode.clamp_to_edge,
+        ),
+        data=ref_img,
+        label="ref_image",
+    )
+    tx_mov_img = device.create_texture(
+        type=spy.TextureType.texture_2d,
+        width=ref_img.shape[1],
+        height=ref_img.shape[0],
+        format=spy.Format.r32_float,
+        mip_count=1,
+        usage=(
+            spy.TextureUsage.shader_resource
+            | spy.TextureUsage.copy_destination  # copy_dest to overrid from_numpy later
+        ),
+        sampler=device.create_sampler(
+            min_filter=spy.TextureFilteringMode.point,
+            mag_filter=spy.TextureFilteringMode.point,
+            mip_filter=spy.TextureFilteringMode.point,
+            address_u=spy.TextureAddressingMode.clamp_to_edge,
+            address_v=spy.TextureAddressingMode.clamp_to_edge,
+        ),
+        data=None,
+        label="mov_image",
+    )
 
-    # This running buffer is for the image being processed
-    stream = cuda.stream()
-    cuda_img = cuda.device_array_like(comp_imgs[0], stream=stream)
-    cuda.synchronize()
-    cuda_sigma_sq_curve = cuda.to_device(np.asarray(config.noise_model.sigma_sq_curve, dtype=np.float32))
-    cuda_d_sq_curve = cuda.to_device(np.asarray(config.noise_model.d_sq_curve, dtype=np.float32))
-    
-    if verbose :
+    if config.requires_noise_lut:
+        assert config.noise_model.lut_path is not None
+        noise_lut, noise_offset_uv, noise_scale_uv = load_noise_lut(
+            device,
+            config.noise_model.lut_path,
+            config.noise_model.alpha,
+            config.noise_model.beta,
+        )
+    else:
+        noise_lut, noise_offset_uv, noise_scale_uv = create_zero_noise_lut(device)
+
+    if verbose:
         print("\nProcessing reference image ---------\n")
         t1 = time.perf_counter()
 
     #### alignment reference (NumPy gray input)
-    ref_grey = compute_grey_images_(ref_img, grey_method) if bayer_mode else ref_img
+    ref_grey = compute_grey_images(ref_img, config.alignment.grey_method)
     options = alignment_options(config)
-    ref_pyramid = init_alignment_(ref_grey, **options)
+    ref_pyramid = alignment.build_reference_pyramid(ref_grey, **options)
     if debug_writer is not None:
         debug_writer.write_grayscale_pyramid(
-            "alignment_reference_grey_pyramid", (level.image for level in ref_pyramid.levels)
+            "alignment_reference_grey_pyramid",
+            (level.image for level in ref_pyramid.levels),
         )
 
     #### Local stats estimation
     if config.robustness.enabled:
-        ref_local_means, ref_local_stds = init_robustness_(cuda_ref_img, config)
+        ref_local_stats = init_robustness(tx_ref_img, config)
+        if debug_writer is not None:
+            debug_writer.write_local_stats(ref_local_stats.to_numpy(), reference=True)
     else:
-        ref_local_means, ref_local_stds = None, None
+        ref_local_stats = None
 
-    
     accumulated_r = None
     if config.robustness.save_mask and config.robustness.enabled:
-        assert ref_local_means
-        accumulated_r = cuda.to_device(np.zeros(ref_local_means.shape[1:]))
+        assert ref_local_stats
+        # TODO: Compute Accumulated robustness
+        # accumulated_r = cuda.to_device(
+        #     np.zeros((ref_local_stats.height, ref_local_stats.width))
+        # )
 
-    native_imshape_y, native_imshape_x = cuda_ref_img.shape
-    output_size = (
-        round(config.scale*native_imshape_y),
-        round(config.scale*native_imshape_x))
-    
-    num = cuda.to_device(np.zeros((*output_size, 3), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
-    den = cuda.to_device(np.zeros((*output_size, 3), dtype = DEFAULT_NUMPY_FLOAT_TYPE))
+    num, den = init_out_textures(ref_img.shape, config.scale)
 
-    #### Ref kernel estimation
-    cuda_kernels = estimate_kernels_(cuda_ref_img, config)
-    
+    #### Ref covariance estimation
+    precision_matrices = estimate_precision_matrices(
+        tx_ref_img, noise_lut, noise_offset_uv, noise_scale_uv, config
+    )
+    if debug_writer is not None:
+        debug_writer.write_precision_matrix(
+            "ref_precision", precision_matrices.to_numpy()
+        )
+
     ##### Merge ref
-    dummy_alignment = cuda.to_device(np.zeros(((ref_grey.shape[0] - FINAL_TILE_SIZE) // FINAL_TILE_STRIDE + 1,
-                                              (ref_grey.shape[1] - FINAL_TILE_SIZE) // FINAL_TILE_STRIDE + 1, 2),
-                                             dtype=DEFAULT_NUMPY_FLOAT_TYPE))
-    dummy_r = cuda.to_device(np.ones(cuda_ref_img.shape, dtype = DEFAULT_NUMPY_FLOAT_TYPE))
-    merge_(cuda_ref_img, dummy_alignment, cuda_kernels, dummy_r, num, den, config)
-    
-    if verbose :
-        cuda.synchronize()
-        getTime(t1, '\nRef Img processed (Total)')
+    tx_flow, flow_texture_offset_uv, flow_texture_scale_uv = create_flow_texture(
+        ref_grey.shape
+    )
+    rejection_mask = device.create_texture(
+        type=spy.TextureType.texture_2d,
+        width=ref_grey.shape[1],
+        height=ref_grey.shape[0],
+        format=spy.Format.r32_float,
+        mip_count=1,
+        usage=(spy.TextureUsage.shader_resource),
+        data=np.ones(
+            ref_grey.shape, dtype=DEFAULT_NUMPY_FLOAT_TYPE
+        ),  # Init with 1 for ref
+        label="rejectionMask",
+    )
+    merge(
+        tx_ref_img,
+        tx_flow,
+        flow_texture_offset_uv,
+        flow_texture_scale_uv,
+        precision_matrices,
+        rejection_mask,
+        num,
+        den,
+    )
 
+    if verbose:
+        getTime(t1, "\nRef Img processed (Total)")
 
     for im_id in range(comp_imgs.shape[0]):
         if debug_writer is not None and im_id > 0:
             debug_writer.next_frame()
 
-        if verbose :
-            cuda.synchronize()
-            print(f"\nProcessing image {im_id+1} ---------\n")
+        if verbose:
+            print(f"\nProcessing image {im_id + 1} ---------\n")
             im_time = time.perf_counter()
-        
-        #### Moving to GPU
-        cuda.to_device(comp_imgs[im_id], to=cuda_img, stream=stream)
-        
+
         #### CPU alignment (NumPy in, NumPy out)
-        moving_grey = (compute_grey_images_(comp_imgs[im_id], grey_method)
-                       if bayer_mode else comp_imgs[im_id])
+        moving_grey = compute_grey_images(
+            comp_imgs[im_id], config.alignment.grey_method
+        )
         moving_pyramid = alignment.build_moving_pyramid(moving_grey, **options)
         if debug_writer is not None:
             debug_writer.write_grayscale_pyramid(
-                "alignment_moving_grey_pyramid", (level.image for level in moving_pyramid.levels)
+                "alignment_moving_grey_pyramid",
+                (level.image for level in moving_pyramid.levels),
             )
-        flow = align_(ref_pyramid, moving_pyramid)
-        device_flow = cuda.to_device(flow)
-
+        flow = alignment.align(ref_pyramid, moving_pyramid)
         if debug_writer is not None:
             debug_writer.write_flow("optical_flow", flow)
 
+        prepare_flow(tx_flow, flow, moving_grey.shape)
+        tx_mov_img.copy_from_numpy(comp_imgs[im_id])
+
         #### Robustness
         if config.robustness.enabled:
-            assert ref_local_means is not None
-            assert ref_local_stds is not None
-            robustness = compute_robustness_(
-                cuda_img, ref_local_means, ref_local_stds, device_flow,
-                (cuda_sigma_sq_curve, cuda_d_sq_curve), config, debug_writer,
+            assert ref_local_stats is not None
+            rejection_mask = compute_robustness(
+                tx_mov_img,
+                ref_local_stats,
+                tx_flow,
+                flow_texture_offset_uv,
+                flow_texture_scale_uv,
+                noise_lut,
+                noise_offset_uv,
+                noise_scale_uv,
+                config,
+                debug_writer,
             )
         else:
-            temp = np.ones_like(cuda_img, DEFAULT_NUMPY_FLOAT_TYPE)
-            robustness = cuda.to_device(temp)
+            # robustness is inited with ones for ref.
+            # Keep it
+            pass
 
         if accumulated_r is not None:
-            add(accumulated_r, robustness)
-        
-        #### Kernel estimation
-        cuda_kernels = estimate_kernels_(cuda_img, config)
-        
+            # TODO: port this
+            # add(accumulated_r, robustness)
+            pass
+
+        #### Precision matrix estimation
+        precision_matrices = estimate_precision_matrices(
+            tx_mov_img, noise_lut, noise_offset_uv, noise_scale_uv, config
+        )
+
+        if debug_writer is not None:
+            debug_writer.write_precision_matrix(
+                "precision", precision_matrices.to_numpy()
+            )
+
         #### Merging
-        merge_(cuda_img, device_flow, cuda_kernels, robustness, num, den, config)
-        
-        if verbose :
-            cuda.synchronize()
-            getTime(im_time, '\nImage processed (Total)')
-            
-        stream.synchronize()
+        merge(
+            tx_mov_img,
+            tx_flow,
+            flow_texture_offset_uv,
+            flow_texture_scale_uv,
+            precision_matrices,
+            rejection_mask,
+            num,
+            den,
+        )
 
+        if verbose:
+            getTime(im_time, "\nImage processed (Total)")
 
-        
-    # num is outwritten into num/den
-    divide_(num, den)
+    num = num.to_numpy()[..., :3]
+    den = den.to_numpy()[..., :3]
+    out = num / den
 
     if debug_writer is not None:
-        debug_writer.write_scalar_channels(
-            "den", den.copy_to_host(), ("r", "g", "b")
+        debug_writer.write_scalar_channels("den", den, ("r", "g", "b"))
+
+    if verbose:
+        s = "\nTotal ellapsed time : "
+        print(
+            s,
+            " " * (50 - len(s)),
+            ": ",
+            round((time.perf_counter() - t1), 2),
+            "seconds",
         )
-    
-    if verbose :
-        s = '\nTotal ellapsed time : '
-        print(s, ' ' * (50 - len(s)), ': ', round((time.perf_counter() - t1), 2), 'seconds')
-    
+
     if config.robustness.save_mask and config.robustness.enabled and accumulated_r:
-        debug_dict['accumulated robustness'] = accumulated_r.copy_to_host()
-        
-    return num.copy_to_host(), debug_dict
+        raise NotImplementedError
+        # TODO: Port this
+        debug_dict["accumulated robustness"] = accumulated_r.copy_to_host()
+
+    return out, debug_dict
 
 
 def process(burst_path: Path | str, config: Config):
@@ -241,77 +319,98 @@ def process(burst_path: Path | str, config: Config):
         The processed image
 
     """
-    config = runtime_config(config)
+    config.sanitize()
+    config = deepcopy(config)
 
-    currentTime, verbose_1, verbose_2 = (time.perf_counter(),
-                                         config.verbose >= 1,
-                                         config.verbose >= 2)
-    
+    currentTime, verbose_1, verbose_2 = (
+        time.perf_counter(),
+        config.verbose >= 1,
+        config.verbose >= 2,
+    )
+
+    try:
+        backend = spy.DeviceType[config.backend]
+    except KeyError:
+        raise ValueError(
+            f"Unknown backend {config.backend!r}. Run --list-devices for choices."
+        ) from None
+
+    adapter_luid = None
+    if config.device is not None:
+        if backend == spy.DeviceType.automatic:
+            raise ValueError(
+                "Select a backend with --backend when specifying --device."
+            )
+        adapters = spy.Device.enumerate_adapters(backend)
+        if not 0 <= config.device < len(adapters):
+            raise ValueError(
+                f"No device {config.device} on {backend.name}. Run --list-devices for choices."
+            )
+        adapter_luid = adapters[config.device].luid
+
     # reading image stack
     dng_stack = load_dng_burst(burst_path)
-    ref_raw, raw_comp = dng_stack.get_raw_arrays() # Scale [black level, whiteleve] -> [0, 1] WITHOUT WB, clipping or anything
+    ref_raw, raw_comp = (
+        dng_stack.get_raw_arrays()
+    )  # Scale [black level, whiteleve] -> [0, 1] WITHOUT WB, clipping or anything
 
     if config.noise_model.alpha is not None:
-        if config.noise_model.beta is None:
-            raise ValueError("If alpha is provided, beta must also be provided.")
         # User provided custom values.
         print("Using user-provided alpha and beta values")
-        config.noise_model.alpha, config.noise_model.beta = expand_noise_profile_to_rgbg(
-            config.noise_model.alpha, config.noise_model.beta
+        config.noise_model.alpha, config.noise_model.beta = (
+            expand_noise_profile_to_rgbg(
+                config.noise_model.alpha, config.noise_model.beta
+            )
         )
     else:
         # Extract alpha and beta from the DNG tags.
         config.noise_model.alpha = dng_stack.alpha
         config.noise_model.beta = dng_stack.beta
 
-    if config.robustness.enabled and config.robustness.noise_correction:
-        if config.noise_model.lut_path is None:
-            raise ValueError(
-                "robustness noise correction requires --noise-model.lut-path PATH; "
-                "generate it with python -m handheld_super_resolution.monte_carlo"
-            )
-        noise_lut = load_noise_lut(
-            config.noise_model.lut_path,
-            expected_alpha=config.noise_model.alpha,
-            expected_beta=config.noise_model.beta,
-        )
-        sigma_sq_curve = noise_lut.sigma_noise_sq
-        d_sq_curve = noise_lut.d_noise_sq
-    else:
-        # The CUDA call signature remains fixed when correction is disabled.
-        sigma_sq_curve = np.zeros(2, dtype=np.float32)
-        d_sq_curve = np.zeros(2, dtype=np.float32)
-    
-    
-    if verbose_2:   
-        currentTime = getTime(currentTime, ' -- Read raw files')
-
     #### Estimating ref image SNR
     if config.force_snr is None:
-        snr = estimate_image_snr(ref_raw, config.noise_model.alpha, config.noise_model.beta)
+        snr = estimate_image_snr(
+            ref_raw, config.noise_model.alpha, config.noise_model.beta
+        )
         if verbose_1:
-            print(f"Estimated snr: {snr:.2f} dB")
+            snr_db = 20 * np.log10(snr) if snr != 0 else -np.inf
+            print(f"Estimated linear SNR: {snr:.2f} ({snr_db:.2f} dB)")
     else:
         snr = config.force_snr
-    
-    update_snr_config(config, snr)
-    
-    sanitize_config(config, ref_raw.shape)
+
+    config.resolve_snr(snr)
+
+    config.validate_alignment_shape(ref_raw.shape)
 
     if verbose_1:
         print(f"\nRuntime configuration:\n{config.dump()}\n")
 
-    config.noise_model.sigma_sq_curve = sigma_sq_curve.tolist()
-    config.noise_model.d_sq_curve = d_sq_curve.tolist()
-    
-    
     #### Running the handheld pipeline
-    hr_output, debug_dict = main(ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE), raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE), config)
+    HERE = Path(__file__).resolve().parent
+    device = spy.Device(
+        type=backend,
+        adapter_luid=adapter_luid,
+        compiler_options={"include_paths": [HERE]},
+    )
+    with device:
+        if verbose_1:
+            print(
+                f"Backend: {device.info.type.name}, device: {device.info.adapter_name}"
+            )
+        hr_output, debug_dict = main(
+            ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE),
+            raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE),
+            config,
+        )
 
     if np.any(np.isnan(hr_output)):
         mask = np.any(np.isnan(hr_output), axis=-1)
         warnings.warn(f"Found {mask.sum()} pixels with NaNs in output")
-        hr_output[mask] = np.array(NAN_COLOR, DEFAULT_NUMPY_FLOAT_TYPE)/255. if config.debug else [0., 0., 0.]
+        hr_output[mask] = (
+            np.array(NAN_COLOR, DEFAULT_NUMPY_FLOAT_TYPE) / 255.0
+            if config.debug
+            else [0.0, 0.0, 0.0]
+        )
 
     if np.any(np.isinf(hr_output)):
         warnings.warn(f"Found {(np.isinf(hr_output)).sum()} Inf in output")
@@ -320,23 +419,122 @@ def process(burst_path: Path | str, config: Config):
     hr_output = np.moveaxis(hr_output, -1, 0)
     hr_output = rggb_to_cfa(hr_output, dng_stack.cfa)
     hr_output = np.moveaxis(hr_output, 0, -1)
-    if 'accumulated robustness' in debug_dict:
-        debug_dict['accumulated robustness'] = rggb_to_cfa(debug_dict['accumulated robustness'], dng_stack.cfa)
-    
+    if "accumulated robustness" in debug_dict:
+        debug_dict["accumulated robustness"] = rggb_to_cfa(
+            debug_dict["accumulated robustness"], dng_stack.cfa
+        )
 
     #### post processing
     post_processing_enabled = config.postprocessing.enabled
-    
+
     if post_processing_enabled:
         if verbose_2:
-            print('-- Post processing image')
-        
-        hr_output = raw2rgb.postprocess(hr_output, dng_stack, config) 
-        
-    if 'accumulated robustness' in debug_dict and config.postprocessing.orientate_image and 'Image Orientation' in dng_stack.tags:
-            ori = dng_stack.tags['Image Orientation'].values[0]
-            debug_dict['accumulated robustness'] = apply_orientation(debug_dict['accumulated robustness'], ori)
-    
-    
-    
+            print("-- Post processing image")
+
+        hr_output = raw2rgb.postprocess(hr_output, dng_stack, config)
+
+    if (
+        "accumulated robustness" in debug_dict
+        and config.postprocessing.orientate_image
+        and "Image Orientation" in dng_stack.tags
+    ):
+        ori = dng_stack.tags["Image Orientation"].values[0]
+        debug_dict["accumulated robustness"] = apply_orientation(
+            debug_dict["accumulated robustness"], ori
+        )
+
     return hr_output, debug_dict
+
+
+def prepare_flow(
+    texture: spy.Texture, flow: NDArray[np.float32], guide_imshape: tuple[int, int]
+) -> None:
+    if flow.shape != (texture.height, texture.width, 2):
+        raise ValueError("Flow must match the texture dimensions and have two channels")
+
+    # Normalise flow in uv units
+    height, width = guide_imshape
+    flow_uv = flow / np.array([width, height], dtype=np.float32)
+
+    # median_filter
+    filtered_flow = median_filter(flow_uv, size=(3, 3, 1), mode="nearest")
+
+    # Filter only the spatial axes, with the outermost tiles repeated at the edges.
+    spread = maximum_filter(
+        filtered_flow, size=(3, 3, 1), mode="nearest"
+    ) - minimum_filter(filtered_flow, size=(3, 3, 1), mode="nearest")
+    data = np.zeros((texture.height, texture.width, 4), dtype=np.float32)
+    data[..., :2] = filtered_flow
+    data[..., 2] = np.hypot(spread[..., 0], spread[..., 1])
+    texture.copy_from_numpy(data)
+
+
+def init_out_textures(input_imsape: tuple[float, float], scale: float):
+    device = spy.current_device()
+    input_height, input_width = input_imsape
+    output_size = (
+        round(scale * input_height),
+        round(scale * input_width),
+    )
+
+    num = device.create_texture(
+        type=spy.TextureType.texture_2d,
+        width=output_size[1],
+        height=output_size[0],
+        format=spy.Format.rgba32_float,
+        mip_count=1,
+        usage=(spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access),
+        data=np.zeros((*output_size, 4), dtype=DEFAULT_NUMPY_FLOAT_TYPE),
+        label="num",
+    )
+    den = device.create_texture(
+        type=spy.TextureType.texture_2d,
+        width=output_size[1],
+        height=output_size[0],
+        format=spy.Format.rgba32_float,
+        mip_count=1,
+        usage=(spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access),
+        data=np.zeros((*output_size, 4), dtype=DEFAULT_NUMPY_FLOAT_TYPE),
+        label="den",
+    )
+    return num, den
+
+
+def create_flow_texture(imshape: tuple[int, int]):
+    height_px, width_px = imshape
+    device = spy.current_device()
+
+    flow_height = (height_px - FINAL_TILE_SIZE) // FINAL_TILE_STRIDE + 1
+    flow_width = (width_px - FINAL_TILE_SIZE) // FINAL_TILE_STRIDE + 1
+    ### The optical_flow is hardcoded on a peculiar layout: FINAL_TILE_SIZE, with a stride of FINAL_TILE_STRIDE.
+    # We will ship the flow in a texture, which assumes that d separates 2 vertices, and d/2 separates the first vertex from the edge.
+    # We must map the image uv to the flow uv.
+    # We crop the extremities of the flow tiles, to make it fit a regular texture, and we use a clamp_to_edge sampler later.
+    # The resulting flow texture will cover this many grey pixels
+    flow_texture_width_in_gray_pixel = FINAL_TILE_STRIDE * flow_width
+    flow_texture_height_in_gray_pixel = FINAL_TILE_STRIDE * flow_height
+    flow_texture_scale_u = width_px / flow_texture_width_in_gray_pixel
+    flow_texture_scale_v = height_px / flow_texture_height_in_gray_pixel
+
+    # The first tile center is at half the tile size. Point sampling places
+    # that center half a stride from the flow texture's left/top edge.
+    flow_grid_edge = 0.5 * (FINAL_TILE_SIZE - FINAL_TILE_STRIDE)
+    flow_texture_offset_u = flow_grid_edge / width_px
+    flow_texture_offset_v = flow_grid_edge / height_px
+    # a location uv on an image is (uv - offset) * scale on the flow's uv
+    flow_texture_scale_uv = (flow_texture_scale_u, flow_texture_scale_v)
+    flow_texture_offset_uv = (flow_texture_offset_u, flow_texture_offset_v)
+
+    tx_flow = device.create_texture(
+        type=spy.TextureType.texture_2d,
+        width=flow_width,
+        height=flow_height,
+        format=spy.Format.rgba32_float,
+        mip_count=1,
+        usage=(spy.TextureUsage.shader_resource | spy.TextureUsage.copy_destination),
+        data=np.zeros(
+            (flow_height, flow_width, 4), dtype=DEFAULT_NUMPY_FLOAT_TYPE
+        ),  # Init with 0 for ref
+        label="flow",
+    )
+    return tx_flow, flow_texture_offset_uv, flow_texture_scale_uv

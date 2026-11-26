@@ -1,4 +1,4 @@
-#include "kernels.h"
+#include "routines.h"
 #include "flow_transfer_variants.h"
 #include <algorithm>
 #include <cmath>
@@ -62,7 +62,7 @@ void compare(int tile, int stride, float ratio, float flow_scale, float ox, floa
     }
   auto before_x = source.dx.copy(), before_y = source.dy.copy();
   Flow expected = scalar_transfer(source, ref, mov, tile, stride, ratio, flow_scale, ox, oy);
-  Flow actual = kernels::transfer_flow(source, ref, mov, tile, stride, ratio, flow_scale, ox, oy);
+  Flow actual = routines::transfer_flow(source, ref, mov, tile, stride, ratio, flow_scale, ox, oy);
   if (actual.tiles_x() != expected.tiles_x() || actual.tiles_y() != expected.tiles_y() ||
       actual.tile_size != tile || actual.stride != stride)
     throw std::runtime_error("incorrect target flow grid");
@@ -85,23 +85,23 @@ void candidate_selection(int tile) {
   // zero; the actual candidates have shifts 1, 2, 3. Nearest must win with 1.
   source.dx(0, 0) = 1; source.dx(1, 0) = 2;
   source.dx(0, 1) = 3; source.dx(1, 1) = 0;
-  auto out = kernels::transfer_flow(source, image, image, tile, tile, 1, 1, -0.25f * tile, -0.25f * tile);
+  auto out = routines::transfer_flow(source, image, image, tile, tile, 1, 1, -0.25f * tile, -0.25f * tile);
   if (out.dx(0, 0) != 1) throw std::runtime_error("diagonal was included or nearest candidate omitted");
   source.dx(1, 0) = 0;
-  out = kernels::transfer_flow(source, image, image, tile, tile, 1, 1, -0.25f * tile, -0.25f * tile);
+  out = routines::transfer_flow(source, image, image, tile, tile, 1, 1, -0.25f * tile, -0.25f * tile);
   if (out.dx(0, 0) != 0) throw std::runtime_error("horizontal candidate cannot win");
   source.dx(1, 0) = 2; source.dx(0, 1) = 0;
-  out = kernels::transfer_flow(source, image, image, tile, tile, 1, 1, -0.25f * tile, -0.25f * tile);
+  out = routines::transfer_flow(source, image, image, tile, tile, 1, 1, -0.25f * tile, -0.25f * tile);
   if (out.dx(0, 0) != 0) throw std::runtime_error("vertical candidate cannot win");
   // Scoring rounds after scaling, but the winner retains its fractional value.
   image.fill(0.0f); source.dx.fill(0.4f); source.dy.fill(-0.4f);
-  out = kernels::transfer_flow(source, image, image, tile, tile, 1.5f, 1.5f, 0, 0);
+  out = routines::transfer_flow(source, image, image, tile, tile, 1.5f, 1.5f, 0, 0);
   if (std::abs(out.dx(0, 0) - 0.6f) > 1e-6f || std::abs(out.dy(0, 0) + 0.6f) > 1e-6f)
     throw std::runtime_error("fractional winner was rounded or not scaled");
   // Identical rounded samples must retain the nearest candidate's own floats.
   source.dx.fill(0.4f); source.dy.fill(-0.3f);
   source.dx(0, 0) = 0.2f;
-  out = kernels::transfer_flow(source, image, image, tile, tile, 1, 1, -0.25f * tile, -0.25f * tile);
+  out = routines::transfer_flow(source, image, image, tile, tile, 1, 1, -0.25f * tile, -0.25f * tile);
   if (out.dx(0, 0) != 0.2f || out.dy(0, 0) != -0.3f)
     throw std::runtime_error("equal quantized costs lost the nearest floating candidate");
   // A non-nearest winner must also return its original float, not the sampled int.
@@ -113,13 +113,13 @@ void candidate_selection(int tile) {
     }
   source.dx.fill(3.3f); source.dy.fill(0);
   source.dx(0, 0) = 2.2f; source.dx(1, 0) = 1.2f;
-  out = kernels::transfer_flow(source, image, shifted, tile, tile, 1, 1, -0.25f * tile, -0.25f * tile);
+  out = routines::transfer_flow(source, image, shifted, tile, tile, 1, 1, -0.25f * tile, -0.25f * tile);
   if (out.dx(0, 0) != 1.2f)
     throw std::runtime_error("non-nearest winner lost its fractional displacement");
   image.fill(0.0f);
   // Exact halfway between grid centers: nearest uses the larger grid index.
   source.dx.fill(0); source.dy.fill(0); source.dx(1, 1) = 2;
-  out = kernels::transfer_flow(source, image, image, tile, tile, 1, 1, -0.5f * tile, -0.5f * tile);
+  out = routines::transfer_flow(source, image, image, tile, tile, 1, 1, -0.5f * tile, -0.5f * tile);
   if (out.dx(0, 0) != 2) throw std::runtime_error("nearest-grid tie handling changed");
 }
 
@@ -139,8 +139,8 @@ void corner_aligned_geometry(int target_tile) {
       image.fill(0.0f); // Equal costs force selection of the geometrically nearest flow.
       const float ratio = float(factor * source_stride) / target_stride;
       const float offset = factor * source_tile / 2.0f - target_tile / 2.0f;
-      // Center difference is explicit; the kernel must not apply it again.
-      auto actual = kernels::transfer_flow(source, image, image, target_tile,
+      // Center difference is explicit; the routine must not apply it again.
+      auto actual = routines::transfer_flow(source, image, image, target_tile,
                                            target_stride, ratio, float(factor), offset, offset);
       for (int y = 0; y < actual.tiles_y(); ++y)
         for (int x = 0; x < actual.tiles_x(); ++x) {
@@ -168,7 +168,7 @@ void pixel_offsets() {
   // Source spacing 16px / target spacing 8px = 2, image scale remains 1.
   // Aligned first tile corners: source center 32/2=16, target center 16/2=8.
   // Their difference is 8 pixels, not 8 tile indices.
-  auto out = kernels::transfer_flow(source, image, image, 16, 8, 2, 1, 8, 0);
+  auto out = routines::transfer_flow(source, image, image, 16, 8, 2, 1, 8, 0);
   const int expected_source[] = {0, 0, 1, 1, 2, 2, 3};
   for (int x = 0; x < 7; ++x)
     if (out.dx(x, 0) != source.dx(expected_source[x], 0) ||
@@ -178,7 +178,7 @@ void pixel_offsets() {
 
 int main() {
   try {
-    for (const auto &variant : kernels::detail::flow_transfer_variants) {
+    for (const auto &variant : routines::detail::flow_transfer_variants) {
       const int tile = variant.tile_size;
       for (int stride : {tile, tile / 2})
         for (float ratio : {1.0f, 1.5f, 2.0f})
@@ -193,13 +193,13 @@ int main() {
     Image image(16, 16); Flow source(1, 1, 8, 8);
     for (float ratio : {0.0f, -1.0f, 0.75f, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()}) {
       bool rejected = false;
-      try { kernels::transfer_flow(source, image, image, 8, 8, ratio, 1, 0, 0); }
+      try { routines::transfer_flow(source, image, image, 8, 8, ratio, 1, 0, 0); }
       catch (const std::invalid_argument &) { rejected = true; }
       if (!rejected) throw std::runtime_error("invalid scale accepted");
     }
     for (float flow_scale : {0.0f, -1.0f, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()}) {
       bool rejected = false;
-      try { kernels::transfer_flow(source, image, image, 8, 8, 2, flow_scale, 0, 0); }
+      try { routines::transfer_flow(source, image, image, 8, 8, 2, flow_scale, 0, 0); }
       catch (const std::invalid_argument &) { rejected = true; }
       if (!rejected) throw std::runtime_error("invalid flow_scale accepted");
     }

@@ -50,7 +50,7 @@ struct Pyramid {
     std::vector<PyramidLevel> levels;
 };
 
-struct KernelNotImplemented : std::logic_error {
+struct RoutineNotImplemented : std::logic_error {
     using std::logic_error::logic_error;
 };
 

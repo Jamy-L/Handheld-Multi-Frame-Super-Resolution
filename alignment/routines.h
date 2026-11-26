@@ -1,13 +1,13 @@
 #pragma once
 #include "alignment.h"
 
-// Integration boundary for future dedicated AOT Halide kernels.
-namespace alignment::kernels {
+// Integration boundary for future dedicated AOT Halide routines.
+namespace alignment::routines {
 Image downsample(const Image &image, int scale_factor);
 // Returns gx, gy, sum_gxx, sum_gxy, sum_gyy, in that order. Partial tiles are skipped.
 std::vector<Image> precompute_reference(const Image &image, int tile_size);
 // Dispatches to the tile-size/search-radius/norm variants listed in CMake.
-// Uncompiled combinations throw; the AOT kernels take only buffers.
+// Uncompiled combinations throw; the AOT routines take only buffers.
 Flow block_matching(const Image &reference, const Image &moving,
                     const Flow &initial_flow, int tile_size, int search_radius,
                     Norm norm);
@@ -34,4 +34,4 @@ Flow transfer_flow(const Flow &source, const Image &reference, const Image &movi
                    float grid_scale_ratio, float flow_scale, float offset_x_px, float offset_y_px);
 // Independent 3x3 medians of dx/dy on the tile grid, with repeated edges.
 Flow median_filter(const Flow &source);
-}  // namespace alignment::kernels
+}  // namespace alignment::routines
