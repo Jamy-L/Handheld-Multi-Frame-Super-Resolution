@@ -61,7 +61,7 @@ def estimate_precision_matrices(
         format=spy.Format.rgba32_float,
         usage=spy.TextureUsage.unordered_access | spy.TextureUsage.shader_resource,
     )
-    shader = Path(__file__).resolve().parents[1] / "shaders" / "covariance.slang"
+    shader = Path(__file__).resolve().parent / "shaders" / "covariance.slang"
     program = device.load_program(str(shader), ["computeCovariance"])
     kernel = device.create_compute_kernel(program)
     kernel.dispatch(

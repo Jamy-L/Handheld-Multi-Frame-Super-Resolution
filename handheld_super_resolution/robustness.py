@@ -60,7 +60,7 @@ def blur_local_stats(
     local_stats: spy.Texture, local_stats_warp_filter: LocalStatsWarpFilter
 ) -> spy.Texture:
     device = spy.current_device()
-    shader = Path(__file__).resolve().parents[1] / "shaders" / "guide_image.slang"
+    shader = Path(__file__).resolve().parent / "shaders" / "guide_image.slang"
     filtered = device.create_texture(
         width=local_stats.width,
         height=local_stats.height,
@@ -163,7 +163,7 @@ def mask_dilation(rejection_mask: spy.Texture, config: Config) -> spy.Texture:
         format=rejection_mask.format,
         usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
     )
-    shader = Path(__file__).resolve().parents[1] / "shaders" / "5x5min.slang"
+    shader = Path(__file__).resolve().parent / "shaders" / "5x5min.slang"
     program = device.load_program(str(shader), ["min5x5"])
     kernel = device.create_compute_kernel(program)
     kernel.dispatch(
@@ -187,7 +187,7 @@ def compute_local_stats(
         format=spy.Format.rgba32_float,
         usage=spy.TextureUsage.unordered_access | spy.TextureUsage.shader_resource,
     )
-    shader = Path(__file__).resolve().parents[1] / "shaders" / "guide_image.slang"
+    shader = Path(__file__).resolve().parent / "shaders" / "guide_image.slang"
     program = device.load_program(str(shader), ["computeGuide"])
     kernel = device.create_compute_kernel(program)
     kernel.dispatch(
@@ -231,7 +231,7 @@ def compute_rejection_coeff(
         address_u=clamp_to_edge,
         address_v=clamp_to_edge,
     )
-    shader = Path(__file__).resolve().parents[1] / "shaders" / "rejection_mask.slang"
+    shader = Path(__file__).resolve().parent / "shaders" / "rejection_mask.slang"
     program = device.load_program(str(shader), ["computeRejectionCoeff"])
     kernel = device.create_compute_kernel(program)
     kernel.dispatch(

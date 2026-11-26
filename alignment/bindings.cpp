@@ -58,7 +58,7 @@ py::array_t<float> align(const alignment::Pyramid &reference,
     return output;
 }
 
-// Inspection returns independent NumPy copies; native pyramid buffers stay owned by C++.
+// Inspection returns independent NumPy copies; pyramid buffers stay owned by C++.
 py::array_t<float> image_array(const alignment::Image &image) {
     py::array_t<float> result({image.height(), image.width()});
     auto out = result.mutable_unchecked<2>();

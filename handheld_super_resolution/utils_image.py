@@ -75,7 +75,7 @@ def compute_grey_images(image: NDArray, method: GrayscaleMethod) -> NDArray[np.f
         gray = demosaic_to_grey(image)
     else:
         raise ValueError(f"Unknown grayscale method: {method}")
-    # Demosaicing can overshoot the normalized sensor range; the native API
+    # Demosaicing can overshoot the normalized sensor range; the alignment API
     # requires finite grayscale samples in [0, 1].
     return np.ascontiguousarray(np.clip(gray, 0, 1), dtype=np.float32)
 

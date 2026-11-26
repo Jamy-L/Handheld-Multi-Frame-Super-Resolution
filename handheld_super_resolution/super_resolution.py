@@ -32,7 +32,7 @@ from .utils_image import (
 
 
 def alignment_options(config: Config) -> dict:
-    """Translate fine-to-coarse pipeline settings to the native API."""
+    """Translate fine-to-coarse pipeline settings to the alignment API."""
     return {
         "scale_factors": config.alignment.factors,
         "tile_sizes": config.alignment.tile_sizes,
@@ -471,10 +471,10 @@ def prepare_flow(
 
 def init_out_textures(input_imsape: tuple[float, float], scale: float):
     device = spy.current_device()
-    native_imshape_y, native_imshape_x = input_imsape
+    input_height, input_width = input_imsape
     output_size = (
-        round(scale * native_imshape_y),
-        round(scale * native_imshape_x),
+        round(scale * input_height),
+        round(scale * input_width),
     )
 
     num = device.create_texture(

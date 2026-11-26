@@ -391,88 +391,12 @@ wheels = [
 ]
 
 [[package]]
-name = "halide"
-version = "21.0.0"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version < '3.12'",
-]
-dependencies = [
-    { name = "imageio" },
-    { name = "numpy" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0b/e7/089f29e72e197d6e5d656401c746a1365e9020e50365c8a715ede5c96e03/halide-21.0.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:91799a2db3516048f25d31ca8721c1a68d7e1268bf2f968d4d4a9b1c475110bc", size = 56379623, upload-time = "2025-09-16T20:50:41.348Z" },
-    { url = "https://files.pythonhosted.org/packages/3e/d7/647386a84c76c26e77c2ff6f14ca6f3f8219b159a6c6aebf33439cd63022/halide-21.0.0-cp311-cp311-macosx_11_0_x86_64.whl", hash = "sha256:4c35dcf3c612a82ad1d080327a975ae47719096a92b4106634ac6f0f24a7342e", size = 60542448, upload-time = "2025-09-16T20:50:44.483Z" },
-    { url = "https://files.pythonhosted.org/packages/d0/6a/5c18793f858b7694337923dbe8dc6c7166ba92681fbadb40848142f3a7a0/halide-21.0.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3686c2b4c9aed1e26e1e55631608b2c4a4c3fe2d4386505ba1921859adb683ab", size = 69282654, upload-time = "2025-09-16T20:50:47.981Z" },
-    { url = "https://files.pythonhosted.org/packages/31/88/2ccd1fea0e688689ea40220405d9e9d530cd3bd7778e1d2aa17f7fa919d1/halide-21.0.0-cp311-cp311-win_amd64.whl", hash = "sha256:4631fdd26257629eb84d1b410d74acc2f4cda4526b95d7dd688ab21accf8cd75", size = 57071289, upload-time = "2025-09-16T20:50:51.616Z" },
-    { url = "https://files.pythonhosted.org/packages/f1/41/1e029bf4a5917d8d0d13054ffaf789b1b756c24b61df3366899cee4ef3ef/halide-21.0.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:cfd0d143638c0cba322e7b7c63f5930f3147d9e6d613018cab3f42406731d558", size = 56395516, upload-time = "2025-09-16T20:50:54.607Z" },
-    { url = "https://files.pythonhosted.org/packages/39/79/372b3f3cebfc44d394475fa43b0597fe5ad4d627e15d4439f330365ec79f/halide-21.0.0-cp312-cp312-macosx_11_0_x86_64.whl", hash = "sha256:9bd26cee25b484f3c17503178579589fe591b1c113de812eaa6706cc9ee18fc5", size = 60574724, upload-time = "2025-09-16T20:50:57.657Z" },
-    { url = "https://files.pythonhosted.org/packages/63/6f/8045a107accea9f5f8cd4fb5501e01dd5bd817822d190c210f48632e7623/halide-21.0.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6db7fa414e6a38bde49630066d8fdba1a71d86aff9b4636dbc65b5b5f652428e", size = 69315984, upload-time = "2025-09-16T20:51:01.606Z" },
-    { url = "https://files.pythonhosted.org/packages/a9/65/6ac1208735fe177680d2bef0b890604e9471ee04da43ed0713f42a0c188e/halide-21.0.0-cp312-cp312-win_amd64.whl", hash = "sha256:53a5489a006f4b4968bc1af8d326c2a0b0b7e36b364c90ac9b3387db4e5e104c", size = 57077938, upload-time = "2025-09-16T20:51:05.762Z" },
-    { url = "https://files.pythonhosted.org/packages/ae/86/bfd27355833f645866de582e251d17eb8afb1a39766d43554f22c5929831/halide-21.0.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:533f1dadf7dda8ba8b40dc275d6d821ecd4e42b1ad4f85737571f49258b0a304", size = 56395560, upload-time = "2025-09-16T20:51:08.833Z" },
-    { url = "https://files.pythonhosted.org/packages/69/87/53f5492f543317c83238a1999324c63d03c5a9c216d1ccbc36886822b966/halide-21.0.0-cp313-cp313-macosx_11_0_x86_64.whl", hash = "sha256:7a1ce6c0a168b8bd7db845d28b57b05da9b150b5b75de945e4b593dbedbf775c", size = 60574604, upload-time = "2025-09-16T20:51:11.996Z" },
-    { url = "https://files.pythonhosted.org/packages/92/f4/fc766bd1423283f16a0f2fe150a97427aa5e45b4f24ed9e15e21c83971af/halide-21.0.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:67ac80d57efc24227bc327c5f17cb2fd39634ff5f0de5c9742f078b701158933", size = 69316789, upload-time = "2025-09-16T20:51:15.891Z" },
-    { url = "https://files.pythonhosted.org/packages/9a/87/8d45b108cb6112d389ef5b789644d59fcd568b05f73e2d5a4d9b9a9533e3/halide-21.0.0-cp313-cp313-win_amd64.whl", hash = "sha256:812a1c0c863a1710c5d6eed895180b96945b8179db0ee21a19d38b7bb2c74314", size = 57078015, upload-time = "2025-09-16T20:51:19.424Z" },
-]
-
-[[package]]
-name = "halide"
-version = "22.1.0"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.12'",
-]
-dependencies = [
-    { name = "halide-bin" },
-    { name = "halide-runtime" },
-    { name = "imageio" },
-    { name = "pillow", marker = "platform_machine == 'armv7l' or platform_machine == 'armv8l'" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/08/4e/9b16af47495862479696be7d43b90b8caf2b2055e58a4aa10b8119c5e378/halide-22.1.0-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:c8da39a8e4e76cc8c1603f4ee24197aa7e50fccd40cc96e741a08375d8594e43", size = 497310, upload-time = "2026-10-31T14:59:28.816Z" },
-    { url = "https://files.pythonhosted.org/packages/16/cb/3e5cb724a9f41eb5eadb24782d98c1f74cb89f387d29dd726bf03e010de7/halide-22.1.0-cp312-abi3-macosx_11_0_x86_64.whl", hash = "sha256:12203cf1dc3bbfaf5c1f38976ae6d16ba1cc105e2b8eeb841abd4255900bdf85", size = 557047, upload-time = "2026-10-31T14:59:30.992Z" },
-    { url = "https://files.pythonhosted.org/packages/de/67/28ba4a1802bacf59fb45af8ecce70d0d8e764656484b601519c5902f4311/halide-22.1.0-cp312-abi3-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:5042d9d99de120ff0f9e833321ed4f7cdeb733c78bdd047b0742d8f51226ebfe", size = 565598, upload-time = "2026-10-31T14:59:32.675Z" },
-    { url = "https://files.pythonhosted.org/packages/e4/85/fb8aef79860bdccb2982df202b735e7d2b38357f0031be5a7d0c79a1cf27/halide-22.1.0-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:15dca340ff47ca935ea1b4eb1c2f3e7bd2901e91a2d099e5f86770c843e099a7", size = 668665, upload-time = "2026-10-31T14:59:34.499Z" },
-    { url = "https://files.pythonhosted.org/packages/ec/23/8cf3d6e9b3636b068382e190eacab219a237aaadb38a77e687988c6118d3/halide-22.1.0-cp312-abi3-win_amd64.whl", hash = "sha256:ed79e211241f22628d6c2cb1a23ba0b92d8878a6255532dbb0b2dd43403c3839", size = 791535, upload-time = "2026-10-31T14:59:36.278Z" },
-]
-
-[[package]]
-name = "halide-bin"
-version = "22.1.0"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/68/be/adcf33f456d9f9597a89ec032cdcb189d3dba5905eedfc69057780b991e6/halide_bin-22.1.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:abc21aa916ff97464652a07a93d20e1cfc1d27a28c70b3039e9827b7df55ad06", size = 55986475, upload-time = "2026-10-31T14:59:40.298Z" },
-    { url = "https://files.pythonhosted.org/packages/82/b7/6aa4f03159771ac7b2c9ba7ef7285860fb4dcdff3c9fb2b51d14fa26d333/halide_bin-22.1.0-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:4d2a2f6be115d26e128eb66aa89d50072fcaad1915916eb06510d8b91c5c512f", size = 61255351, upload-time = "2026-10-31T14:59:45.607Z" },
-    { url = "https://files.pythonhosted.org/packages/b3/fd/8483d5766647d26aa93481bdfe5da4c55b4ad9ba5d10f1e540c0975e95fb/halide_bin-22.1.0-py3-none-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:3e74032d939ec7467e986d8104a304546e977f148f649f91b8c004953b24f667", size = 64873732, upload-time = "2026-10-31T14:59:52.021Z" },
-    { url = "https://files.pythonhosted.org/packages/78/dd/3c0d28d15bbeec7953a6a0ba32578364b044e37f26aebc18e29a9506adc5/halide_bin-22.1.0-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:fa445243347cf5e8fc4704718f5295f63184f4abd9d920d8a4ef80e2ce94d8d7", size = 68532356, upload-time = "2026-10-31T14:59:58.826Z" },
-    { url = "https://files.pythonhosted.org/packages/05/68/d09950014faa027b48d49aa4155ef2fb093696e46ccc1351a7a134cabc2a/halide_bin-22.1.0-py3-none-win_amd64.whl", hash = "sha256:246e645193293b1b33ffc8659b2049a97299e5c36e1a2db9384791158105f31d", size = 60650331, upload-time = "2026-10-31T15:00:05.48Z" },
-]
-
-[[package]]
-name = "halide-runtime"
-version = "22.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9b/7b/b66bb8ba63764916785c220e77f93d121ae9471d9db4d5fa0bdec627539d/halide_runtime-22.1.0-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:0e7ec07a6eee6b3c1540123ca97b489bcf46f414508209924d351c1bcfe3846f", size = 110860, upload-time = "2026-10-31T15:00:08.515Z" },
-    { url = "https://files.pythonhosted.org/packages/41/10/8e491078a88bf45acf17dc5f023ac37362a3ea6aaa2400db96198fae100d/halide_runtime-22.1.0-cp312-abi3-macosx_11_0_x86_64.whl", hash = "sha256:78c0ba9dfb0ebd6412a75a66a780e803af874e360b380a9d36836020a6e79045", size = 118324, upload-time = "2026-10-31T15:00:10.15Z" },
-    { url = "https://files.pythonhosted.org/packages/25/44/49f2f76d8644cec5867cfd504b3c421d9b49c6f0f4e01ca96d31d9d70c0d/halide_runtime-22.1.0-cp312-abi3-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:dd69fc2cdf6cea2f1184448099609bb6600a0131b8b8f33348c31623be17b6a2", size = 152110, upload-time = "2026-10-31T15:00:11.603Z" },
-    { url = "https://files.pythonhosted.org/packages/e0/18/ea409ab4ac8bbcd9cd5daef4290570026a54f939ff6b2c7b6154adb38de6/halide_runtime-22.1.0-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7c1053f974cb5b71e064eaeca0d78ba3204cc14445838517dc8491fab604c5f5", size = 162374, upload-time = "2026-10-31T15:00:12.953Z" },
-    { url = "https://files.pythonhosted.org/packages/08/e3/c93abe0790d73432d8388994b42146acded3f7bd22b5b50a26810e1dcd03/halide_runtime-22.1.0-cp312-abi3-win_amd64.whl", hash = "sha256:06e0ffef13b298383fc1bb753d611382f9586f5817f5991e1cb886731fe06951", size = 346830, upload-time = "2026-10-31T15:00:14.478Z" },
-]
-
-[[package]]
 name = "handheld-super-resolution"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "colour-demosaicing" },
     { name = "exifread" },
-    { name = "halide", version = "21.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "halide", version = "22.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "imageio" },
     { name = "matplotlib" },
     { name = "numpy" },
@@ -486,21 +410,14 @@ dependencies = [
     { name = "tyro" },
 ]
 
-[package.optional-dependencies]
-native = [
-    { name = "pybind11" },
-]
-
 [package.metadata]
 requires-dist = [
     { name = "colour-demosaicing" },
     { name = "exifread" },
-    { name = "halide", specifier = ">=21.0.0" },
     { name = "imageio" },
     { name = "matplotlib" },
     { name = "numpy", specifier = "<2.5" },
     { name = "opencv-python-headless" },
-    { name = "pybind11", marker = "extra == 'native'", specifier = ">=3.0" },
     { name = "rawpy" },
     { name = "scikit-image" },
     { name = "scipy" },
@@ -508,7 +425,6 @@ requires-dist = [
     { name = "torch" },
     { name = "tyro" },
 ]
-provides-extras = ["native"]
 
 [[package]]
 name = "imageio"
@@ -1198,15 +1114,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/bf/20/22fe9384b7949e25fb1293bcfc84fb82590ff4ea6b37c95b24d26d793d86/pillow-12.3.0-pp311-pypy311_pp73-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:fbd139c8447d25dd750ab79ee274cc5e1fe80fc56340ab10b18a195e1b6eca3e", size = 5237776, upload-time = "2026-07-01T11:56:30.263Z" },
     { url = "https://files.pythonhosted.org/packages/08/14/f6ba68107680ffa74b39985f3f30884e41318fbc4250caa423c79b4788bb/pillow-12.3.0-pp311-pypy311_pp73-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e7e480451b9fa137494bccd3a7d69adbe8ac65a87d97be61e11f1b1050a5bac3", size = 5860358, upload-time = "2026-07-01T11:56:32.68Z" },
     { url = "https://files.pythonhosted.org/packages/36/54/0169bc772ec491108b62f644f8ecf1fe5d8ae5ebafde2ee2142210166903/pillow-12.3.0-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:04f01d28a6aaff387bf842a13be313df23ba0597a44f1a976c9feb3c6ff4711a", size = 7231786, upload-time = "2026-07-01T11:56:35.046Z" },
-]
-
-[[package]]
-name = "pybind11"
-version = "3.1.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/76/f3/95b0f40b31df41dbfe6bb0857419c9442c15839cbac4796f1c26ae0b6081/pybind11-3.1.0.tar.gz", hash = "sha256:a1cc06b524ab3edca51f8ad3895f9c4fa20b8b19283173dff4ae781449dc9639", size = 603746, upload-time = "2026-08-06T23:33:00.675Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/33/fd/8762f7ee3e4e4be6d1d846cffb4916dd9bb02b2f800d3603718a0efe494c/pybind11-3.1.0-py3-none-any.whl", hash = "sha256:b8488090f8acffbcb6b5d6a85571a6827a0a2981ffb75e5a0b27b87c4a6b7dd0", size = 319402, upload-time = "2026-08-06T23:32:59.047Z" },
 ]
 
 [[package]]

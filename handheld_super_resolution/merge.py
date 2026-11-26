@@ -52,7 +52,7 @@ def merge(
 
     """
     device = spy.current_device()
-    shader = Path(__file__).resolve().parents[1] / "shaders" / "fusion.slang"
+    shader = Path(__file__).resolve().parent / "shaders" / "fusion.slang"
     program = device.load_program(str(shader), ["fusion"])
     kernel = device.create_compute_kernel(program)
     precision_sampler = device.create_sampler(

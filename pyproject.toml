@@ -17,16 +17,19 @@ dependencies = [
     "matplotlib",
     "tyro",
     "imageio",
-    "halide>=21.0.0",
     "slangpy>=0.43.1",
 ]
 
 [project.scripts]
 handheld = "handheld_super_resolution.cli:main"
 
-[project.optional-dependencies]
-native = ["pybind11>=3.0"]
-
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["scikit-build-core>=0.10", "halide>=21.0.0", "pybind11>=3.0"]
+build-backend = "scikit_build_core.build"
+
+[tool.scikit-build]
+cmake.source-dir = "alignment"
+wheel.packages = ["handheld_super_resolution"]
+
+[tool.scikit-build.cmake.define]
+BUILD_TESTING = "OFF"
