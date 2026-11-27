@@ -94,8 +94,13 @@ def compute_robustness(
     noise_texture: spy.Texture,
     noise_offset_uv: tuple[float, float],
     noise_scale_uv: tuple[float, float],
+    unblocker_texture: spy.Texture,
+    unblocker_sampler: spy.Sampler,
+    unblocker_uv_scale: tuple[float, float],
     config: Config,
     debug_writer: DebugWriter | None = None,
+    *,
+    accumulated_rejection: spy.Texture | None = None,
 ) -> spy.Texture:
     """
     this is the implementation of Algorithm 6: ComputeRobustness
@@ -139,6 +144,9 @@ def compute_robustness(
         noise_texture,
         noise_offset_uv,
         noise_scale_uv,
+        unblocker_texture,
+        unblocker_sampler,
+        unblocker_uv_scale,
         config,
     )
 
@@ -146,7 +154,9 @@ def compute_robustness(
         r = rejection_mask.to_numpy()
         debug_writer.write_scalar("robustness", r, value_range=(0.0, 1.0))
 
-    rejection_mask = mask_dilation(rejection_mask, config)
+    rejection_mask = mask_dilation(
+        rejection_mask, config, accumulated_rejection=accumulated_rejection
+    )
 
     if debug_writer is not None:
         r = rejection_mask.to_numpy()
@@ -155,7 +165,12 @@ def compute_robustness(
     return rejection_mask
 
 
-def mask_dilation(rejection_mask: spy.Texture, config: Config) -> spy.Texture:
+def mask_dilation(
+    rejection_mask: spy.Texture,
+    config: Config,
+    *,
+    accumulated_rejection: spy.Texture | None = None,
+) -> spy.Texture:
     device = spy.current_device()
     output = device.create_texture(
         width=rejection_mask.width,
@@ -164,12 +179,19 @@ def mask_dilation(rejection_mask: spy.Texture, config: Config) -> spy.Texture:
         usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
     )
     shader = Path(__file__).resolve().parent / "shaders" / "5x5min.slang"
-    program = device.load_program(str(shader), ["min5x5"])
+    if accumulated_rejection is None:
+        entry_point = "min5x5"
+        bindings = {}
+    else:
+        entry_point = "min5x5AndAccumulate"
+        bindings = {"accumulated_rejection": accumulated_rejection}
+    program = device.load_program(str(shader), [entry_point])
     kernel = device.create_compute_kernel(program)
     kernel.dispatch(
         thread_count=[output.width, output.height, 1],
         source=rejection_mask,
         out=output,
+        **bindings,
     )
 
     return output
@@ -208,6 +230,9 @@ def compute_rejection_coeff(
     noise_texture: spy.Texture,
     noise_offset_uv: tuple[float, float],
     noise_scale_uv: tuple[float, float],
+    unblocker_texture: spy.Texture,
+    unblocker_sampler: spy.Sampler,
+    unblocker_uv_scale: tuple[float, float],
     config: Config,
 ) -> spy.Texture:
 
@@ -247,6 +272,7 @@ def compute_rejection_coeff(
                 config.robustness.k_std,
             ),
             "R_boost": config.robustness.R_boost,
+            "unblocker_motion_threshold": config.unblocker.motion_threshold,
         },
         local_stats_warp_filter=_LOCAL_STATS_WARP_FILTER_IDS[
             config.robustness.local_stats_warp_filter
@@ -260,6 +286,9 @@ def compute_rejection_coeff(
         flowSampler=flow_sampler,
         flow_scale_uv=spy.float2(*flow_scale_uv),
         flow_offset_uv=spy.float2(*flow_offset_uv),
+        unblocker_texture=unblocker_texture,
+        unblocker_sampler=unblocker_sampler,
+        unblocker_uv_scale=spy.float2(*unblocker_uv_scale),
         out=output,
     )
     return output

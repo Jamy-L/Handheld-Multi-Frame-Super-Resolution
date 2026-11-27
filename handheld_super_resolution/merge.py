@@ -13,6 +13,8 @@ from pathlib import Path
 
 import slangpy as spy
 
+from .config import MergingConfig
+
 
 def merge(
     comp_img: spy.Texture,
@@ -23,6 +25,10 @@ def merge(
     r: spy.Texture,
     num: spy.Texture,
     den: spy.Texture,
+    *,
+    accumulated_rejection: spy.Texture,
+    config: MergingConfig,
+    is_reference: bool = False,
 ):
     """
     Implementation of Alg. 4: Accumulation
@@ -44,6 +50,12 @@ def merge(
         Numerator of the accumulator
     den : device Array[s*imshape_y, s*imshape_x, c]
         Denominator of the accumulator
+    accumulated_rejection : spy.Texture
+        Running sum of the comparison-frame rejection masks.
+    config : MergingConfig
+        Reference fallback threshold and covariance multiplier.
+    is_reference : bool
+        Enables the fallback test for the reference frame.
 
 
     Returns
@@ -83,6 +95,10 @@ def merge(
         precisionSampler=precision_sampler,
         robustness=r,
         robustnessSampler=robustness_sampler,
+        accumulatedRejection=accumulated_rejection,
+        frame_t=config.frame_t,
+        reference_fallback_boost=config.reference_fallback_boost,
+        isReference=is_reference,
         numerator=num,
         denominator=den,
         flowOffsetUV=spy.float2(*flow_offset_uv),

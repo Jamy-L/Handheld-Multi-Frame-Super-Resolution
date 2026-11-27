@@ -152,7 +152,6 @@ class AlignmentConfig:
 class RobustnessConfig:
     enabled: bool = True
     noise_correction: bool = True
-    save_mask: bool = True
     # Scales green disagreement in the guide-color blend. 0 to disable.
     k_green_diff_impact: float = 2.0
     R_mult: float = 1.0  # Multiplier on normalized color distance.
@@ -169,6 +168,15 @@ class RobustnessConfig:
     ] = LocalStatsWarpFilter.BIQUADRATIC
 
 
+@dataclass
+class UnblockerConfig:
+    enabled: bool = True
+    t: float = 0.05
+    s: float = 5.33
+    motion_threshold: float = 1e-4
+    fallback_value: float = 0.2
+
+
 # Each curve clamps independently at its first and last SNR.
 _COVARIANCE_SNR_KNOTS = {
     "sigma_detail": ((8, 0.33), (16, 0.25)),
@@ -182,9 +190,7 @@ _COVARIANCE_SNR_KNOTS = {
 
 @dataclass
 class CovarianceConfig:
-    enable_green_diff: bool = (
-        True  # Use Bayer green disagreement as a floor on steerable covariance strength.
-    )
+    enable_green_diff: bool = True  # Use Bayer green disagreement as a floor on steerable covariance strength.
     noise_correction: bool = True
     sigma_detail: SNRBasedFloat = SNR_BASED  # Smallest sigma
     k_denoise: SNRBasedFloat = SNR_BASED  # Multiplier to enlarge sigma
@@ -206,6 +212,8 @@ class MergingConfig:
         CovarianceType.STEERABLE
     )  # isotropic mode uses sigma_detail
     covariance: CovarianceConfig = field(default_factory=CovarianceConfig)
+    frame_t: float = 4.0
+    reference_fallback_boost: float = 2.0
 
 
 @dataclass
@@ -246,9 +254,13 @@ class Config:
     device: int | None = None
     """Zero-based adapter index on the selected backend (default: let SlangPy choose)."""
 
+    unblocker: UnblockerConfig = field(default_factory=UnblockerConfig)
+
     @property
     def requires_noise_lut(self) -> bool:
-        return self.robustness.noise_correction or self.merging.covariance.noise_correction
+        return (
+            self.robustness.noise_correction or self.merging.covariance.noise_correction
+        )
 
     def dump(self) -> str:
         """Return a readable snapshot of the complete runtime configuration."""
@@ -267,6 +279,11 @@ class Config:
             )
         if self.scale < 1:
             raise ValueError("scale must be >= 1")
+        if not np.isfinite(self.merging.frame_t) or self.merging.frame_t < 0:
+            raise ValueError("merging.frame_t must be finite and >= 0")
+        boost = self.merging.reference_fallback_boost
+        if not np.isfinite(boost) or boost <= 0:
+            raise ValueError("merging.reference_fallback_boost must be finite and > 0")
         if self.backend == "cpu":
             raise NotImplementedError(
                 "CPU backend is not supported"

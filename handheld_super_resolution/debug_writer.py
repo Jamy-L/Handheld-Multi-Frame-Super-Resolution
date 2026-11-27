@@ -9,6 +9,8 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
+from .utils_image import apply_orientation, rggb_to_cfa
+
 RGBColor = tuple[int, int, int]
 
 NAN_COLOR: RGBColor = (255, 0, 255)
@@ -21,8 +23,16 @@ class DebugWriter:
 
     _CATEGORY_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
-    def __init__(self, root: str | Path = "debug") -> None:
+    def __init__(
+        self,
+        root: str | Path = "debug",
+        *,
+        cfa: NDArray | None = None,
+        orientation: int = 1,
+    ) -> None:
         self.root = Path(root)
+        self.cfa = cfa
+        self.orientation = orientation
         self.run_dir = self._create_run_directory()
         self.frame_id = -1
 
@@ -233,6 +243,9 @@ class DebugWriter:
 
     def _write(self, category: str, rgb: NDArray) -> Path:
         path = self._frame_path(category)
+        if self.cfa is not None:
+            rgb = np.moveaxis(rggb_to_cfa(np.moveaxis(rgb, -1, 0), self.cfa), 0, -1)
+        rgb = apply_orientation(rgb, self.orientation)
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         if not cv2.imwrite(str(path), bgr):
             raise OSError(f"Could not write debug frame to {path}")

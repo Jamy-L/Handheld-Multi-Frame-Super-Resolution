@@ -5,6 +5,7 @@ uniform float2 noise_offset_uv;
 uniform float2 noise_scale_uv;
 uniform float4 rejection_params;
 uniform float R_boost;
+uniform float unblocker_motion_threshold;
 
 [shader("compute")]
 [numthreads(8, 8, 1)]
@@ -12,6 +13,8 @@ void computeRejectionCoeff(uint3 tid: SV_DispatchThreadID, Texture2D<float4> sou
                            Texture2D<float4> localStats, SamplerState linearSampler, Texture2D<float4> flow,
                            SamplerState flowSampler, uniform float2 flow_scale_uv, uniform float2 flow_offset_uv,
                            Texture2D<float4> noise_lut, SamplerState noiseSampler, RWTexture2D<float> out,
+                           Texture2D<float> unblocker_texture, SamplerState unblocker_sampler,
+                           uniform float2 unblocker_uv_scale,
                            uniform LocalStatsWarpFilter local_stats_warp_filter)
 {
     uint width, height;
@@ -54,5 +57,8 @@ void computeRejectionCoeff(uint3 tid: SV_DispatchThreadID, Texture2D<float4> sou
     float r = color_distance / max(std * std, 1e-30);
     float weight = exp2(min(-r * R_mult * boost + R_threshold, 0.));
 
-    out[outTexel] = weight;
+    float unblocker = 0.0;
+    if (local_flow.z > unblocker_motion_threshold)
+        unblocker = unblocker_texture.SampleLevel(unblocker_sampler, uv * unblocker_uv_scale, 0.0);
+    out[outTexel] = min(1.0 - unblocker, weight);
 }

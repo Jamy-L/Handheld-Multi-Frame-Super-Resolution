@@ -55,22 +55,27 @@ def apply_orientation(img, ori):
     return img
 
 
+def decimate_2x2(image: NDArray[np.float32]) -> NDArray[np.float32]:
+    """Average 2x2 blocks and apply a separable binomial filter."""
+    gray = (
+        image[::2, ::2] + image[::2, 1::2] + image[1::2, ::2] + image[1::2, 1::2]
+    ) * 0.25
+    weights = np.array([0.25, 0.5, 0.25], dtype=np.float32)
+    return convolve1d(
+        convolve1d(gray, weights, axis=0, mode="nearest"),
+        weights,
+        axis=1,
+        mode="nearest",
+    )
+
+
 def compute_grey_images(image: NDArray, method: GrayscaleMethod) -> NDArray[np.float32]:
     """Convert normalized RGGB Bayer data to NumPy gray for CPU alignment."""
     image = np.asarray(image, dtype=np.float32)
     if image.ndim != 2 or any(size % 2 for size in image.shape):
         raise ValueError("Bayer input must be a 2D image with even dimensions")
     if method is GrayscaleMethod.DECIMATING:
-        gray = (
-            image[::2, ::2] + image[::2, 1::2] + image[1::2, ::2] + image[1::2, 1::2]
-        ) * 0.25
-        weights = np.array([0.25, 0.5, 0.25], dtype=np.float32)
-        gray = convolve1d(
-            convolve1d(gray, weights, axis=0, mode="nearest"),
-            weights,
-            axis=1,
-            mode="nearest",
-        )
+        gray = decimate_2x2(image)
     elif method is GrayscaleMethod.DEMOSAICING:
         gray = demosaic_to_grey(image)
     else:
