@@ -4,7 +4,8 @@ void fusion(uint3 tid: SV_DispatchThreadID, Texture2D<float> sourceRaw, Texture2
             SamplerState flowSampler, Texture2D<float4> precision, SamplerState precisionSampler,
             Texture2D<float> robustness, SamplerState robustnessSampler, RWTexture2D<float4> numerator,
             RWTexture2D<float4> denominator, uniform float2 flowOffsetUV,
-            uniform float2 flowScaleUV)
+            uniform float2 flowScaleUV, Texture2D<float> accumulatedRejection,
+            uniform float frame_t, uniform float reference_fallback_boost, uniform bool isReference)
 {
     uint width, height;
     numerator.GetDimensions(width, height);
@@ -21,6 +22,8 @@ void fusion(uint3 tid: SV_DispatchThreadID, Texture2D<float> sourceRaw, Texture2
 
     float2 uv_mov = uv + flow;
     float3 precisionMatrix = precision.SampleLevel(precisionSampler, uv_mov, 0.0).xyz;
+    if (isReference && accumulatedRejection.SampleLevel(robustnessSampler, uv, 0.0) < frame_t)
+        precisionMatrix /= reference_fallback_boost;
     float2x2 sigmaInv = float2x2(precisionMatrix.x, precisionMatrix.z,
                                 precisionMatrix.z, precisionMatrix.y);
 

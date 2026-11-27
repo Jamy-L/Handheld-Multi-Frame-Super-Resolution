@@ -99,6 +99,8 @@ def compute_robustness(
     unblocker_uv_scale: tuple[float, float],
     config: Config,
     debug_writer: DebugWriter | None = None,
+    *,
+    accumulated_rejection: spy.Texture | None = None,
 ) -> spy.Texture:
     """
     this is the implementation of Algorithm 6: ComputeRobustness
@@ -152,7 +154,9 @@ def compute_robustness(
         r = rejection_mask.to_numpy()
         debug_writer.write_scalar("robustness", r, value_range=(0.0, 1.0))
 
-    rejection_mask = mask_dilation(rejection_mask, config)
+    rejection_mask = mask_dilation(
+        rejection_mask, config, accumulated_rejection=accumulated_rejection
+    )
 
     if debug_writer is not None:
         r = rejection_mask.to_numpy()
@@ -161,7 +165,12 @@ def compute_robustness(
     return rejection_mask
 
 
-def mask_dilation(rejection_mask: spy.Texture, config: Config) -> spy.Texture:
+def mask_dilation(
+    rejection_mask: spy.Texture,
+    config: Config,
+    *,
+    accumulated_rejection: spy.Texture | None = None,
+) -> spy.Texture:
     device = spy.current_device()
     output = device.create_texture(
         width=rejection_mask.width,
@@ -170,12 +179,19 @@ def mask_dilation(rejection_mask: spy.Texture, config: Config) -> spy.Texture:
         usage=spy.TextureUsage.shader_resource | spy.TextureUsage.unordered_access,
     )
     shader = Path(__file__).resolve().parent / "shaders" / "5x5min.slang"
-    program = device.load_program(str(shader), ["min5x5"])
+    if accumulated_rejection is None:
+        entry_point = "min5x5"
+        bindings = {}
+    else:
+        entry_point = "min5x5AndAccumulate"
+        bindings = {"accumulated_rejection": accumulated_rejection}
+    program = device.load_program(str(shader), [entry_point])
     kernel = device.create_compute_kernel(program)
     kernel.dispatch(
         thread_count=[output.width, output.height, 1],
         source=rejection_mask,
         out=output,
+        **bindings,
     )
 
     return output

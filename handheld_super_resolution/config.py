@@ -152,7 +152,6 @@ class AlignmentConfig:
 class RobustnessConfig:
     enabled: bool = True
     noise_correction: bool = True
-    save_mask: bool = True
     # Scales green disagreement in the guide-color blend. 0 to disable.
     k_green_diff_impact: float = 2.0
     R_mult: float = 1.0  # Multiplier on normalized color distance.
@@ -213,6 +212,8 @@ class MergingConfig:
         CovarianceType.STEERABLE
     )  # isotropic mode uses sigma_detail
     covariance: CovarianceConfig = field(default_factory=CovarianceConfig)
+    frame_t: float = 4.0
+    reference_fallback_boost: float = 2.0
 
 
 @dataclass
@@ -278,6 +279,11 @@ class Config:
             )
         if self.scale < 1:
             raise ValueError("scale must be >= 1")
+        if not np.isfinite(self.merging.frame_t) or self.merging.frame_t < 0:
+            raise ValueError("merging.frame_t must be finite and >= 0")
+        boost = self.merging.reference_fallback_boost
+        if not np.isfinite(boost) or boost <= 0:
+            raise ValueError("merging.reference_fallback_boost must be finite and > 0")
         if self.backend == "cpu":
             raise NotImplementedError(
                 "CPU backend is not supported"

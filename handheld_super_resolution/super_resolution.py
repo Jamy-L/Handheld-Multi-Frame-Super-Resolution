@@ -44,8 +44,13 @@ def alignment_options(config: Config) -> dict:
 
 
 def main(
-    ref_img: NDArray[np.float32], comp_imgs: NDArray[np.float32], config: Config
-) -> tuple[NDArray, dict[str, NDArray]]:
+    ref_img: NDArray[np.float32],
+    comp_imgs: NDArray[np.float32],
+    config: Config,
+    *,
+    source_cfa: NDArray | None = None,
+    orientation: int = 1,
+) -> tuple[NDArray, NDArray]:
     """
     This is the implementation of Alg. 1: HandheldBurstSuperResolution.
     Some part of Alg. 2: Registration are also integrated for optimisation.
@@ -64,9 +69,8 @@ def main(
     -------
     num : device Array[imshape_y*s, imshape_y*s, 3]
         generated RGB image WITHOUT any post-processing.
-    debug_dict : dict
-        Contains the accumulated robustness map when requested. Per-frame
-        diagnostics are streamed to disk when debugging is enabled.
+    accumulated_rejection : Array[imshape_y//2, imshape_x//2]
+        Sum of the comparison-frame rejection masks.
 
     """
 
@@ -75,8 +79,9 @@ def main(
     t1 = 0.0
     im_time = 0.0
 
-    debug_dict = {}
-    debug_writer = DebugWriter() if config.debug else None
+    debug_writer = (
+        DebugWriter(cfa=source_cfa, orientation=orientation) if config.debug else None
+    )
     if debug_writer is not None:
         # The fixed reference pyramid shares frame 0 with the first comparison.
         debug_writer.next_frame()
@@ -154,13 +159,16 @@ def main(
     else:
         ref_local_stats = None
 
-    accumulated_r = None
-    if config.robustness.save_mask and config.robustness.enabled:
-        assert ref_local_stats
-        # TODO: Compute Accumulated robustness
-        # accumulated_r = cuda.to_device(
-        #     np.zeros((ref_local_stats.height, ref_local_stats.width))
-        # )
+    mask_shape = (ref_img.shape[0] // 2, ref_img.shape[1] // 2)
+    accumulated_rejection = device.create_texture(
+        width=mask_shape[1],
+        height=mask_shape[0],
+        format=spy.Format.r32_float,
+        mip_count=1,
+        usage=spy.TextureUsage.unordered_access | spy.TextureUsage.shader_resource,
+        data=np.zeros(mask_shape, dtype=DEFAULT_NUMPY_FLOAT_TYPE),
+        label="Accumulated rejection",
+    )
 
     num, den = init_out_textures(ref_img.shape, config.scale)
 
@@ -169,39 +177,26 @@ def main(
     )
 
     #### Ref covariance estimation
-    precision_matrices = estimate_precision_matrices(
+    ref_precision_matrices = estimate_precision_matrices(
         tx_ref_img, noise_lut, noise_offset_uv, noise_scale_uv, config
     )
     if debug_writer is not None:
         debug_writer.write_precision_matrix(
-            "ref_precision", precision_matrices.to_numpy()
+            "ref_precision", ref_precision_matrices.to_numpy()
         )
 
-    ##### Merge ref
     tx_flow, flow_texture_offset_uv, flow_texture_scale_uv = create_flow_texture(
         ref_grey.shape
     )
-    rejection_mask = device.create_texture(
+    unit_rejection_mask = device.create_texture(
         type=spy.TextureType.texture_2d,
         width=ref_grey.shape[1],
         height=ref_grey.shape[0],
         format=spy.Format.r32_float,
         mip_count=1,
         usage=(spy.TextureUsage.shader_resource),
-        data=np.ones(
-            ref_grey.shape, dtype=DEFAULT_NUMPY_FLOAT_TYPE
-        ),  # Init with 1 for ref
-        label="rejectionMask",
-    )
-    merge(
-        tx_ref_img,
-        tx_flow,
-        flow_texture_offset_uv,
-        flow_texture_scale_uv,
-        precision_matrices,
-        rejection_mask,
-        num,
-        den,
+        data=np.ones(ref_grey.shape, dtype=DEFAULT_NUMPY_FLOAT_TYPE),
+        label="unitRejectionMask",
     )
 
     if verbose:
@@ -249,16 +244,10 @@ def main(
                 unblocker_uv_scale,
                 config,
                 debug_writer,
+                accumulated_rejection=accumulated_rejection,
             )
         else:
-            # robustness is inited with ones for ref.
-            # Keep it
-            pass
-
-        if accumulated_r is not None:
-            # TODO: port this
-            # add(accumulated_r, robustness)
-            pass
+            rejection_mask = unit_rejection_mask
 
         #### Precision matrix estimation
         precision_matrices = estimate_precision_matrices(
@@ -280,17 +269,44 @@ def main(
             rejection_mask,
             num,
             den,
+            accumulated_rejection=accumulated_rejection,
+            config=config.merging,
         )
 
         if verbose:
             getTime(im_time, "\nImage processed (Total)")
 
+    # Comparison alignment overwrites the flow texture. The reference uses zero flow.
+    if len(comp_imgs):
+        tx_flow.copy_from_numpy(
+            np.zeros((tx_flow.height, tx_flow.width, 4), dtype=DEFAULT_NUMPY_FLOAT_TYPE)
+        )
+    merge(
+        tx_ref_img,
+        tx_flow,
+        flow_texture_offset_uv,
+        flow_texture_scale_uv,
+        ref_precision_matrices,
+        unit_rejection_mask,
+        num,
+        den,
+        accumulated_rejection=accumulated_rejection,
+        config=config.merging,
+        is_reference=True,
+    )
+
     num = num.to_numpy()[..., :3]
     den = den.to_numpy()[..., :3]
     out = num / den
 
+    accumulated = accumulated_rejection.to_numpy()
     if debug_writer is not None:
         debug_writer.write_scalar_channels("den", den, ("r", "g", "b"))
+        debug_writer.write_scalar(
+            "accumulated_rejection",
+            accumulated,
+            value_range=(0.0, float(max(1, len(comp_imgs)))),
+        )
 
     if verbose:
         s = "\nTotal ellapsed time : "
@@ -302,15 +318,10 @@ def main(
             "seconds",
         )
 
-    if config.robustness.save_mask and config.robustness.enabled and accumulated_r:
-        raise NotImplementedError
-        # TODO: Port this
-        debug_dict["accumulated robustness"] = accumulated_r.copy_to_host()
-
-    return out, debug_dict
+    return out, accumulated
 
 
-def process(burst_path: Path | str, config: Config):
+def process(burst_path: Path | str, config: Config) -> tuple[NDArray, NDArray]:
     """
     Processes the burst
 
@@ -323,8 +334,10 @@ def process(burst_path: Path | str, config: Config):
 
     Returns
     -------
-    Array
+    hr_output : Array
         The processed image
+    accumulated_rejection : Array
+        Sum of the comparison-frame rejection masks in output orientation.
 
     """
     config.sanitize()
@@ -358,6 +371,9 @@ def process(burst_path: Path | str, config: Config):
 
     # reading image stack
     dng_stack = load_dng_burst(burst_path)
+    orientation = 1
+    if config.postprocessing.orientate_image and "Image Orientation" in dng_stack.tags:
+        orientation = dng_stack.tags["Image Orientation"].values[0]
     ref_raw, raw_comp = (
         dng_stack.get_raw_arrays()
     )  # Scale [black level, whiteleve] -> [0, 1] WITHOUT WB, clipping or anything
@@ -405,10 +421,12 @@ def process(burst_path: Path | str, config: Config):
             print(
                 f"Backend: {device.info.type.name}, device: {device.info.adapter_name}"
             )
-        hr_output, debug_dict = main(
+        hr_output, accumulated_rejection = main(
             ref_raw.astype(DEFAULT_NUMPY_FLOAT_TYPE),
             raw_comp.astype(DEFAULT_NUMPY_FLOAT_TYPE),
             config,
+            source_cfa=dng_stack.cfa,
+            orientation=orientation,
         )
 
     if np.any(np.isnan(hr_output)):
@@ -427,10 +445,7 @@ def process(burst_path: Path | str, config: Config):
     hr_output = np.moveaxis(hr_output, -1, 0)
     hr_output = rggb_to_cfa(hr_output, dng_stack.cfa)
     hr_output = np.moveaxis(hr_output, 0, -1)
-    if "accumulated robustness" in debug_dict:
-        debug_dict["accumulated robustness"] = rggb_to_cfa(
-            debug_dict["accumulated robustness"], dng_stack.cfa
-        )
+    accumulated_rejection = rggb_to_cfa(accumulated_rejection, dng_stack.cfa)
 
     #### post processing
     post_processing_enabled = config.postprocessing.enabled
@@ -441,17 +456,9 @@ def process(burst_path: Path | str, config: Config):
 
         hr_output = raw2rgb.postprocess(hr_output, dng_stack, config)
 
-    if (
-        "accumulated robustness" in debug_dict
-        and config.postprocessing.orientate_image
-        and "Image Orientation" in dng_stack.tags
-    ):
-        ori = dng_stack.tags["Image Orientation"].values[0]
-        debug_dict["accumulated robustness"] = apply_orientation(
-            debug_dict["accumulated robustness"], ori
-        )
+    accumulated_rejection = apply_orientation(accumulated_rejection, orientation)
 
-    return hr_output, debug_dict
+    return hr_output, accumulated_rejection
 
 
 def prepare_flow(

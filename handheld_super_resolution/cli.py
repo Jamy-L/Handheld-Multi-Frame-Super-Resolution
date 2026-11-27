@@ -67,7 +67,7 @@ def main(args=None):
     # Delay GPU-heavy imports so parsing and --help remain lightweight.
     from .super_resolution import process
 
-    output, debug = process(options.impath, config)
+    output, _ = process(options.impath, config)
     output = np.clip(np.nan_to_num(output), 0, 1)
 
     if options.outpath.suffix == ".dng":
@@ -79,15 +79,3 @@ def main(args=None):
         save_as_dng(output, reference, options.outpath)
     else:
         _save_image(options.outpath, img_as_ubyte(output))
-
-    accumulated = debug.get("accumulated robustness")
-    if config.robustness.save_mask and accumulated is not None:
-        image_count = len(glob.glob(os.path.join(options.impath, "*.dng")))
-        robustness = accumulated / (image_count - 1)
-        robustness = np.repeat(robustness[..., None], 3, axis=-1)
-        robustness = cv2.resize(
-            robustness,
-            (output.shape[1], output.shape[0]),
-            interpolation=cv2.INTER_NEAREST,
-        )
-        _save_image(options.outpath.with_suffix(".rob.png"), img_as_ubyte(robustness))
