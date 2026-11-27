@@ -16,6 +16,7 @@ from .noise_lut import create_zero_noise_lut, load_noise_lut
 from .noise_profile import expand_noise_profile_to_rgbg
 from .precision_matrices import estimate_precision_matrices
 from .robustness import compute_robustness, init_robustness
+from .unblocker import compute_unblocker_texture
 from .utils import (
     DEFAULT_NUMPY_FLOAT_TYPE,
     FINAL_TILE_SIZE,
@@ -163,6 +164,10 @@ def main(
 
     num, den = init_out_textures(ref_img.shape, config.scale)
 
+    tx_unblocker, unblocker_sampler, unblocker_uv_scale = compute_unblocker_texture(
+        ref_img, config, debug_writer
+    )
+
     #### Ref covariance estimation
     precision_matrices = estimate_precision_matrices(
         tx_ref_img, noise_lut, noise_offset_uv, noise_scale_uv, config
@@ -239,6 +244,9 @@ def main(
                 noise_lut,
                 noise_offset_uv,
                 noise_scale_uv,
+                tx_unblocker,
+                unblocker_sampler,
+                unblocker_uv_scale,
                 config,
                 debug_writer,
             )

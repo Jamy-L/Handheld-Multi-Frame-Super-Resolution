@@ -169,6 +169,15 @@ class RobustnessConfig:
     ] = LocalStatsWarpFilter.BIQUADRATIC
 
 
+@dataclass
+class UnblockerConfig:
+    enabled: bool = True
+    t: float = 0.05
+    s: float = 5.33
+    motion_threshold: float = 1e-4
+    fallback_value: float = 0.2
+
+
 # Each curve clamps independently at its first and last SNR.
 _COVARIANCE_SNR_KNOTS = {
     "sigma_detail": ((8, 0.33), (16, 0.25)),
@@ -182,9 +191,7 @@ _COVARIANCE_SNR_KNOTS = {
 
 @dataclass
 class CovarianceConfig:
-    enable_green_diff: bool = (
-        True  # Use Bayer green disagreement as a floor on steerable covariance strength.
-    )
+    enable_green_diff: bool = True  # Use Bayer green disagreement as a floor on steerable covariance strength.
     noise_correction: bool = True
     sigma_detail: SNRBasedFloat = SNR_BASED  # Smallest sigma
     k_denoise: SNRBasedFloat = SNR_BASED  # Multiplier to enlarge sigma
@@ -246,9 +253,13 @@ class Config:
     device: int | None = None
     """Zero-based adapter index on the selected backend (default: let SlangPy choose)."""
 
+    unblocker: UnblockerConfig = field(default_factory=UnblockerConfig)
+
     @property
     def requires_noise_lut(self) -> bool:
-        return self.robustness.noise_correction or self.merging.covariance.noise_correction
+        return (
+            self.robustness.noise_correction or self.merging.covariance.noise_correction
+        )
 
     def dump(self) -> str:
         """Return a readable snapshot of the complete runtime configuration."""

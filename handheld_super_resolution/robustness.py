@@ -94,6 +94,9 @@ def compute_robustness(
     noise_texture: spy.Texture,
     noise_offset_uv: tuple[float, float],
     noise_scale_uv: tuple[float, float],
+    unblocker_texture: spy.Texture,
+    unblocker_sampler: spy.Sampler,
+    unblocker_uv_scale: tuple[float, float],
     config: Config,
     debug_writer: DebugWriter | None = None,
 ) -> spy.Texture:
@@ -139,6 +142,9 @@ def compute_robustness(
         noise_texture,
         noise_offset_uv,
         noise_scale_uv,
+        unblocker_texture,
+        unblocker_sampler,
+        unblocker_uv_scale,
         config,
     )
 
@@ -208,6 +214,9 @@ def compute_rejection_coeff(
     noise_texture: spy.Texture,
     noise_offset_uv: tuple[float, float],
     noise_scale_uv: tuple[float, float],
+    unblocker_texture: spy.Texture,
+    unblocker_sampler: spy.Sampler,
+    unblocker_uv_scale: tuple[float, float],
     config: Config,
 ) -> spy.Texture:
 
@@ -247,6 +256,7 @@ def compute_rejection_coeff(
                 config.robustness.k_std,
             ),
             "R_boost": config.robustness.R_boost,
+            "unblocker_motion_threshold": config.unblocker.motion_threshold,
         },
         local_stats_warp_filter=_LOCAL_STATS_WARP_FILTER_IDS[
             config.robustness.local_stats_warp_filter
@@ -260,6 +270,9 @@ def compute_rejection_coeff(
         flowSampler=flow_sampler,
         flow_scale_uv=spy.float2(*flow_scale_uv),
         flow_offset_uv=spy.float2(*flow_offset_uv),
+        unblocker_texture=unblocker_texture,
+        unblocker_sampler=unblocker_sampler,
+        unblocker_uv_scale=spy.float2(*unblocker_uv_scale),
         out=output,
     )
     return output
